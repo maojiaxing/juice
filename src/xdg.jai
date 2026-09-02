@@ -9,14 +9,13 @@
 
     get_env :: (name: string) -> string {
         c_name := temp_c_string(name);
-    needed := GetEnvironmentVariableA(c_name, null, 0);
-    if needed == 0 return "";
+        needed := GetEnvironmentVariableA(c_name, null, 0);
+        if needed == 0 return "";
 
-    buf := cast(*u8) talloc(needed);
-    len := GetEnvironmentVariableA(c_name, buf, needed);
-    if len == 0 return "";
+        buf := cast(*u8) talloc(needed);
+        len := GetEnvironmentVariableA(c_name, buf, needed);
 
-    return to_string(buf, len);
+        return ifx len == 0 then "" else to_string(buf, len);
     }
 } else {
     #import "POSIX";
@@ -24,8 +23,8 @@
     get_env :: (name: string) -> string {
         c_name := temp_c_string(name);
         c_val := getenv(c_name);
-        if !c_val return "";
-        return to_string(c_val);
+
+        return ifx !c_val then "" else to_string(c_val);
     }
 }
 

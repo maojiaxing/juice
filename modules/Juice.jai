@@ -28,11 +28,15 @@ Package :: struct {
 	name:         string;
 	version:      string;
 	type:         Package_Type = .BIN;
+	description:  string = "";
 
-	targets:      [..] Binary_Target;
+	targets:      [] Binary_Target;
 	root_file:    string = "modulejai";
 
     dependencies: [] Dependency;
     workspace:    Workspace_Config;
     build_script: string = "";
+
+    // 由 manifest 加载器设置，不需要在 package.jai 中声明。
+    dir:          string = "";
 }

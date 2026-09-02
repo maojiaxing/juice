@@ -7,8 +7,7 @@
     // -------------------------------------------------------------
     // 1. 读取命令行参数
     // -------------------------------------------------------------
-    options_main := get_build_options();
-    build_args := options_main.compile_time_command_line;
+    build_args := get_toplevel_command_line();
 
     is_release := false;
     for arg: build_args {

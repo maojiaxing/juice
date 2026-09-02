@@ -53,13 +53,13 @@ main :: () {
     // 4. 执行 CLI 指令
     if command == {
         case "build";
-            if !build_all_targets(*driver, root_pkg) exit(1);
+            if !build_all_targets(*driver, *root_pkg) exit(1);
             print("[juice 🍹] Build completed successfully!\n");
 
         case "run";
             target_name := ifx args.count > 2 then args[2] else "";
-            if build_all_targets(*driver, root_pkg) {
-                run_executable(*driver, root_pkg, target_name);
+            if build_all_targets(*driver, *root_pkg) {
+                if !run_executable(*driver, *root_pkg, target_name) exit(1);
             } else {
                 exit(1);
             }

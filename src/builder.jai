@@ -1,9 +1,7 @@
 #import "Basic";
-#import "Compiler";
-#import "File";
 #import "Process";
-
-#import "Juice";
+#import "File";
+#import "String";
 
 Build_Driver :: struct {
     root_dir:     string;
@@ -13,90 +11,116 @@ Build_Driver :: struct {
     data_dir:     string;
     config_dir:   string;
     member_paths: [..] string;
-}
+} 
 
-build_all_targets :: (driver: *Build_Driver, root_pkg: Package) -> bool {
-    make_directory_if_it_does_not_exist(driver.bin_dir, recursive = true);
+compile_binary_target :: (driver: *Build_Driver, pkg: *Package, target: *Binary_Target) -> bool {
+    source_file := to_forward_slashes(tprint("%1/%2", pkg.dir, target.main_file));
+    output_dir  := to_forward_slashes(tprint("%1/%2", pkg.dir, target.output_dir));
 
-    for member_path : driver.member_paths {
-        pkg, ok := load_package_manifest(driver, member_path);
-        if !ok continue;
+    if !file_exists(source_file) {
+        print("[juice ERROR] Target source file not found: %\n", source_file);
+        return false;
+    }
 
-        if pkg.type == .LIB {
-            print("[juice] Verified Library '%1'\n", pkg.name);
-            continue;
-        }
+    make_directory_if_it_does_not_exist(output_dir, recursive = true);
 
-        targets := pkg.targets;
-        if targets.count == 0 {
-            default_target: Binary_Target;
-            default_target.name = pkg.name;
-            default_target.main_file = "src/main.jai";
-            array_add(*targets, default_target);
-        }
+    print("[juice Build] Compiling Target '%' (%) -> %/...\n", target.name, target.main_file, target.output_dir);
 
-        for target : targets {
-            if !compile_binary_target(driver, member_path, target) return false;
+    // 构建命令行参数：jai <源文件> -exe <程序名> -output_path <输出路径>
+    args: [..] string;
+    array_add(*args, "jai");
+    array_add(*args, source_file);
+    array_add(*args, "-exe", target.name);
+    array_add(*args, "-output_path", output_dir);
+
+    // 如果包含 juice 全局 modules 目录，自动引入
+    exe_path := get_path_of_running_executable();
+    bin_dir  := path_strip_filename(exe_path);
+    global_modules_dir := to_forward_slashes(tprint("%1/../modules", bin_dir));
+    if is_directory(global_modules_dir) {
+        array_add(*args, "-import_dir", global_modules_dir);
+    }
+
+    // 引入已解析依赖和 workspace 成员的导入路径
+    if is_directory(driver.packages_dir) {
+        array_add(*args, "-import_dir", to_forward_slashes(driver.packages_dir));
+    }
+    for member_path: driver.member_paths {
+        if is_directory(member_path) {
+            array_add(*args, "-import_dir", to_forward_slashes(member_path));
         }
     }
+
+    // 执行编译命令
+    result := run_command(..args);
+    if result.exit_code != 0 {
+        print("[juice ERROR] Compilation failed for target '%'\n", target.name);
+        return false;
+    }
+
     return true;
 }
 
-compile_binary_target :: (driver: *Build_Driver, pkg_dir: string, target: Binary_Target) -> bool {
-    out_dir := ifx target.output_dir != "" then target.output_dir else driver.bin_dir;
-
-    print("[juice Build] Compiling Target '%1' (%2) -> %3/%1 ...\n", target.name, target.main_file, out_dir);
-
-    w := compiler_create_workspace(target.name);
-    options := get_build_options(w);
-
-    options.output_executable_name = target.name;
-    options.output_path            = out_dir;
-
-    import_paths: [..] string;
-    array_add(*import_paths, .. options.import_path);
-    array_add(*import_paths, driver.packages_dir);
-
-    for path : driver.member_paths {
-        array_add(*import_paths, path);
+// 编译包中的所有 Target
+build_all_targets :: (driver: *Build_Driver, pkg: *Package) -> bool {
+    if pkg.targets.count == 0 {
+        // 如果 package.jai 没有显式定义 targets，默认按 src/main.jai 编译
+        default_target := Binary_Target.{
+            name = pkg.name,
+            main_file = "src/main.jai",
+            output_dir = "bin"
+        };
+        return compile_binary_target(driver, pkg, *default_target);
     }
 
-    options.import_path = import_paths;
-    set_build_options(options, w);
-
-    compiler_begin_intercept(w);
-    main_entry := tprint("%1/%2", pkg_dir, target.main_file);
-    add_build_file(main_entry, w);
-
-    success := true;
-    while true {
-        msg := compiler_wait_for_message();
-        if !msg continue;
-        if msg.kind == {
-            case .ERROR;    success = false;
-            case .COMPLETE; break;
-        }
+    for * target: pkg.targets {
+        success := compile_binary_target(driver, pkg, target);
+        if !success return false;
     }
-    compiler_end_intercept(w);
 
-    return success;
+    return true;
 }
 
-run_executable :: (driver: *Build_Driver, root_pkg: Package, target_name: string) {
-    exec_name := target_name;
-    if exec_name == "" && root_pkg.targets.count > 0 {
-        exec_name = root_pkg.targets[0].name;
-    }
-    if exec_name == "" exec_name = root_pkg.name;
+// 执行编译完成后的程序（用于 juice run 命令）
+run_executable :: (driver: *Build_Driver, pkg: *Package, requested_target: string) -> bool {
+    target_name := ifx requested_target != "" then requested_target else pkg.name;
+    output_dir  := "bin";
 
-    bin_path := tprint("%1/%2", driver.bin_dir, exec_name);
-    if !file_exists(bin_path) {
-        print("[juice ERROR] Executable binary not found: %1\n", bin_path);
-        return;
+    if pkg.targets.count > 0 {
+        found := false;
+        for target: pkg.targets {
+            if requested_target == "" || target.name == requested_target {
+                target_name = target.name;
+                output_dir = ifx target.output_dir != "" then target.output_dir else "bin";
+                found = true;
+                break;
+            }
+        }
+
+        if !found {
+            print("[juice ERROR] Unknown binary target: %\n", requested_target);
+            return false;
+        }
+    } else if requested_target != "" && requested_target != pkg.name {
+        print("[juice ERROR] Unknown binary target: %\n", requested_target);
+        return false;
     }
 
-    print("[juice Run] Running %1 ...\n\n", bin_path);
-    run_command(bin_path);
+    #if OS == .WINDOWS {
+        exe_path := to_forward_slashes(tprint("%1/%2/%3.exe", pkg.dir, output_dir, target_name));
+    } else {
+        exe_path := to_forward_slashes(tprint("%1/%2/%3", pkg.dir, output_dir, target_name));
+    }
+
+    if !file_exists(exe_path) {
+        print("[juice ERROR] Could not find executable to run: %\n", exe_path);
+        return false;
+    }
+
+    print("[juice Run] Launching % ...\n\n", exe_path);
+
+    result := run_command(exe_path);
+    return result.exit_code == 0;
 }
 
 clean_workspace :: (driver: *Build_Driver) {
