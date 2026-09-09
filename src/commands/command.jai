@@ -1,10 +1,12 @@
 Command_Handler :: #type (ctx: *Command_Context, arguments: [] string) -> bool;
 
 Command_Context :: struct {
-    driver:             *Build_Driver;
-    arguments:          [] string;
-    root_package:       Package;
-    workspace_prepared: bool;
+    driver:              *Build_Driver;
+    arguments:           [] string;
+    discovery:           Workspace_Discovery;
+    prepared:             Prepared_Workspace;
+    workspace_discovered: bool;
+    workspace_prepared:   bool;
 }
 
 Command :: struct {

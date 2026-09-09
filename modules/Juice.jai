@@ -2,41 +2,72 @@
 
 
 Package_Type :: enum {
-	LIB;
-	BIN;
+    LIB;
+    BIN;
 }
 
-Binary_Target :: struct {
-	name:       string;
-	main_file:  string;
-	output_dir: string = "";
+// Raw target declaration as written by package.jai.
+Target :: struct {
+    name:       string;
+    main_file:  string;
+}
+
+// A target after defaults and filesystem validation have been applied.
+Effective_Target :: struct {
+    name:       string;
+    main_file:  string;
+    source_path: string;
+}
+
+// The complete output contract consumed by Build and Run.
+Artifact_Plan :: struct {
+    target:      Effective_Target;
+    result_dir:  string;
+    artifact_path: string;
 }
 
 Dependency :: struct {
-	name:    string;
-	version: string = "";
-	source:  string = "";
-	package: string = "";
+    name:    string;
+    version: string = "";
+    source:  string = "";
+    package: string = "";
 }
 
 Workspace_Config :: struct {
-	members: [] string;
-	exclude: [] string;
+    members: [] string;
+    exclude: [] string;
 }
 
 Package :: struct {
-	name:         string;
-	version:      string;
-	type:         Package_Type = .BIN;
-	description:  string = "";
+    name:         string;
+    version:      string;
+    type:         Package_Type = .BIN;
+    description:  string = "";
 
-	targets:      [] Binary_Target;
-	root_file:    string = "modulejai";
+    targets:      [] Target;
+    root_file:    string = "modulejai";
 
     dependencies: [] Dependency;
     workspace:    Workspace_Config;
     build_script: string = "";
 
-    // 由 manifest 加载器设置，不需要在 package.jai 中声明。
+    // Set by the manifest loader; it is not declared in package.jai.
     dir:          string = "";
+}
+
+// Filesystem-independent discovery result. member_paths are validated absolute
+// package directories, with the root directory first.
+Workspace_Discovery :: struct {
+    root_dir:     string;
+    has_package:  bool;
+    root_package: Package;
+    member_paths: [] string;
+}
+
+// State shared by command handlers after discovery, resolution, and (if
+// necessary) dependency preparation have completed.
+Prepared_Workspace :: struct {
+    discovery:     Workspace_Discovery;
+    artifact_plans: [] Artifact_Plan;
+    dependencies_prepared: bool;
 }

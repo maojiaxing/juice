@@ -1,9 +1,17 @@
 COMMAND_REGISTRY :: Command.[
     .{
-        name          = "prepare-workspace",
-        description   = "Internal: Load package manifest and resolve dependencies",
-        usage         = "juice prepare-workspace",
+        name          = "discover-workspace",
+        description   = "Internal: Discover and validate workspace members",
+        usage         = "juice discover-workspace",
         prerequisites = string.[],
+        visible       = false,
+        handler       = discover_workspace_command,
+    },
+    .{
+        name          = "prepare-workspace",
+        description   = "Internal: Resolve package targets and dependencies",
+        usage         = "juice prepare-workspace",
+        prerequisites = string.["discover-workspace"],
         visible       = false,
         handler       = prepare_workspace_command,
     },
@@ -25,7 +33,7 @@ COMMAND_REGISTRY :: Command.[
     },
     .{
         name          = "clean",
-        description   = "Remove build outputs and dependencies",
+        description   = "Remove Juice outputs and local dependency links",
         usage         = "juice clean",
         prerequisites = string.[],
         visible       = true,

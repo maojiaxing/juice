@@ -1,3 +1,5 @@
+#import "Hash_Table";
+
 // Command dispatcher: validates registry, resolves prerequisites, and executes commands
 
 Dispatch_Error :: enum {
