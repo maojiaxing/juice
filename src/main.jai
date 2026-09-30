@@ -39,7 +39,6 @@ main :: () {
 
     ctx: Command_Context;
     ctx.driver = *driver;
-    ctx.arguments = command_arguments;
-
-    if !dispatch_command(command, *ctx, command_arguments) exit(1);
+    result := dispatch_command(COMMAND_REGISTRY, command, *ctx, command_arguments);
+    if !result.success exit(1);
 }

@@ -1,98 +1,107 @@
 # Command Registry Implementation
 
-This branch implements a static command registry and dispatcher system for Juice, inspired by Rust's `linkme` library's distributed-registration pattern but adapted to Jai's static compilation model.
+Juice uses an explicit static command registry and prerequisite Dispatcher. Each command owns its declaration, argument contract, and command-specific implementation; the registry only aggregates declarations. Workspace preparation owns the discovery → resolution → dependency → prepared-workspace state transitions.
 
-## Architecture Changes
+## Module ownership
 
-### Core Components
+| Module | Responsibility |
+| --- | --- |
+| `src/commands/command.jai` | Shared `Command`, `Command_Context`, handler and argument-validator types |
+| `src/commands/registry.jai` | Static array of command-owned declarations |
+| `src/commands/prepare.jai` | Internal discovery/preparation declarations; thin adapters over the workspace state |
+| `src/commands/build.jai` | Build declaration, argument contract, and build orchestration |
+| `src/commands/run.jai` | Run declaration, argument contract, target selection, diagnostics, and artifact launch |
+| `src/commands/clean.jai` | Clean declaration, argument contract, cleanup scope, all-path validation, and deletion policy |
+| `src/dispatcher.jai` | Registry validation, lookup, planning, and execution; production and test registries share it |
+| `src/workspace.jai` | Workspace discovery, member validation, and the discovery/preparation state machine |
+| `src/dependency.jai` | Dependency fetching and workspace-member lookup over the discovery snapshot |
+| `src/builder.jai` | Shared compilation and prepared-workspace build implementation |
+| `src/target.jai` | Shared effective-target resolution, artifact plans, and artifact-path revalidation |
+| `src/path_safety.jai` | Shared filesystem/path inspection and validation |
+| `src/main.jai` | File loading, driver initialization, CLI argument slicing, and dispatch |
 
-1. **Command Registry** (`src/commands/registry.jai`)
-   - Static array of `Command` structs
-   - Explicit declarations for all built-in commands
-   - Defines command metadata, prerequisites, visibility, and handlers
+Command metadata, prerequisites, visibility, handlers, and the argument contract are declared in the owning command file. Handlers print usage from their own declaration rather than maintaining a second usage string. Adding a command requires adding its file to the load list and its declaration to the registry; no automatic registration is involved.
 
-2. **Dispatcher** (`src/dispatcher.jai`)
-   - Registry validation (duplicates, missing prerequisites, cycles)
-   - Command lookup with visibility filtering
-   - Prerequisite graph traversal with once-per-dispatch execution
-   - Failure propagation and short-circuiting
-   - Auto-generated usage/help from registry
+Build and Run still consume the same artifact plan. Run's compatibility entry point, `run_executable`, remains available in `commands/run.jai`.
 
-3. **Command Handlers** (`src/commands/`)
-   - `command.jai`: Shared types (`Command`, `Command_Context`, `Command_Handler`)
-   - `prepare.jai`: Internal workspace preparation (manifest loading, dependency resolution)
-   - `build.jai`: Build all targets
-   - `run.jai`: Build and run executable target
-   - `clean.jai`: Remove build outputs without workspace preparation
+## Dispatcher
 
-4. **Main Integration** (`src/main.jai`)
-   - Simplified to driver initialization and dispatch invocation
-   - No longer performs unconditional workspace preparation
-   - Command-specific argument slicing
+`dispatch_command` takes the registry as its input and returns a structured `Dispatch_Result`. Production and tests invoke the same implementation; the tests do not reimplement registry validation or lookup.
 
-### Command Dependency Graph
+The Dispatcher builds and validates the complete selected graph before invoking any handler:
 
+1. Validate the registry: declarations, duplicate names, and missing prerequisites.
+2. Look up the requested command; reject unknown and internal commands.
+3. Plan the selected graph with the requested command's own argument validator. Invalid arguments stop the dispatch before any prerequisite runs.
+4. Detect cycles during planning, before any execution.
+5. Execute the ordered graph once per command. Prerequisites receive empty arguments; only the requested command receives the user's arguments.
+6. Propagate prerequisite and handler failures with `Dispatch_Result` instead of bare bools.
+
+Internal commands still run as prerequisites, but direct invocation is now rejected with `INTERNAL_COMMAND_INVOKED`.
+
+## Command execution
+
+```text
+run → build → prepare-workspace → discover-workspace
+build → prepare-workspace → discover-workspace
+clean → discovery within its own handler, without dependency preparation
 ```
-run → build → prepare-workspace
-build → prepare-workspace
-clean → (no prerequisites)
-```
 
-### Key Design Decisions
+- Build compiles all effective targets of the **root package**, not all workspace members.
+- Run chooses an explicit, case-sensitive target; otherwise it chooses the only target or the target matching the package name. It launches the selected prepared artifact after Build completes.
+- Clean discovers root/member result directories and the root `.packages` directory. Without a manifest, it cleans only the current root's `result` and `.packages`.
+- Clean validates every deletion target before deleting any. A deletion failure does not prevent attempts on the remaining validated paths, but the overall result is failure.
+- Clean does not prepare dependencies. Discovery may execute manifests, so Clean is not free of manifest side effects.
+- Handlers return `bool`; the CLI exits with status 1 on failure.
 
-- **Explicit static registry**: Uses Jai's `Type.[...]` array literal syntax instead of linker-section magic
-- **Command-owned preparation**: Each command declares its prerequisites; `clean` avoids expensive manifest/dependency operations
-- **Internal commands**: `prepare-workspace` is not user-invocable but serves as a prerequisite
-- **Once-per-dispatch execution**: Diamond dependencies (e.g., `run` needing both `build` and `prepare-workspace` transitively) execute shared prerequisites only once
-- **Failure ownership**: Handlers return `bool`; main loop calls `exit(1)`
-- **Argument ownership**: Each handler parses only arguments after the command name
+## Workspace preparation
 
-## Implementation Notes
+`Workspace_State` replaces the context's discovery/prepared pairs with one phase (`EMPTY`, `DISCOVERED`, `PREPARED`). The workspace module owns the transitions:
 
-### Jai-Specific Constraints
+- `ensure_workspace_discovered` publishes the discovery result and prints the discovery message. Repeated calls are idempotent.
+- `prepare_workspace` resolves effective targets and artifact plans, then prepares dependencies only when plans exist. It publishes a prepared result only after every required step succeeds; a failed attempt leaves discovery reusable and exposes no partial prepared workspace.
+- `get_prepared_workspace` returns the prepared result, or null before preparation. Build and Run consume the result through this accessor.
+- The internal discovery/preparation commands are thin adapters over these transitions and no longer own resolution or dependency policy.
 
-- `context` is a reserved keyword; all handler parameters use `ctx` instead
-- Empty typed arrays use `string.[]` syntax
-- Function pointer types: `Handler :: #type (ctx: *T, args: [] string) -> bool;`
-- Static arrays of structs: `REGISTRY :: Command.[.{...}, .{...}];`
+`Workspace_Discovery` retains the evaluated member declarations (`member_packages`, root first) instead of only member paths. Dependency preparation consumes this snapshot and no longer re-executes member manifests; workspace-member lookups no longer load manifests.
 
-### Testing
+## Test seams
 
-Tests verify:
-- Registry validation (duplicates, missing prerequisites)
-- Visible vs. internal command lookup
-- Graph traversal logic
+The production implementation is the test surface:
 
-Test execution:
+- `dispatch_command`/`validate_registry` accept a registry, so tests drive the production Dispatcher with test registries instead of copied algorithms.
+- `run_prepared_workspace` accepts a launch operation, defaulting to `run_artifact_plan`. Tests use a recording adapter to verify selection, exact artifact/root forwarding, no launch on invalid selection, and launch-failure propagation.
+- `clean_discovered_workspace` accepts validation and deletion operations, defaulting to the real filesystem operations. Recording adapters verify deletion scope, all-path validation before deletion, no deletion after validation failure, and continued deletion after an individual failure.
+- `ensure_workspace_discovered` and `prepare_workspace` accept discovery, resolution, and dependency operations with production defaults. Tests verify the state transitions, no-dependency no-op for targetless packages, and that failures publish nothing.
+- `fetch_workspace_dependencies` accepts a fetch operation, defaulting to `fetch_dependency`. Tests verify member dependencies are skipped and fetch failures propagate.
+
+Production handlers use the defaults. Real artifact-path validation, process execution, workspace discovery, compilation, and dependency fetching remain in the production path.
+
+## Jai-specific constraints
+
+- `context` is reserved; handler parameters use `ctx`.
+- Empty typed arrays use `string.[]`.
+- Command declarations use `BUILD_COMMAND :: Command.{...};`.
+- Registry aggregation uses `COMMAND_REGISTRY :: Command.[BUILD_COMMAND, ...];`.
+- Prerequisites remain string literals: a struct declaration's `.name` is not accepted as a constant element in a top-level array literal by the current compiler.
+- Multi-return procedure types need parenthesized returns, e.g. `#type (driver: *Build_Driver) -> (Workspace_Discovery, bool)`.
+
+## Build and tests
+
 ```bash
+jai build.jai
 cd tests
 jai build_test.jai
-cd ..
-./bin/test_dispatcher.exe
+../bin/test_dispatcher.exe
 ```
 
-All tests pass.
+`tests/test_commands.jai` covers production registry aggregation, command argument/preparation guards, Run orchestration, and Clean policy. `tests/test_workspace.jai` covers the workspace state machine and dependency snapshot consumption. `tests/test_dispatcher.jai` covers registry validation, lookup, cycle detection, diamond deduplication, argument preflight, and failure propagation through the production Dispatcher.
 
-### Verification
+## Unchanged limitations
 
-- ✅ Build succeeds
-- ✅ `clean` works without `package.jai`
-- ✅ Unknown commands rejected before workspace preparation
-- ✅ Usage message generated from registry
-- ✅ Tests confirm validation logic
+- Dispatcher prerequisite execution still happens in the prepared order; only the requested command receives user arguments.
+- Juice itself has no `package.jai`; build/run smoke tests need a separate package.
+- The existing help formatter can print a `-12` suffix; correcting it is separate from command ownership.
+- On the current Windows toolchain, real Clean attempts on populated directories fail with `Invalid switch`. This was reproduced with both this refactor and an independently compiled, unchanged `69974af` snapshot. Command-policy tests pass, but successful deletion of populated directories is not verified on Windows; fixing the filesystem deletion operation is separate work.
 
-### Limitations
-
-- Juice itself has no `package.jai`, so `build`/`run` fail in this repository (expected)
-- Full integration testing requires a separate Jai package with dependencies
-- The `-12` suffix in help output suggests a format-width issue in the print statement
-
-## Domain Model
-
-See `CONTEXT.md` for terminology definitions used throughout the implementation.
-
-## Related
-
-- Original request: Adapt Rust `linkme`'s distributed registration pattern to Juice CLI
-- Design selections captured in the conversation summary
-- No linker-section mechanism used; pure static composition via `#load`
+See `CONTEXT.md` for domain terminology.

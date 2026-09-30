@@ -55,13 +55,13 @@ Package :: struct {
     dir:          string = "";
 }
 
-// Filesystem-independent discovery result. member_paths are validated absolute
-// package directories, with the root directory first.
+// Discovery retains the evaluated declarations, including the root first.
+// Dependencies consume this snapshot rather than executing member manifests again.
 Workspace_Discovery :: struct {
-    root_dir:     string;
-    has_package:  bool;
-    root_package: Package;
-    member_paths: [] string;
+    root_dir:        string;
+    has_package:     bool;
+    root_package:    Package;
+    member_packages: [] Package;
 }
 
 // State shared by command handlers after discovery, resolution, and (if

@@ -170,25 +170,6 @@ resolve_targets :: (pkg: Package) -> [] Effective_Target, bool {
     return result.targets, result.success;
 }
 
-// Selection is deliberately case-sensitive: target declaration uniqueness is
-// case-insensitive, while the command-line spelling is exact.
-select_artifact_plan :: (plans: [] Artifact_Plan, package_name: string, requested_target: string) -> Artifact_Plan, bool {
-    if plans.count == 0 return .{}, false;
-
-    if requested_target != "" {
-        for plan: plans {
-            if plan.target.name == requested_target return plan, true;
-        }
-        return .{}, false;
-    }
-
-    if plans.count == 1 return plans[0], true;
-    for plan: plans {
-        if plan.target.name == package_name return plan, true;
-    }
-    return .{}, false;
-}
-
 revalidate_artifact_plan :: (plan: Artifact_Plan, package_root: string) -> bool {
     root_entry := inspect_path_entry(package_root);
     if !root_entry.exists || !root_entry.is_directory || root_entry.is_symlink || root_entry.is_junction return false;

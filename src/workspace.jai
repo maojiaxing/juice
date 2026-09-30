@@ -54,6 +54,8 @@ discover_workspace :: (driver: *Build_Driver) -> Workspace_Discovery, bool {
 
     members: [..] string;
     array_add(*members, copy_string(root_abs));
+    packages: [..] Package;
+    array_add(*packages, root_package);
 
     for relative_path: root_package.workspace.members {
         if !workspace_relative_path_is_valid(relative_path) {
@@ -90,59 +92,80 @@ discover_workspace :: (driver: *Build_Driver) -> Workspace_Discovery, bool {
             return discovery, false;
         }
         array_add(*members, copy_string(member_abs));
+        array_add(*packages, member_package);
     }
 
     discovery.root_dir = copy_string(root_abs);
     discovery.has_package = true;
     discovery.root_package = root_package;
-    discovery.member_paths = members;
+    discovery.member_packages = packages;
     return discovery, true;
 }
 
-// Clean needs discovery but not preparation. The bool distinguishes an absent
-// manifest (valid fallback) from an existing manifest that failed validation.
-discover_workspace_for_clean :: (driver: *Build_Driver) -> Workspace_Discovery, bool {
-    discovery, ok := discover_workspace(driver);
-    return discovery, ok;
+Workspace_Phase :: enum {
+    EMPTY;
+    DISCOVERED;
+    PREPARED;
 }
 
-clean_path_is_safe :: (path: string) -> bool {
-    entry := inspect_path_entry(path);
-    if !entry.exists return true;
-    if entry.is_symlink || entry.is_junction {
-        print("[juice ERROR] Refusing to delete symlink/junction: %\n", path);
+Workspace_State :: struct {
+    phase:     Workspace_Phase;
+    discovery: Workspace_Discovery;
+    prepared:  Prepared_Workspace;
+}
+
+ensure_workspace_discovered :: (
+    driver: *Build_Driver,
+    state: *Workspace_State,
+    discover: #type (driver: *Build_Driver) -> (Workspace_Discovery, bool) = discover_workspace
+) -> bool {
+    if state.phase != .EMPTY return true;
+    discovery, ok := discover(driver);
+    if !ok || !discovery.has_package {
+        if ok print("[juice ERROR] No package.jai found in current directory.\n");
         return false;
     }
-    return entry.is_directory;
+    state.discovery = discovery;
+    state.phase = .DISCOVERED;
+    print("[juice] Package '%' (v%) discovered.\n", discovery.root_package.name, discovery.root_package.version);
+    return true;
 }
 
-clean_discovered_workspace :: (driver: *Build_Driver, discovery: Workspace_Discovery) -> bool {
-    paths: [..] string;
-    paths.allocator = temp;
-
-    if discovery.has_package {
-        for member_path: discovery.member_paths {
-            array_add(*paths, tprint("%1/result", member_path));
+// Publish a prepared result only after every required step succeeds. A failed
+// attempt leaves discovery reusable and exposes no partial prepared workspace.
+prepare_workspace :: (
+    driver: *Build_Driver,
+    state: *Workspace_State,
+    resolve: #type (pkg: Package) -> Artifact_Plan_Result = resolve_artifact_plans,
+    prepare_dependencies: #type (driver: *Build_Driver, member_packages: [] Package) -> (bool) = resolve_and_fetch_dependencies
+) -> bool {
+    if state.phase == .PREPARED return true;
+    if state.phase != .DISCOVERED || !state.discovery.has_package {
+        print("[juice ERROR] Workspace discovery is required before preparation.\n");
+        return false;
+    }
+    plans_result := resolve(state.discovery.root_package);
+    if !plans_result.success {
+        print("[juice ERROR] %\n", plans_result.error_message);
+        return false;
+    }
+    prepared: Prepared_Workspace;
+    prepared.discovery = state.discovery;
+    prepared.artifact_plans = plans_result.plans;
+    if prepared.artifact_plans.count > 0 {
+        print("[juice] Preparing workspace dependencies...\n");
+        if !prepare_dependencies(driver, state.discovery.member_packages) {
+            print("[juice ERROR] Dependency resolution failed.\n");
+            return false;
         }
-        array_add(*paths, tprint("%1/.packages", discovery.root_dir));
-    } else {
-        array_add(*paths, tprint("%1/result", driver.root_dir));
-        array_add(*paths, tprint("%1/.packages", driver.root_dir));
+        prepared.dependencies_prepared = true;
     }
+    state.prepared = prepared;
+    state.phase = .PREPARED;
+    return true;
+}
 
-    // Validate every deletion target before deleting any of them.
-    for path: paths {
-        if !clean_path_is_safe(path) return false;
-    }
-
-    print("[juice Clean] Cleaning output directories...\n");
-    all_ok := true;
-    for path: paths {
-        if !delete_directory_full(path) {
-            print("[juice ERROR] Could not delete: %\n", path);
-            all_ok = false;
-        }
-    }
-    if all_ok print("[juice Clean] Workspace cleaned.\n");
-    return all_ok;
+get_prepared_workspace :: (state: *Workspace_State) -> *Prepared_Workspace {
+    if state.phase != .PREPARED return null;
+    return *state.prepared;
 }

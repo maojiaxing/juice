@@ -25,7 +25,7 @@ Juice 是一个面向 Jai  的命令行构建工具；本上下文统一描述�
 为需要 package、target 和依赖信息的 command 准备当前 workspace 状态的过程。它包含读取 root package、发现 workspace member、解析 effective target，以及按 command 需要解析或获取 dependencies。
 
 **Workspace discovery**:
-通过执行 root package manifest 来发现并验证位于 package root 内的 workspace member 的过程。Workspace discovery 产生独立的 discovery 结果，不解析、获取或更新 dependencies；因 manifest 本身是可执行的 Jai 声明，所以它不承诺没有 manifest 自身产生的副作用。没有 package declaration 时，当前目录仍可产生仅包含自身的最小 discovery，供 Clean 使用；已有但无效的 package declaration 不产生可清理的 workspace。
+通过执行 root package manifest 来发现并验证位于 package root 内的 workspace member 的过程。Workspace discovery 产生独立的 discovery 结果，不解析、获取或更新 dependencies；因 manifest 本身是可执行的 Jai 声明，所以它不承诺没有 manifest 自身产生的副作用。Discovery 保留已评估的 member declaration；dependency preparation 消费同一快照，不重新执行 workspace manifest。没有 package declaration 时，当前目录仍可产生仅包含自身的最小 discovery，供 Clean 使用；已有但无效的 package declaration 不产生可清理的 workspace。
 
 **Workspace member**:
 由 root package 声明、位于 root package 目录之内的另一个 package。每个 member 路径必须唯一、可移植并解析到包含 package manifest 的目录；不同文本路径不得指向同一个 member。
@@ -69,7 +69,7 @@ Package declaration 中省略的可选值或显式提供的空值；两者具有
 Juice 当前可用 command 的目录。它让 command 的名称、说明、参数责任和前置关系可被统一发现，但不改变各 command 自己拥有其行为的事实。
 
 **Dispatcher**:
-根据用户输入在 command registry 中选择 command，按其前置关系执行所需 command，并把最终成功/失败结果交给 CLI 进程。
+根据用户输入在 command registry 中选择 command，按其前置关系执行所需 command，并把最终成功/失败结果交给 CLI 进程。Dispatcher 在执行任何 prerequisite 之前用目标 command 自身的参数规则验证用户参数；参数无效时任何 command 都不执行。
 
 ## Relationships
 

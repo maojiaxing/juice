@@ -62,18 +62,21 @@ find_package_in_repo :: (driver: *Build_Driver, repo_dir: string, target_pkg_nam
     return "", false;
 }
 
-// Dependency preparation consumes already validated discovery paths. It does
-// not rediscover the workspace and is never called by Clean.
-resolve_and_fetch_dependencies :: (driver: *Build_Driver, member_paths: [] string) -> bool {
-    make_directory_if_it_does_not_exist(driver.packages_dir, recursive = true);
+// Consume the discovery snapshot; never re-execute workspace manifests.
+resolve_and_fetch_dependencies :: (driver: *Build_Driver, member_packages: [] Package) -> bool {
+    if !make_directory_if_it_does_not_exist(driver.packages_dir, recursive = true) return false;
+    return fetch_workspace_dependencies(driver, member_packages);
+}
 
-    for member_path: member_paths {
-        pkg, ok := load_package_manifest(driver, member_path);
-        if !ok continue;
-
+fetch_workspace_dependencies :: (
+    driver: *Build_Driver,
+    member_packages: [] Package,
+    fetch: #type (driver: *Build_Driver, dep: Dependency) -> bool = fetch_dependency
+) -> bool {
+    for pkg: member_packages {
         for dep: pkg.dependencies {
-            if is_workspace_member(driver, member_paths, dep.name) continue;
-            if !fetch_dependency(driver, dep) {
+            if is_workspace_member(member_packages, dep.name) continue;
+            if !fetch(driver, dep) {
                 print("[juice ERROR] Failed to fetch dependency: %1\n", dep.name);
                 return false;
             }
@@ -124,10 +127,9 @@ get_directory_path :: (file_path: string) -> string {
     return slice(file_path, 0, last_slash);
 }
 
-is_workspace_member :: (driver: *Build_Driver, member_paths: [] string, name: string) -> bool {
-    for member_path: member_paths {
-        pkg, ok := load_package_manifest(driver, member_path);
-        if ok && pkg.name == name return true;
+is_workspace_member :: (member_packages: [] Package, name: string) -> bool {
+    for pkg: member_packages {
+        if pkg.name == name return true;
     }
     return false;
 }
