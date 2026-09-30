@@ -80,18 +80,3 @@ run_prepared_workspace :: (
     }
     return launch(plan, prepared.discovery.root_dir);
 }
-
-// Compatibility entry point. Command handlers use the prepared plan so
-// Build and Run cannot disagree about output naming or directories.
-run_executable :: (driver: *Build_Driver, pkg: Package, requested_target: string) -> bool {
-    plans_result := resolve_artifact_plans(pkg);
-    if !plans_result.success {
-        print("[juice ERROR] %\n", plans_result.error_message);
-        return false;
-    }
-    prepared: Prepared_Workspace;
-    prepared.discovery.root_dir = pkg.dir;
-    prepared.discovery.root_package = pkg;
-    prepared.artifact_plans = plans_result.plans;
-    return run_prepared_workspace(*prepared, requested_target);
-}

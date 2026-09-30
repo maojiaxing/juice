@@ -13,7 +13,7 @@
 #load "../src/workspace.jai";
 #load "../src/target.jai";
 #load "../src/dependency.jai";
-#load "../src/builder.jai";
+#load "../src/driver.jai";
 #load "../src/commands/command.jai";
 #load "../src/commands/prepare.jai";
 #load "../src/commands/build.jai";
@@ -232,6 +232,11 @@ main :: () {
     all_ok = run_test("Clean without a manifest uses the current root", test_clean_without_manifest) && all_ok;
     all_ok = run_test("Unsafe Clean path prevents every deletion", test_clean_invalid_path_prevents_all_deletions) && all_ok;
     all_ok = run_test("Clean continues after a deletion fails", test_clean_continues_after_delete_failure) && all_ok;
+    all_ok = run_test("Build without targets compiles nothing", test_build_without_targets_compiles_nothing) && all_ok;
+    all_ok = run_test("Unsafe package root blocks every compilation", test_build_revalidation_gate_blocks_unsafe_root) && all_ok;
+    all_ok = run_test("Escaping artifact plan blocks compilation", test_build_revalidation_gate_blocks_escaping_plan) && all_ok;
+    all_ok = run_test("Build forwards each prepared plan to compilation", test_build_compiles_each_prepared_plan) && all_ok;
+    all_ok = run_test("Build fails fast on a compile failure", test_build_fails_fast_on_compile_failure) && all_ok;
     all_ok = run_test("Discovery publishes workspace state once", test_discovery_publishes_state_once) && all_ok;
     all_ok = run_test("Discovery without a package stays empty", test_discovery_without_package_stays_empty) && all_ok;
     all_ok = run_test("Preparation without targets skips dependencies", test_preparation_without_targets_skips_dependencies) && all_ok;

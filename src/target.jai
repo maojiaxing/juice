@@ -164,12 +164,6 @@ resolve_artifact_plans :: (pkg: Package) -> Artifact_Plan_Result {
     return .{success = true, plans = plans};
 }
 
-// Compatibility helper for callers that only need the derived targets.
-resolve_targets :: (pkg: Package) -> [] Effective_Target, bool {
-    result := resolve_effective_targets(pkg);
-    return result.targets, result.success;
-}
-
 revalidate_artifact_plan :: (plan: Artifact_Plan, package_root: string) -> bool {
     root_entry := inspect_path_entry(package_root);
     if !root_entry.exists || !root_entry.is_directory || root_entry.is_symlink || root_entry.is_junction return false;

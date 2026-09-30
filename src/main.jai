@@ -9,7 +9,7 @@
 #load "workspace.jai";
 #load "target.jai";
 #load "dependency.jai";
-#load "builder.jai";
+#load "driver.jai";
 #load "commands/command.jai";
 #load "commands/prepare.jai";
 #load "commands/build.jai";

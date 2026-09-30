@@ -174,3 +174,80 @@ test_clean_continues_after_delete_failure :: () -> bool {
     if test_clean_deleted_too_early || test_clean_deleted.count != 3 return false;
     return test_clean_deleted[1] == "root/member/result" && test_clean_deleted[2] == "root/.packages";
 }
+
+test_compile_count: s64;
+test_compiled_plan: Artifact_Plan;
+test_compiled_driver_root: string;
+test_compile_success: bool;
+
+test_compile_artifact :: (driver: *Build_Driver, plan: Artifact_Plan) -> bool {
+    test_compile_count += 1;
+    test_compiled_plan = plan;
+    test_compiled_driver_root = driver.root_dir;
+    return test_compile_success;
+}
+
+test_build_without_targets_compiles_nothing :: () -> bool {
+    driver: Build_Driver;
+    prepared: Prepared_Workspace;
+    prepared.artifact_plans = Artifact_Plan.[];
+    test_compile_count = 0;
+    return build_prepared_workspace(*driver, *prepared, test_compile_artifact) && test_compile_count == 0;
+}
+
+test_build_revalidation_gate_blocks_unsafe_root :: () -> bool {
+    driver: Build_Driver;
+    plans := Artifact_Plan.[
+        .{target = .{name = "alpha", main_file = "src/main.jai", source_path = "test_commands.jai"}, result_dir = "./result", artifact_path = "./result/alpha.exe"},
+    ];
+    prepared: Prepared_Workspace;
+    prepared.discovery.root_dir = "missing-package-root";
+    prepared.artifact_plans = plans;
+    test_compile_count = 0;
+    return !build_prepared_workspace(*driver, *prepared, test_compile_artifact) && test_compile_count == 0;
+}
+
+test_build_revalidation_gate_blocks_escaping_plan :: () -> bool {
+    driver: Build_Driver;
+    plans := Artifact_Plan.[
+        .{target = .{name = "alpha", main_file = "src/main.jai", source_path = "test_commands.jai"}, result_dir = "../escape", artifact_path = "../escape/alpha.exe"},
+    ];
+    prepared: Prepared_Workspace;
+    prepared.discovery.root_dir = ".";
+    prepared.artifact_plans = plans;
+    test_compile_count = 0;
+    return !build_prepared_workspace(*driver, *prepared, test_compile_artifact) && test_compile_count == 0;
+}
+
+test_build_compiles_each_prepared_plan :: () -> bool {
+    driver: Build_Driver;
+    driver.root_dir = "driver-root";
+    plans := Artifact_Plan.[
+        .{target = .{name = "alpha", main_file = "src/main.jai", source_path = "test_commands.jai"}, result_dir = "./result", artifact_path = "./result/alpha.exe"},
+        .{target = .{name = "beta",  main_file = "src/main.jai", source_path = "test_commands.jai"}, result_dir = "./result", artifact_path = "./result/beta.exe"},
+    ];
+    prepared: Prepared_Workspace;
+    prepared.discovery.root_dir = ".";
+    prepared.artifact_plans = plans;
+    test_compile_count = 0;
+    test_compile_success = true;
+    if !build_prepared_workspace(*driver, *prepared, test_compile_artifact) return false;
+    if test_compile_count != 2 return false;
+    if test_compiled_driver_root != "driver-root" return false;
+    return test_compiled_plan.target.name == "beta" && test_compiled_plan.artifact_path == "./result/beta.exe";
+}
+
+test_build_fails_fast_on_compile_failure :: () -> bool {
+    driver: Build_Driver;
+    plans := Artifact_Plan.[
+        .{target = .{name = "alpha", main_file = "src/main.jai", source_path = "test_commands.jai"}, result_dir = "./result", artifact_path = "./result/alpha.exe"},
+        .{target = .{name = "beta",  main_file = "src/main.jai", source_path = "test_commands.jai"}, result_dir = "./result", artifact_path = "./result/beta.exe"},
+    ];
+    prepared: Prepared_Workspace;
+    prepared.discovery.root_dir = ".";
+    prepared.artifact_plans = plans;
+    test_compile_count = 0;
+    test_compile_success = false;
+    if build_prepared_workspace(*driver, *prepared, test_compile_artifact) return false;
+    return test_compile_count == 1;
+}

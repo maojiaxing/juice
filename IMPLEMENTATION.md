@@ -9,20 +9,20 @@ Juice uses an explicit static command registry and prerequisite Dispatcher. Each
 | `src/commands/command.jai` | Shared `Command`, `Command_Context`, handler and argument-validator types |
 | `src/commands/registry.jai` | Static array of command-owned declarations |
 | `src/commands/prepare.jai` | Internal discovery/preparation declarations; thin adapters over the workspace state |
-| `src/commands/build.jai` | Build declaration, argument contract, and build orchestration |
+| `src/commands/build.jai` | Build declaration, argument contract, compilation, batch revalidation, and prepared-workspace orchestration |
 | `src/commands/run.jai` | Run declaration, argument contract, target selection, diagnostics, and artifact launch |
 | `src/commands/clean.jai` | Clean declaration, argument contract, cleanup scope, all-path validation, and deletion policy |
 | `src/dispatcher.jai` | Registry validation, lookup, planning, and execution; production and test registries share it |
 | `src/workspace.jai` | Workspace discovery, member validation, and the discovery/preparation state machine |
 | `src/dependency.jai` | Dependency fetching and workspace-member lookup over the discovery snapshot |
-| `src/builder.jai` | Shared compilation and prepared-workspace build implementation |
+| `src/driver.jai` | Process-wide driver: package root, dependency directory, and XDG cache/data/config paths |
 | `src/target.jai` | Shared effective-target resolution, artifact plans, and artifact-path revalidation |
 | `src/path_safety.jai` | Shared filesystem/path inspection and validation |
 | `src/main.jai` | File loading, driver initialization, CLI argument slicing, and dispatch |
 
 Command metadata, prerequisites, visibility, handlers, and the argument contract are declared in the owning command file. Handlers print usage from their own declaration rather than maintaining a second usage string. Adding a command requires adding its file to the load list and its declaration to the registry; no automatic registration is involved.
 
-Build and Run still consume the same artifact plan. Run's compatibility entry point, `run_executable`, remains available in `commands/run.jai`.
+Build and Run still consume the same artifact plan.
 
 ## Dispatcher
 
@@ -72,10 +72,11 @@ The production implementation is the test surface:
 - `dispatch_command`/`validate_registry` accept a registry, so tests drive the production Dispatcher with test registries instead of copied algorithms.
 - `run_prepared_workspace` accepts a launch operation, defaulting to `run_artifact_plan`. Tests use a recording adapter to verify selection, exact artifact/root forwarding, no launch on invalid selection, and launch-failure propagation.
 - `clean_discovered_workspace` accepts validation and deletion operations, defaulting to the real filesystem operations. Recording adapters verify deletion scope, all-path validation before deletion, no deletion after validation failure, and continued deletion after an individual failure.
+- `build_prepared_workspace` accepts a compile operation, defaulting to `compile_artifact_plan`. Recording adapters verify the targetless no-op, the revalidation gate before any compilation, exact per-plan forwarding, and fail-fast on the first compile failure.
 - `ensure_workspace_discovered` and `prepare_workspace` accept discovery, resolution, and dependency operations with production defaults. Tests verify the state transitions, no-dependency no-op for targetless packages, and that failures publish nothing.
 - `fetch_workspace_dependencies` accepts a fetch operation, defaulting to `fetch_dependency`. Tests verify member dependencies are skipped and fetch failures propagate.
 
-Production handlers use the defaults. Real artifact-path validation, process execution, workspace discovery, compilation, and dependency fetching remain in the production path.
+Production handlers use the defaults. Real process execution, compilation, workspace discovery, and dependency fetching remain in the production path; the build revalidation gate runs in tests over the real filesystem checks.
 
 ## Jai-specific constraints
 
