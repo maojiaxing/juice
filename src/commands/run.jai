@@ -2,6 +2,7 @@
 #import "File";
 #import "Process";
 #import "Juice";
+#import "Testing";
 
 RUN_COMMAND :: Command.{
     name          = "run",
@@ -79,4 +80,78 @@ run_prepared_workspace :: (
         return false;
     }
     return launch(plan, prepared.discovery.root_dir);
+}
+
+// ---------------------------------------------------------------------------
+// 内联测试（票 0034 迁移自 tests/test_commands.jai）：Run 目标选择与 launch
+// seam；E2E child 场景验证 run 经由 build 前置继承剥离语义。共享 helper
+// （test_launch_* 记录全局、run_juice_child 等 child 场景 helper）见
+// src/test_support.jai。
+// ---------------------------------------------------------------------------
+
+test "Run launches the selected prepared artifact" {
+    plans := Artifact_Plan.[
+        .{target = .{name = "alpha"}, target_dir = "root/target", artifact_path = "root/target/alpha.exe"},
+        .{target = .{name = "demo"}, target_dir = "root/target", artifact_path = "root/target/demo.exe"},
+    ];
+    prepared: Prepared_Workspace;
+    prepared.discovery.root_dir = "root";
+    prepared.discovery.root_package.name = "demo";
+    prepared.artifact_plans = plans;
+    test_launch_count = 0;
+    test_launch_success = true;
+
+    expect(run_prepared_workspace(*prepared, "", test_launch_artifact));
+    expect(test_launch_count == 1 && test_launched_plan.artifact_path == plans[1].artifact_path);
+    expect(test_launched_root == "root" && test_launched_plan.target_dir == plans[1].target_dir);
+    expect(run_prepared_workspace(*prepared, "alpha", test_launch_artifact));
+    expect(test_launch_count == 2 && test_launched_plan.artifact_path == plans[0].artifact_path);
+}
+
+test "Run defaults to the only target" {
+    plans := Artifact_Plan.[.{target = .{name = "only"}, artifact_path = "root/target/only.exe"}];
+    prepared: Prepared_Workspace;
+    prepared.discovery.root_package.name = "different-package-name";
+    prepared.artifact_plans = plans;
+    test_launch_count = 0;
+    test_launch_success = true;
+    expect(run_prepared_workspace(*prepared, "", test_launch_artifact));
+    expect(test_launch_count == 1 && test_launched_plan.artifact_path == plans[0].artifact_path);
+}
+
+test "Invalid Run selection never launches" {
+    plans := Artifact_Plan.[.{target = .{name = "alpha"}}, .{target = .{name = "beta"}}];
+    prepared: Prepared_Workspace;
+    prepared.discovery.root_package.name = "demo";
+    prepared.artifact_plans = plans;
+    test_launch_count = 0;
+    test_launch_success = true;
+    expect(!run_prepared_workspace(*prepared, "", test_launch_artifact));
+    expect(!run_prepared_workspace(*prepared, "missing", test_launch_artifact));
+    expect(!run_prepared_workspace(*prepared, "Alpha", test_launch_artifact));
+    prepared.artifact_plans = Artifact_Plan.[];
+    expect(!run_prepared_workspace(*prepared, "", test_launch_artifact));
+    expect(test_launch_count == 0);
+}
+
+test "Run propagates launch failure" {
+    plans := Artifact_Plan.[.{target = .{name = "demo"}}];
+    prepared: Prepared_Workspace;
+    prepared.artifact_plans = plans;
+    test_launch_count = 0;
+    test_launch_success = false;
+    expect(!run_prepared_workspace(*prepared, "", test_launch_artifact));
+    expect(test_launch_count == 1);
+}
+
+// run inherits the strip semantics through its build prerequisite: the
+// embedded-tests package builds via views and the artifact launches.
+test "E2E: run inherits strip semantics through build" {
+    fixture_root := tprint("%1/tests/data/test-package", juice_root());
+    defer delete_directory_full(tprint("%1/target", fixture_root));
+
+    result, output, _ := run_juice_child("test-package", "run");
+    expect(expect_child_exit("run", result, 0));
+    expect(child_output_contains("run", output, "[juice Run] Launching"));
+    expect(child_output_contains("run", output, "hello from test-package"));
 }

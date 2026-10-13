@@ -1,6 +1,7 @@
 #import "Basic";
 #import "File_Utilities";
 #import "Juice";
+#import "Testing";
 
 CLEAN_COMMAND :: Command.{
     name          = "clean",
@@ -67,4 +68,58 @@ clean_discovered_workspace :: (
     }
     if all_ok print("[juice Clean] Workspace cleaned.\n");
     return all_ok;
+}
+
+// ---------------------------------------------------------------------------
+// 内联测试（票 0034 迁移自 tests/test_commands.jai）：Clean 的范围校验与
+// 先验证后删除的编排。共享 helper（test_clean_* 记录全局与
+// reset_clean_test）见 src/test_support.jai。
+// ---------------------------------------------------------------------------
+
+test "Clean validates workspace scope before deletion" {
+    driver: Build_Driver;
+    driver.root_dir = "unused-driver-root";
+    discovery: Workspace_Discovery;
+    discovery.has_package = true;
+    discovery.root_dir = "root";
+    discovery.member_packages = Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
+    reset_clean_test(2);
+    expect(clean_discovered_workspace(*driver, discovery, test_validate_clean_path, test_delete_clean_path));
+    expect(!test_clean_deleted_too_early && test_clean_deleted.count == 2);
+    expect(test_clean_deleted[0] == "root/target" && test_clean_deleted[1] == "root/member/target");
+}
+
+test "Clean without a manifest uses the current root" {
+    driver: Build_Driver;
+    driver.root_dir = "root";
+    discovery: Workspace_Discovery;
+    reset_clean_test(1);
+    expect(clean_discovered_workspace(*driver, discovery, test_validate_clean_path, test_delete_clean_path));
+    expect(!test_clean_deleted_too_early && test_clean_deleted.count == 1);
+    expect(test_clean_deleted[0] == "root/target");
+}
+
+test "Unsafe Clean path prevents every deletion" {
+    driver: Build_Driver;
+    discovery: Workspace_Discovery;
+    discovery.has_package = true;
+    discovery.root_dir = "root";
+    discovery.member_packages = Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
+    reset_clean_test(2);
+    test_clean_invalid_path = "root/member/target";
+    expect(!clean_discovered_workspace(*driver, discovery, test_validate_clean_path, test_delete_clean_path));
+    expect(test_clean_validated.count == 2 && test_clean_deleted.count == 0);
+}
+
+test "Clean continues after a deletion fails" {
+    driver: Build_Driver;
+    discovery: Workspace_Discovery;
+    discovery.has_package = true;
+    discovery.root_dir = "root";
+    discovery.member_packages = Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
+    reset_clean_test(2);
+    test_clean_failed_delete = "root/target";
+    expect(!clean_discovered_workspace(*driver, discovery, test_validate_clean_path, test_delete_clean_path));
+    expect(!test_clean_deleted_too_early && test_clean_deleted.count == 2);
+    expect(test_clean_deleted[0] == "root/target" && test_clean_deleted[1] == "root/member/target");
 }
