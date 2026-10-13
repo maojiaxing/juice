@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// 转译器测试（票 0034 迁移自 tests/test_transpiler.jai，45 块）。
+// 转译器测试（票 0034 自旧 tests/ 迁移，45 块）。
 //
 // 关键约束（0031 已知风险落地）：src/transpile.jai 与 src/transpile_cache.jai
 // 是 build.jai 的 #load 目标 / 入口闭包成员——test block 随 metaprogram 编译

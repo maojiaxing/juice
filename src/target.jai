@@ -238,7 +238,7 @@ revalidate_artifact_plan :: (plan: Artifact_Plan, package_root: string) -> bool 
 }
 
 // ---------------------------------------------------------------------------
-// 内联测试（票 0034 迁移自 tests/test_target.jai）：effective-target 与
+// 内联测试（票 0034 自旧 tests/ 迁移）：effective-target 与
 // artifact-plan 解析的回归测试。无名显式 target 用例锁住旧版 Juice 会把
 // "-exe ''" 送进编译器的声明形状——Windows 丢弃空参数使 "-output_path" 滑
 // 成裸输入文件。Fixture 路径派生自 juice_root()（src/test_support.jai）。

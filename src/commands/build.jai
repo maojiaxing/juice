@@ -430,7 +430,7 @@ build_prepared_workspace :: (
 }
 
 // ---------------------------------------------------------------------------
-// 内联测试（票 0034 迁移自 tests/test_commands.jai）：Build 编排、转译前置
+// 内联测试（票 0034 自旧 tests/ 迁移）：Build 编排、转译前置
 // seam 与 probe、真实剥离步骤，以及 fixture package 的 E2E child 场景。
 // 共享 helper（test_compile_* 记录全局、fake_build_transpile 等 seam fake、
 // build_seam_* 与 run_juice_child 等 child 场景 helper）见

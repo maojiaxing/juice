@@ -49,11 +49,11 @@ src/
 │   ├── run.jai          # 构建并运行 target
 │   └── clean.jai        # 清理输出（无 manifest 依赖）
 ├── dispatcher.jai       # 注册表验证、查找和图遍历
+├── transpile_tests.jai  # 转译器测试（核心转译文件 test-free 约束）
 └── main.jai            # 简化为驱动器初始化和调度调用
 
 tests/
-├── test_dispatcher.jai  # 验证注册表逻辑的单元测试
-└── build_test.jai       # 测试构建脚本
+└── data/               # fixture 包与 golden 基线（测试块已内联 src 实现旁）
 
 CONTEXT.md              # 领域术语定义
 IMPLEMENTATION.md       # 实现细节文档

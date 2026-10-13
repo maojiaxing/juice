@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 // Test support（测试支撑代码，组织决议 0027、规格 0032）：测试程序共享声明的
-// 唯一允许位置。收录 tests/ 各文件顶层迁移而来的全部共享声明——helper、
-// recording fake 与记录全局、GOLDEN_CASES 等测试常量，供 tests/ 存量测试块
-// 与后续迁入 src 的内联 test block 共同引用（Test discovery 全包扫描收录
+// 唯一允许位置。收录旧 tests/ 测试文件顶层迁移而来的全部共享声明——helper、
+// recording fake 与记录全局、GOLDEN_CASES 等测试常量，供迁入 src 的内联
+// test block（票 0034）与 Testing 自测共同引用（Test discovery 全包扫描收录
 // 本文件进测试程序，声明程序级共享）。
 //
 // 纪律：测试共享声明只允许位于本文件；其他 src 文件顶层不放测试专用声明
@@ -39,8 +39,8 @@ juice_root :: () -> string {
 }
 
 // ===========================================================================
-// tests/test_commands.jai 顶层迁移（run/clean/compile 记录 fake、build
-// transpile seam 与 E2E child 场景 helper）
+// 旧 tests/ 测试文件顶层声明迁移（票 0032）——run/clean/compile 记录 fake、
+// build transpile seam 与 E2E child 场景 helper
 // ===========================================================================
 
 test_launch_count: s64;
@@ -205,7 +205,7 @@ child_output_contains :: (name: string, output: string, needle: string) -> bool 
 }
 
 // ===========================================================================
-// tests/test_dispatcher.jai 顶层迁移（记录 handler 与测试 registry）
+// 旧 tests/ 测试文件顶层声明迁移（票 0032）——记录 handler 与测试 registry
 // ===========================================================================
 
 test_a_calls: s64 = 0;
@@ -293,8 +293,8 @@ TEST_REGISTRY_ARGUMENTS :: Command.[
 ];
 
 // ===========================================================================
-// tests/test_workspace.jai 顶层迁移（discovery/resolution/dependency 记录
-// fake 与 import shim helper）
+// 旧 tests/ 测试文件顶层声明迁移（票 0032）——discovery/resolution/dependency
+// 记录 fake 与 import shim helper
 // ===========================================================================
 
 test_discovery_attempts: s64 = 0;
@@ -360,7 +360,7 @@ shim_content_for :: (packages_dir: string, name: string) -> string, bool {
 }
 
 // ===========================================================================
-// tests/test_target.jai 顶层迁移（LIB fixture package 构造）
+// 旧 tests/ 测试文件顶层声明迁移（票 0032）——LIB fixture package 构造
 // ===========================================================================
 
 // A LIB package is an import source: it declares no executable targets and
@@ -375,8 +375,8 @@ library_fixture_package :: () -> Package {
 }
 
 // ===========================================================================
-// tests/test_test_command.jai 顶层迁移（test 编排 seam 的记录 fake、缓存树
-// 扫描 helper 与 E2E child 场景 helper）
+// 旧 tests/ 测试文件顶层声明迁移（票 0032）——test 编排 seam 的记录 fake、
+// 缓存树扫描 helper 与 E2E child 场景 helper
 // ===========================================================================
 
 // Absolute path of juice.exe in the repository's target directory. The package
@@ -599,9 +599,9 @@ cache_dir_entries :: (dir: string) -> (Cache_Dir_Scan, bool) {
 }
 
 // ===========================================================================
-// tests/test_testing.jai 顶层迁移（Testing 模块自测的记录全局与 child 场景
-// helper；Testing 自测所需的 helper 按决议同驻本文件，不驻
-// modules/Testing.jai 顶层）
+// 旧 tests/ 测试文件顶层声明迁移（票 0032）——Testing 模块自测的记录全局与
+// child 场景 helper；Testing 自测所需的 helper 按决议同驻本文件，不驻
+// modules/Testing.jai 顶层
 // ===========================================================================
 
 g_reached := false;
@@ -694,8 +694,8 @@ testing_line_col :: (file: string, needle: string) -> (line: s64, col: s64) {
 }
 
 // ===========================================================================
-// tests/test_transpiler.jai 顶层迁移（golden/negative harness 与
-// compile-and-run matrix helper）
+// 旧 tests/ 测试文件顶层声明迁移（票 0032）——golden/negative harness 与
+// compile-and-run matrix helper
 // ===========================================================================
 
 // ---------------------------------------------------------------------------

@@ -428,7 +428,7 @@ test_file_rel_path :: (absolute: string, root: string) -> string {
 }
 
 // ---------------------------------------------------------------------------
-// 内联测试（票 0034 迁移自 tests/test_test_command.jai）：`juice test` 管道
+// 内联测试（票 0034 自旧 tests/ 迁移）：`juice test` 管道
 // 的编排 seam（记录 fake：转译步骤按文件调用、fake 视图流入生成的 driver、
 // compile seam 收到生成产物）、全量 discovery 扫描（排除集、member 边界、
 // 链接跳过、确定性顺序）与 fixture package 的 E2E child 场景。共享声明

@@ -173,7 +173,7 @@ get_prepared_workspace :: (state: *Workspace_State) -> *Prepared_Workspace {
 }
 
 // ---------------------------------------------------------------------------
-// 内联测试（票 0034 迁移自 tests/test_workspace.jai）：workspace 状态机、
+// 内联测试（票 0034 自旧 tests/ 迁移）：workspace 状态机、
 // 依赖快照消费与 import shim。共享 helper（discovery/resolution/dependency
 // 记录 fake 与记录全局、shim_content_for）见 src/test_support.jai。
 // ---------------------------------------------------------------------------
