@@ -1,0 +1,1 @@
+shared-load-before/input.jai:1,9: #load 必须独占其行

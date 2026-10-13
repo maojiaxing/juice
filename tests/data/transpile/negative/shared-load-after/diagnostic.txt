@@ -1,0 +1,1 @@
+shared-load-after/input.jai:1,1: #load 必须独占其行

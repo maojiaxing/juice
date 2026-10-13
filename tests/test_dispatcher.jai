@@ -1,28 +1,10 @@
 #import "Basic";
-#import "Hash_Table";
 #import "File";
-#import "File_Utilities";
 #import "Process";
 #import "String";
 #import "System";
 #import "Juice";
-
-#load "../src/xdg.jai";
-#load "../src/path_safety.jai";
-#load "../src/manifest.jai";
-#load "../src/workspace.jai";
-#load "../src/target.jai";
-#load "../src/dependency.jai";
-#load "../src/driver.jai";
-#load "../src/commands/command.jai";
-#load "../src/commands/prepare.jai";
-#load "../src/commands/build.jai";
-#load "../src/commands/run.jai";
-#load "../src/commands/clean.jai";
-#load "../src/commands/registry.jai";
-#load "../src/dispatcher.jai";
-#load "test_commands.jai";
-#load "test_workspace.jai";
+#import "Testing";
 
 test_a_calls: s64 = 0;
 test_b_calls: s64 = 0;
@@ -108,143 +90,94 @@ TEST_REGISTRY_ARGUMENTS :: Command.[
     .{name = "strict", description = "Strict Command", usage = "test strict", prerequisites = string.["sideeffect"], visible = true, validate_arguments = strict_arguments_are_invalid, handler = test_handler_b},
 ];
 
-run_test :: (name: string, test_proc: () -> bool) -> bool {
-    result := test_proc();
-    if result print("[PASS] %\n", name);
-    else print("[FAIL] %\n", name);
-    return result;
+test "Production registry validation" {
+    expect(validate_registry(COMMAND_REGISTRY).success);
 }
 
-test_production_registry_is_valid :: () -> bool {
-    return validate_registry(COMMAND_REGISTRY).success;
-}
-
-test_duplicate_command_detection :: () -> bool {
+test "Duplicate command detection" {
     result := validate_registry(TEST_REGISTRY_DUPLICATE);
-    return !result.success && result.error == .DUPLICATE_COMMAND_NAME;
+    expect(!result.success && result.error == .DUPLICATE_COMMAND_NAME);
 }
 
-test_missing_prerequisite_detection :: () -> bool {
+test "Missing prerequisite detection" {
     result := validate_registry(TEST_REGISTRY_MISSING_PREREQ);
-    return !result.success && result.error == .MISSING_PREREQUISITE;
+    expect(!result.success && result.error == .MISSING_PREREQUISITE);
 }
 
-test_unknown_command_rejected :: () -> bool {
+test "Unknown command rejected" {
     ctx: Command_Context;
     result := dispatch_command(TEST_REGISTRY_SIMPLE, "missing", *ctx, string.[]);
-    return !result.success && result.error == .UNKNOWN_COMMAND;
+    expect(!result.success && result.error == .UNKNOWN_COMMAND);
 }
 
-test_internal_command_rejected :: () -> bool {
+test "Internal command rejected for direct invocation" {
     ctx: Command_Context;
     result := dispatch_command(TEST_REGISTRY_INTERNAL, "internal", *ctx, string.[]);
-    return !result.success && result.error == .INTERNAL_COMMAND_INVOKED;
+    expect(!result.success && result.error == .INTERNAL_COMMAND_INVOKED);
 }
 
-test_internal_command_runs_as_prerequisite :: () -> bool {
+test "Internal command runs as prerequisite" {
     reset_dispatch_counters();
     ctx: Command_Context;
     result := dispatch_command(TEST_REGISTRY_INTERNAL, "public", *ctx, string.[]);
-    return result.success && test_a_calls == 1 && test_b_calls == 1;
+    expect(result.success && test_a_calls == 1 && test_b_calls == 1);
 }
 
-test_cycle_rejected_before_execution :: () -> bool {
+test "Cycle rejected before execution" {
     reset_dispatch_counters();
     ctx: Command_Context;
     result := dispatch_command(TEST_REGISTRY_CYCLE, "a", *ctx, string.[]);
-    return !result.success && result.error == .CYCLE_DETECTED && test_a_calls == 0 && test_b_calls == 0;
+    expect(!result.success && result.error == .CYCLE_DETECTED && test_a_calls == 0 && test_b_calls == 0);
 }
 
-test_diamond_executes_each_command_once :: () -> bool {
+test "Diamond executes each command once" {
     reset_dispatch_counters();
     ctx: Command_Context;
     result := dispatch_command(TEST_REGISTRY_DIAMOND, "d", *ctx, string.[]);
-    return result.success && test_a_calls == 1 && test_b_calls == 1 && test_c_calls == 1 && test_d_calls == 1;
+    expect(result.success && test_a_calls == 1 && test_b_calls == 1 && test_c_calls == 1 && test_d_calls == 1);
 }
 
-test_invalid_arguments_rejected_before_prerequisites :: () -> bool {
+test "Invalid arguments rejected before prerequisites" {
     reset_dispatch_counters();
     ctx: Command_Context;
     result := dispatch_command(TEST_REGISTRY_ARGUMENTS, "strict", *ctx, string.["unexpected"]);
-    return !result.success && result.error == .INVALID_ARGUMENTS && test_a_calls == 0 && test_b_calls == 0;
+    expect(!result.success && result.error == .INVALID_ARGUMENTS && test_a_calls == 0 && test_b_calls == 0);
 }
 
-test_prerequisite_failure_propagates :: () -> bool {
+test "Prerequisite failure propagates" {
     reset_dispatch_counters();
     ctx: Command_Context;
     result := dispatch_command(TEST_REGISTRY_FAILURE, "target", *ctx, string.[]);
-    return !result.success && result.error == .PREREQUISITE_FAILED && test_fail_calls == 1 && test_b_calls == 0;
+    expect(!result.success && result.error == .PREREQUISITE_FAILED && test_fail_calls == 1 && test_b_calls == 0);
 }
 
-test_handler_failure_reported :: () -> bool {
+test "Handler failure reported" {
     reset_dispatch_counters();
     ctx: Command_Context;
     result := dispatch_command(TEST_REGISTRY_FAILURE, "failing", *ctx, string.[]);
-    return !result.success && result.error == .HANDLER_FAILED && result.command == "failing" && test_fail_calls == 1;
+    expect(!result.success && result.error == .HANDLER_FAILED && result.command == "failing" && test_fail_calls == 1);
 }
 
-test_manifest_protocol :: () -> bool {
+test "Strict manifest protocol" {
     valid := parse_manifest_data_strict("NAME=demo\nVERSION=1\nTYPE=1\nTARGET=app|src/main.jai\n");
-    if !valid.success || valid.package.targets.count != 1 return false;
-    if valid.package.targets[0].name != "app" return false;
+    expect(valid.success && valid.package.targets.count == 1);
+    expect(valid.package.targets[0].name == "app");
 
     unknown := parse_manifest_data_strict("NAME=demo\nVERSION=1\nNOPE=x\n");
-    if unknown.success return false;
+    expect(!unknown.success);
     malformed := parse_manifest_data_strict("TARGET=app|src/main.jai|result\n");
-    return !malformed.success;
+    expect(!malformed.success);
 }
 
-test_selection :: () -> bool {
+test "Case-sensitive target selection" {
     plans := Artifact_Plan.[
-        .{target = .{name = "alpha"}, result_dir = "root/result", artifact_path = "root/result/alpha.exe"},
-        .{target = .{name = "demo"}, result_dir = "root/result", artifact_path = "root/result/demo.exe"},
+        .{target = .{name = "alpha"}, target_dir = "root/target", artifact_path = "root/target/alpha.exe"},
+        .{target = .{name = "demo"}, target_dir = "root/target", artifact_path = "root/target/demo.exe"},
     ];
     selected, found := select_artifact_plan(plans, "demo", "");
-    if !found || selected.target.name != "demo" return false;
+    expect(found && selected.target.name == "demo");
     selected, found = select_artifact_plan(plans, "demo", "alpha");
-    if !found || selected.target.name != "alpha" return false;
+    expect(found && selected.target.name == "alpha");
     _, found = select_artifact_plan(plans, "demo", "Alpha");
-    return !found;
-}
-
-main :: () {
-    all_ok := true;
-    all_ok = run_test("Production registry validation", test_production_registry_is_valid) && all_ok;
-    all_ok = run_test("Duplicate command detection", test_duplicate_command_detection) && all_ok;
-    all_ok = run_test("Missing prerequisite detection", test_missing_prerequisite_detection) && all_ok;
-    all_ok = run_test("Unknown command rejected", test_unknown_command_rejected) && all_ok;
-    all_ok = run_test("Internal command rejected for direct invocation", test_internal_command_rejected) && all_ok;
-    all_ok = run_test("Internal command runs as prerequisite", test_internal_command_runs_as_prerequisite) && all_ok;
-    all_ok = run_test("Cycle rejected before execution", test_cycle_rejected_before_execution) && all_ok;
-    all_ok = run_test("Diamond executes each command once", test_diamond_executes_each_command_once) && all_ok;
-    all_ok = run_test("Invalid arguments rejected before prerequisites", test_invalid_arguments_rejected_before_prerequisites) && all_ok;
-    all_ok = run_test("Prerequisite failure propagates", test_prerequisite_failure_propagates) && all_ok;
-    all_ok = run_test("Handler failure reported", test_handler_failure_reported) && all_ok;
-    all_ok = run_test("Strict manifest protocol", test_manifest_protocol) && all_ok;
-    all_ok = run_test("Case-sensitive target selection", test_selection) && all_ok;
-    all_ok = run_test("Command-owned declarations in production registry", test_command_declarations) && all_ok;
-    all_ok = run_test("Command argument and preparation guards", test_command_argument_guards) && all_ok;
-    all_ok = run_test("Run launches the selected prepared artifact", test_run_selects_prepared_artifact) && all_ok;
-    all_ok = run_test("Run defaults to the only target", test_run_single_target) && all_ok;
-    all_ok = run_test("Invalid Run selection never launches", test_run_invalid_selection_never_launches) && all_ok;
-    all_ok = run_test("Run propagates launch failure", test_run_propagates_launch_failure) && all_ok;
-    all_ok = run_test("Clean validates workspace scope before deletion", test_clean_workspace_scope) && all_ok;
-    all_ok = run_test("Clean without a manifest uses the current root", test_clean_without_manifest) && all_ok;
-    all_ok = run_test("Unsafe Clean path prevents every deletion", test_clean_invalid_path_prevents_all_deletions) && all_ok;
-    all_ok = run_test("Clean continues after a deletion fails", test_clean_continues_after_delete_failure) && all_ok;
-    all_ok = run_test("Build without targets compiles nothing", test_build_without_targets_compiles_nothing) && all_ok;
-    all_ok = run_test("Unsafe package root blocks every compilation", test_build_revalidation_gate_blocks_unsafe_root) && all_ok;
-    all_ok = run_test("Escaping artifact plan blocks compilation", test_build_revalidation_gate_blocks_escaping_plan) && all_ok;
-    all_ok = run_test("Build forwards each prepared plan to compilation", test_build_compiles_each_prepared_plan) && all_ok;
-    all_ok = run_test("Build fails fast on a compile failure", test_build_fails_fast_on_compile_failure) && all_ok;
-    all_ok = run_test("Discovery publishes workspace state once", test_discovery_publishes_state_once) && all_ok;
-    all_ok = run_test("Discovery without a package stays empty", test_discovery_without_package_stays_empty) && all_ok;
-    all_ok = run_test("Preparation without targets skips dependencies", test_preparation_without_targets_skips_dependencies) && all_ok;
-    all_ok = run_test("Preparation with targets prepares dependencies", test_preparation_with_targets_prepares_dependencies) && all_ok;
-    all_ok = run_test("Resolution failure publishes no prepared workspace", test_resolution_failure_publishes_nothing) && all_ok;
-    all_ok = run_test("Dependency failure publishes no prepared workspace", test_dependency_failure_publishes_nothing) && all_ok;
-    all_ok = run_test("Preparation requires discovery", test_preparation_requires_discovery) && all_ok;
-    all_ok = run_test("Workspace member dependencies are not fetched", test_member_dependencies_are_not_fetched) && all_ok;
-    all_ok = run_test("Dependency fetch failure propagates", test_fetch_failure_propagates) && all_ok;
-    if !all_ok exit(1);
+    expect(!found);
 }

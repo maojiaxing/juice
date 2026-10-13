@@ -1,0 +1,1 @@
+nested-in-struct/input.jai:3,5: test block 仅允许文件顶层

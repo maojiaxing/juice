@@ -1,0 +1,1 @@
+// Shim fixture entry.

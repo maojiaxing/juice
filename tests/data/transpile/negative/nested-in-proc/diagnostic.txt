@@ -1,0 +1,1 @@
+nested-in-proc/input.jai:2,5: test block 仅允许文件顶层

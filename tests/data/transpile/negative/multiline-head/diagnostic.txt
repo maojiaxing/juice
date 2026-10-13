@@ -1,0 +1,2 @@
+multiline-head/input.jai:1,1: test 头必须位于同一行
+multiline-head/input.jai:6,1: test 头必须位于同一行

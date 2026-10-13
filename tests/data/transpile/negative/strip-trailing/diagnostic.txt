@@ -1,0 +1,1 @@
+strip-trailing/input.jai:1,22: test block 闭括号后不得有其他语句
