@@ -22,6 +22,10 @@ Juice 是一个面向 Jai  的命令行构建工具；本上下文统一描述�
 **Test**:
 执行当前 package 单元测试的 command。Test 以 prepare-workspace 为前置 command，不依赖 build；消费 prepared workspace 但不消费 artifact plan——LIB package 没有 effective target 时依然可测。Test 接受至多一个 pattern 参数，对最终报告名做大小写敏感子串匹配。没有发现任何 test block 或 pattern 零命中时，Test 成功完成并明确说明，不进入测试构建；测试失败使 command 失败，与编译失败共用非零退出码。
 
+**Bootstrap build（自举构建）**:
+仓库根 `build.jai` metaprogram 直接构建 juice 自身的路径，独立于 Build command。src 原文件内联 test block 后，Bootstrap build 的构建输入是剥离视图——与 Build command 共用同一转译器与视图契约（[ADR 0006](docs/adr/0006-bootstrap-build-strips-inline-test-blocks.md)）；行号与诊断经视图映射对应原文件。Test support 文件不在其构建输入内。
+_Avoid_: 发布视图树（预生成剥离源码树作为构建输入的方案，已被 ADR 0006 排除）。
+
 ## Workspace language
 
 **Workspace preparation**:
@@ -95,6 +99,10 @@ _Avoid_: 测试函数、容器式测试。
 **Testing**:
 Juice 的一级断言模块，测试程序中的用户代码以 `#import "Testing"` 引用。提供最小断言集 expect、expect_eq、fail：断言失败即登记并中止当前测试，套件继续；失败即时逐条输出，结束时汇总计数，失败数非零使测试构建失败。失败报告以 `路径:行,列` 语法指向原文件坐标。Testing 仅依赖 Basic，对执行模型中立。
 
+**Test support（测试支撑代码）**:
+`src/test_support.jai` 约定位置，收录供测试程序共享的声明：跨 test block 复用的 helper、recording fake、记录全局与测试常量。Test support 不被入口 `#load` 引用，不进 Build 闭包、不参与发布构建；Test discovery 全包扫描将其收录进测试程序，src 内联 test block 经程序级可见性引用其声明。测试共享声明只允许位于 Test support 文件。
+_Avoid_: 测试专用声明散落其他源文件顶层（会随剥离视图进入发布产物）。
+
 **Test driver**:
 Juice 为执行测试生成的测试程序核心：一个无入口点的生成文件，收录全部视图，以编译期执行方式运行经 pattern 过滤的测试清单，存在失败时使编译失败。测试程序的全部生成物（视图、驱动、metaprogram）位于 target directory 的转译子树，不产生 artifact。测试在编译期环境执行，崩溃即测试构建失败、无汇总；Testing 模块经生成的 metaprogram 注入测试程序。
 _Avoid_: test runner（无运行期 runner 进程）、测试可执行文件。
@@ -124,6 +132,7 @@ Juice 当前可用 command 的目录。它让 command 的名称、说明、参�
 - Command registry 描述可发现的 command；Dispatcher 负责执行顺序，但不拥有 build、run、clean、test 的业务行为。
 - `test` 依赖 prepare-workspace（不依赖 build）；消费 prepared workspace 但不消费 artifact plan，LIB package 无 effective target 时仍可测。
 - Test block 必须经 Transpile 转换为视图后才能编译；build 探测后剥离、test 展开，run 经 build 继承。
+- Bootstrap build 与 Build command 共用同一转译器与视图契约；Test support 被 Test discovery 扫描收录、不进 Build 闭包与 Bootstrap build 输入。
 - Test discovery 消费 workspace discovery 快照但不并入；member 以自身为 root 测试，依赖不发现不执行。
 - 测试程序全部生成物位于 target directory 的转译子树，不是 artifact。
 - Testing 经生成的 metaprogram 注入测试程序，收口断言与失败汇总。

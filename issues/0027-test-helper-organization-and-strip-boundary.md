@@ -1,8 +1,8 @@
 ---
 title: 测试共享代码组织与 STRIP 语义边界
-status: open
+status: closed
 labels: [wayfinder:grilling]
-assignee:
+assignee: maojiaxing
 blocked-by: []
 ---
 
@@ -22,3 +22,13 @@ blocked-by: []
 连带决策：STRIP 语义是否扩展（c 的"测试专用文件剥离"规则）；Test discovery 排除集是否随之调整；src 内联后的 tests/ 目录形态。
 
 候选 a 与 c 是主要竞争者：a 接受发布产物携带 helper 死代码（零新机制），c 追求发布产物纯净（转译器 + Build 语义扩展）。
+
+## Resolution
+
+**决策：测试共享代码集中 `src/test_support.jai`（单文件）**——票面候选的融合变体，事实核查（test 命令对全包扫描到的每个文件无条件转译、test-free 文件恒等输出、测试程序程序级共享，src/commands/test.jai:73）后解锁的选项：
+
+1. **组织**：tests/ 各文件顶层的全部共享声明（约 40 个：helper + recording fake + 记录全局 + GOLDEN_CASES 等常量）迁入 `src/test_support.jai` 单文件（约 600 行）。tests/ 仅剩 data/ fixture。
+2. **Build 路径零影响**：test_support.jai 不被 `src/main.jai` #load → 不在 Build 入口闭包 → 不转译、不编译、不进发布产物。零新机制（STRIP 语义不扩展）。
+3. **Test 路径天然收录**：Test discovery 全包扫描 src/test_support.jai（不在排除集），恒等转译收录进测试程序，src 内联 test block 经程序级可见性引用其声明。Test discovery 排除集不调整。
+4. **纪律**（写进规格）：测试共享声明只允许放 test_support.jai；其他 src 文件顶层不放测试专用声明（若放，STRIP 会保留进发布，由编译/审阅暴露）。
+5. **新词条**：Test support（测试支撑代码）——src/test_support.jai 收录测试共享声明的约定位置；词条定稿与 CONTEXT.md 更新留给 [ADR 与 CONTEXT.md 更新范围](0029-adr-and-context-update.md)。
