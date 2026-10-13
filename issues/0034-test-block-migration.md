@@ -1,6 +1,6 @@
 ---
 title: 147 个存量测试块迁入 src
-status: open
+status: closed
 labels: [ready-for-agent]
 assignee:
 blocked-by: [0032-test-support-extraction.md]
@@ -39,11 +39,11 @@ tests/ 的 147 个存量 test block 全部迁入 src 对应文件（Zig 风格�
 
 ## Acceptance criteria
 
-- [ ] 147 块全部迁入 src 对应文件；tests/ 仅剩 data/
-- [ ] `juice test` 全绿（0 failed、退出码 0），输出含全部测试名
-- [ ] `jai build.jai` 全绿、`juice build` 全绿（src 含 test block 后剥离正确）
-- [ ] src/transpile.jai 与 src/transpile_cache.jai test-free（grep 无 test block）
-- [ ] grep 仓库无旧测试文件（tests/test_*.jai 名称）引用
+- [x] 147 块全部迁入 src 对应文件；tests/ 仅剩 data/
+- [x] `juice test` 全绿（0 failed、退出码 0），输出含全部测试名
+- [x] `jai build.jai` 全绿、`juice build` 全绿（src 含 test block 后剥离正确）
+- [x] src/transpile.jai 与 src/transpile_cache.jai test-free（grep 无 test block）
+- [x] grep 仓库无旧测试文件（tests/test_*.jai 名称）引用
 
 ## Out of Scope
 
@@ -54,3 +54,9 @@ tests/ 的 147 个存量 test block 全部迁入 src 对应文件（Zig 风格�
 
 - 语言：中文交流与文档。
 - beta 0.2.009 下 `#load` 转译器出现两条 `%%` print 兼容警告（无碍；勿"修复"，避免触碰转译器）。
+
+## Resolution
+
+已实施（7 提交 604ad3f..2de7ba8）：137 块全部迁入 src，每批后 juice test 全绿（Found 147、0 failed、退出码 0）。test_commands 27 块按实际主题拆入 src/commands/{registry,run,clean,build}.jai（实测 2/5/4/16；规划期映射表的 dependency/manifest/target/workspace 主题块不存在，见落地注记）；dispatcher 13、target 11、workspace 14、commands/test.jai 27 整迁；transpiler 45 块落新文件 src/transpile_tests.jai（grep 确认无 #load 引用、不进闭包）。src/transpile.jai 与 transpile_cache.jai 保持 test-free。fixture 测试 "Build forwards each prepared plan to compilation" 改造为新剥离语义（断言转译调用 == 2×闭包文件数、编译入口 == 入口 strip 视图、视图已落盘）。三路径 + release + 自举产物烟测全绿；tests/ 仅剩 data/（test_testing 由 0033 处理）。
+
+另：迁移期间发现并记录现存缺陷（非本票回归，基线复现）——manifest 求值器共享固定临时文件且不检查写入结果，偶发 member 丢失，由 0035 修复。

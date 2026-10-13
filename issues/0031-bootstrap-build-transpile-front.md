@@ -1,6 +1,6 @@
 ---
 title: 自举构建转译前置接入（build.jai 内嵌剥离）
-status: open
+status: closed
 labels: [ready-for-agent]
 assignee:
 blocked-by: []
@@ -57,13 +57,13 @@ src 原文件即将内联 test block（147 块迁入，贴近实现），而自�
 
 ## Acceptance criteria
 
-- [ ] `jai build.jai` 全绿（src test-free 期直通零回归；探针期剥离成功）
-- [ ] `juice build` 全绿（探针期剥离成功，产物可运行）
-- [ ] `juice test` 全绿且探针测试块被执行（输出含探针名）
-- [ ] 探针注入编译错误：入口错误报虚拟路径、行号 = 视图行 +5；磁盘视图错误报精确文件:行号
-- [ ] 探针移除后 src 回归 test-free，三路径复验全绿
-- [ ] 自举产物 target/juice.exe 烟测（`juice test` 于仓库根跑通）
-- [ ] 仅修改 build.jai；转译器与 Build command 前端零改动
+- [x] `jai build.jai` 全绿（src test-free 期直通零回归；探针期剥离成功）
+- [x] `juice build` 全绿（探针期剥离成功，产物可运行）
+- [x] `juice test` 全绿且探针测试块被执行（输出含探针名）
+- [x] 探针注入编译错误：入口错误报虚拟路径、行号 = 视图行 +5；磁盘视图错误报精确文件:行号
+- [x] 探针移除后 src 回归 test-free，三路径复验全绿
+- [x] 自举产物 target/juice.exe 烟测（`juice test` 于仓库根跑通）
+- [x] 仅修改 build.jai；转译器与 Build command 前端零改动
 
 ## Out of Scope
 
@@ -80,3 +80,11 @@ src 原文件即将内联 test block（147 块迁入，贴近实现），而自�
 - beta 0.2.009 下 `#load` 转译器会出现两条 `%%` print 兼容警告（无碍；勿"修复"，避免触碰转译器）。
 - **已知风险（第 4 票前置留意）**：build.jai 的 `#load` 目标 src/transpile.jai 在测试块迁入后不得含 test block（metaprogram 编译期文本包含，test block 非法 Jai）——第 4 票执行时需保证该 `#load` 目标 test-free（如转译器测试块落独立 src 文件或拆分 test-free 核心），本票不处理。
 - 后续票 2–5 依赖本票；本票完成后方可开始迁移。
+
+## Resolution
+
+已按 ADR 0006 实施（提交 95d415d，仅修改 build.jai，+328/-101）：顶层 `#load "src/transpile.jai"` 内嵌转译器纯函数；入口沿字面量 in-package `#load` 的 DFS 闭包探测；test-free 闭包直通（零转译零落盘）；含 test block 时入口视图 `add_build_string`（每 workspace 单串、行号偏移恒 +5）、闭包其余视图落盘 `target/transpile/bootstrap/`、in-package `#load` 重写为视图绝对路径；插入点 set_build_options 之后、begin_intercept 之前；早退守卫与消息循环零改动。
+
+探针实测：入口注入错误报虚拟路径 `target/.added_strings_w3.jai:29,1`（29=24+5，+5 映射成立）；磁盘视图注入错误报精确 `target/transpile/bootstrap/src/xdg.jai:85,1`。探针期 17 个视图落盘、`juice test` 展开执行探针块（Found 149）；探针移除后 src 回归 test-free、Found 147。三路径 + debug/release + 自举产物烟测全绿。
+
+已知偏差（探针期固有）："Build forwards each prepared plan to compilation" fixture 以真实 src 闭包为 test-free 前提，与探针注入冲突——探针期唯一失败，移除后全绿。后续合并（a31a915）按 0033 对称特例为 bootstrap 增加 Testing 模块 STRIP 视图替代（见 0033 Resolution）。
