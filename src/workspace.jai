@@ -175,7 +175,7 @@ get_prepared_workspace :: (state: *Workspace_State) -> *Prepared_Workspace {
 // ---------------------------------------------------------------------------
 // 内联测试（票 0034 自旧 tests/ 迁移）：workspace 状态机、
 // 依赖快照消费与 import shim。共享 helper（discovery/resolution/dependency
-// 记录 fake 与记录全局、shim_content_for）见 src/test_support.jai。
+// 记录 fake 与记录全局、shim_content_for）见 tests/test_support.jai。
 // ---------------------------------------------------------------------------
 
 test "Discovery publishes workspace state once" {
@@ -280,7 +280,7 @@ test "Preparation requires discovery" {
     expect(state.phase == .EMPTY && test_dependency_attempts == 0);
 }
 
-// test_fake_fetch/test_fake_link_member 与记录全局见 src/test_support.jai。
+// test_fake_fetch/test_fake_link_member 与记录全局见 tests/test_support.jai。
 
 test "Workspace member dependencies are linked not fetched" {
     array_reset(*test_fetched_dependency_names);
@@ -323,7 +323,7 @@ test "Dependency fetch failure propagates" {
 // Consumers resolve "#import <name>" through a generated shim in the
 // dependency directory; the shim loads the dependency's real entry by path,
 // so any source directory name and any of the three layouts work
-// （shim_content_for 见 src/test_support.jai）。
+// （shim_content_for 见 tests/test_support.jai）。
 
 test "Import shim generated for a src/module.jai entry" {
     packages_dir := tprint("%1/tests/data/shim-fixture/packages-src", juice_root());

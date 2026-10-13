@@ -195,15 +195,15 @@ test_prepared_workspace :: (
             // 与自足 root（见 testing_module_support_block）。
             support_view_text := "";
             for f, index: files {
-                if f.rel_path == "src/test_support.jai" support_view_text = outputs[index].view;
+                if f.rel_path == "tests/test_support.jai" support_view_text = outputs[index].view;
             }
             if support_view_text == "" {
-                print("[juice ERROR] Testing 自测需要 src/test_support.jai 视图，但未发现该文件。\n");
+                print("[juice ERROR] Testing 自测需要 tests/test_support.jai 视图，但未发现该文件。\n");
                 return false;
             }
             support_block := testing_module_support_block(support_view_text);
             if support_block == "" {
-                print("[juice ERROR] src/test_support.jai 缺少 Testing 自测段标记。\n");
+                print("[juice ERROR] tests/test_support.jai 缺少 Testing 自测段标记。\n");
                 return false;
             }
             module_view = tprint("%1\n\n%2", module_view, support_block);
@@ -318,7 +318,7 @@ testing_module_source :: (prepared: *Prepared_Workspace) -> (file: Test_Source_F
 
 // The self-test support block appended to the EXPAND module compile view
 // (ticket 0033): the Testing self-test segment of the test support view, cut
-// out by the stable machine markers in src/test_support.jai — 段标记是稳定
+// out by the stable machine markers in tests/test_support.jai — 段标记是稳定
 // 锚点，段内注释改名不再破坏切段——under #scope_file so the declarations
 // stay in the module compile view's file scope (they must not enter the
 // module's export list — the driver #loads the same view into the
@@ -625,7 +625,7 @@ test_file_rel_path :: (absolute: string, root: string) -> string {
 // compile seam 收到生成产物）、全量 discovery 扫描（排除集、member 边界、
 // 链接跳过、确定性顺序）与 fixture package 的 E2E child 场景。共享声明
 // （juice_exe、seam 记录 fake 与记录全局、缓存树扫描 helper、
-// E2E child 场景 helper）见 src/test_support.jai。
+// E2E child 场景 helper）见 tests/test_support.jai。
 // ---------------------------------------------------------------------------
 
 test "Seam: transpile step drives fake views into a compiled driver" {
@@ -820,7 +820,7 @@ test "Collection applies the exclusion set in scan order" {
 }
 
 // Creates a directory/file link with mklink（make_test_link 见
-// src/test_support.jai）。Returns false when the machine refuses link
+// tests/test_support.jai）。Returns false when the machine refuses link
 // creation (needs developer mode or elevation).
 
 // No link following (issue 0003): a symlinked directory, a junctioned
@@ -885,7 +885,7 @@ test "Test command argument and preparation guards" {
 // ---------------------------------------------------------------------------
 // E2E child scenarios (real juice.exe on the fixture packages)。Child 场景
 // helper（run_juice_test、expect_exit、normalize_crlf、output_matches、
-// fixture_line_col）见 src/test_support.jai。
+// fixture_line_col）见 tests/test_support.jai。
 // ---------------------------------------------------------------------------
 
 test "E2E: all-pass fixture package runs every test" {
@@ -997,7 +997,7 @@ test "E2E: repeated scans are byte-stable" {
 // Direct children of the transpile tree: hash directories and the
 // regenerated driver.jai / first.jai products。Dir_Scan 结构、
 // dir_scan_visitor、sort_strings、dir_scan_entries 见
-// src/test_support.jai。
+// tests/test_support.jai。
 
 test "E2E: cached views match the pure contract and hit on repeats" {
     result, output, _ := run_juice_test("test-package");
@@ -1065,7 +1065,7 @@ test "E2E: cached views match the pure contract and hit on repeats" {
     }
 }
 
-// dir_scan_entries 见 src/test_support.jai。
+// dir_scan_entries 见 tests/test_support.jai。
 
 // Content addressing without active cleanup: changing a source creates a new
 // hash directory next to the old one, and both hold their views.

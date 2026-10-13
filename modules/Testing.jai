@@ -135,7 +135,7 @@ finish :: () -> s32 {
 // which are top-level procedures).
 //
 // 共享声明（记录全局 g_*、testing_module_failures 与 child 场景 helper）
-// 位于 src/test_support.jai（组织决议 0027）——Testing 自测所需的 helper 不
+// 位于 tests/test_support.jai（组织决议 0027）——Testing 自测所需的 helper 不
 // 驻本文件顶层（发布模块纪律），测试程序程序级共享。
 // ---------------------------------------------------------------------------
 
@@ -218,7 +218,7 @@ test "finish returns the failure count and resets state" {
 // Child scenarios (juice test on the testing-child fixture packages, stdout
 // captured by the parent)。Child 场景 helper（juice_exe、testing_child_run、
 // expect_exit、normalize_crlf、output_matches、fixture_line_col）见
-// src/test_support.jai（Testing 模块自测支撑段）。
+// tests/test_support.jai（Testing 模块自测支撑段）。
 // ---------------------------------------------------------------------------
 
 test "child: pass scenario output and exit code" {

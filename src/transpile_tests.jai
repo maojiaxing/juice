@@ -5,13 +5,13 @@
 // 是 build.jai 的 #load 目标 / 入口闭包成员——test block 随 metaprogram 编译
 // 期文本包含会非法，这两个文件必须保持 test-free。转译器测试块因此落独立
 // src 文件：本文件不被任何 #load 引用（不进入口闭包、不进发布产物），Test
-// discovery 全包扫描将其收录进测试程序（与 src/test_support.jai 同机制）。
+// discovery 全包扫描将其收录进测试程序（与 tests/test_support.jai 同机制）。
 // 本文件仅含 test block；生产代码零耦合。
 // ---------------------------------------------------------------------------
 
 // 共享声明（GOLDEN_CASES/NEGATIVE_CASES 常量、golden/negative harness、
 // expand_ctx/strip_ctx 等 helper 与 compile-and-run matrix helper）位于
-// src/test_support.jai（组织决议 0027），测试程序程序级共享。
+// tests/test_support.jai（组织决议 0027），测试程序程序级共享。
 
 #import "Basic";
 #import "Testing";
@@ -353,7 +353,7 @@ test "Cache view path mirrors the relative structure" {
 // Golden / negative harness（Case_Config、read_case_config、
 // collect_case_files、golden_root、normalize_golden_abs、compare_or_update、
 // case_context、run_golden_cases、run_negative_cases 与 wants_update 见
-// src/test_support.jai）
+// tests/test_support.jai）
 // ---------------------------------------------------------------------------
 
 test "Golden baselines" {
@@ -372,7 +372,7 @@ test "Negative cases" {
 // end via the real juice.exe `test` command; exit codes and the output
 // contract are asserted (no full-output goldens)。Run matrix helper
 // （juice_exe、run_juice_test、expect_exit、normalize_crlf、output_matches、
-// fixture_line_col）见 src/test_support.jai。
+// fixture_line_col）见 tests/test_support.jai。
 // ---------------------------------------------------------------------------
 
 // LIB packages have no effective target; `juice test` still discovers and
