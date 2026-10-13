@@ -8,7 +8,6 @@ CLEAN_COMMAND :: Command.{
     description   = "Remove Juice outputs and local dependency links",
     usage         = "juice clean",
     prerequisites = string.[],
-    visible       = true,
     handler       = clean_command,
 };
 

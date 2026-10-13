@@ -4,7 +4,6 @@
 Dispatch_Error :: enum {
     NONE;
     UNKNOWN_COMMAND;
-    INTERNAL_COMMAND_INVOKED;
     DUPLICATE_COMMAND_NAME;
     MISSING_PREREQUISITE;
     INVALID_COMMAND;
@@ -26,12 +25,9 @@ Dispatch_State :: enum {
     COMPLETED;
 }
 
-find_command :: (registry: [] Command, name: string, visible_only := false) -> *Command, bool {
+find_command :: (registry: [] Command, name: string) -> *Command, bool {
     for * cmd: registry {
-        if cmd.name == name {
-            if visible_only && !cmd.visible return null, false;
-            return cmd, true;
-        }
+        if cmd.name == name return cmd, true;
     }
     return null, false;
 }
@@ -105,10 +101,6 @@ dispatch_command :: (registry: [] Command, command_name: string, ctx: *Command_C
         print_usage(registry);
         return .{error = .UNKNOWN_COMMAND, command = command_name};
     }
-    if !cmd.visible {
-        print("[juice ERROR] Internal command cannot be invoked directly: '%'\n", command_name);
-        return .{error = .INTERNAL_COMMAND_INVOKED, command = command_name};
-    }
 
     states: Table(string, Dispatch_State);
     defer deinit(*states);
@@ -132,7 +124,6 @@ print_usage :: (registry: [] Command) {
     print("Usage: juice [command] [args]\n\n");
     print("Available commands:\n");
     for cmd: registry {
-        if !cmd.visible continue;
         print("  %-12  %\n", cmd.name, cmd.description);
     }
 }
@@ -163,19 +154,6 @@ test "Unknown command rejected" {
     ctx: Command_Context;
     result := dispatch_command(TEST_REGISTRY_SIMPLE, "missing", *ctx, string.[]);
     expect(!result.success && result.error == .UNKNOWN_COMMAND);
-}
-
-test "Internal command rejected for direct invocation" {
-    ctx: Command_Context;
-    result := dispatch_command(TEST_REGISTRY_INTERNAL, "internal", *ctx, string.[]);
-    expect(!result.success && result.error == .INTERNAL_COMMAND_INVOKED);
-}
-
-test "Internal command runs as prerequisite" {
-    reset_dispatch_counters();
-    ctx: Command_Context;
-    result := dispatch_command(TEST_REGISTRY_INTERNAL, "public", *ctx, string.[]);
-    expect(result.success && test_a_calls == 1 && test_b_calls == 1);
 }
 
 test "Cycle rejected before execution" {

@@ -1,8 +1,6 @@
 #import "Testing";
 
 COMMAND_REGISTRY :: Command.[
-    DISCOVER_WORKSPACE_COMMAND,
-    PREPARE_WORKSPACE_COMMAND,
     BUILD_COMMAND,
     RUN_COMMAND,
     CLEAN_COMMAND,
@@ -15,12 +13,12 @@ COMMAND_REGISTRY :: Command.[
 // ---------------------------------------------------------------------------
 
 test "Command-owned declarations in production registry" {
-    expect(validate_registry(COMMAND_REGISTRY).success && COMMAND_REGISTRY.count == 6);
-    expected := Command.[DISCOVER_WORKSPACE_COMMAND, PREPARE_WORKSPACE_COMMAND, BUILD_COMMAND, RUN_COMMAND, CLEAN_COMMAND, TEST_COMMAND];
+    expect(validate_registry(COMMAND_REGISTRY).success && COMMAND_REGISTRY.count == 4);
+    expected := Command.[BUILD_COMMAND, RUN_COMMAND, CLEAN_COMMAND, TEST_COMMAND];
     for declaration, i: expected {
         registered := COMMAND_REGISTRY[i];
         expect(registered.name == declaration.name && registered.description == declaration.description);
-        expect(registered.usage == declaration.usage && registered.visible == declaration.visible);
+        expect(registered.usage == declaration.usage);
         expect(registered.handler == declaration.handler);
         expect(registered.validate_arguments == declaration.validate_arguments);
         expect(registered.prerequisites.count == declaration.prerequisites.count);
@@ -28,22 +26,15 @@ test "Command-owned declarations in production registry" {
             expect(registered.prerequisites[j] == prerequisite);
         }
     }
-    expect(!DISCOVER_WORKSPACE_COMMAND.visible && !PREPARE_WORKSPACE_COMMAND.visible);
-    expect(BUILD_COMMAND.visible && RUN_COMMAND.visible && CLEAN_COMMAND.visible && TEST_COMMAND.visible);
     expect(RUN_COMMAND.prerequisites.count == 1 && RUN_COMMAND.prerequisites[0] == "build");
-    expect(BUILD_COMMAND.prerequisites.count == 1 && BUILD_COMMAND.prerequisites[0] == "prepare-workspace");
-    expect(PREPARE_WORKSPACE_COMMAND.prerequisites.count == 1 && PREPARE_WORKSPACE_COMMAND.prerequisites[0] == "discover-workspace");
-    expect(DISCOVER_WORKSPACE_COMMAND.prerequisites.count == 0 && CLEAN_COMMAND.prerequisites.count == 0);
+    expect(BUILD_COMMAND.prerequisites.count == 0 && CLEAN_COMMAND.prerequisites.count == 0 && TEST_COMMAND.prerequisites.count == 0);
 }
 
-test "Command argument and preparation guards" {
+test "Command argument guards" {
     // Null driver makes an accidental operation after argument rejection visible.
     ctx: Command_Context;
     expect(!BUILD_COMMAND.handler(*ctx, string.["unexpected"]));
     expect(!RUN_COMMAND.handler(*ctx, string.["one", "two"]));
     expect(!CLEAN_COMMAND.handler(*ctx, string.["unexpected"]));
-    expect(!DISCOVER_WORKSPACE_COMMAND.handler(*ctx, string.["unexpected"]));
-    expect(!PREPARE_WORKSPACE_COMMAND.handler(*ctx, string.["unexpected"]));
-    expect(!BUILD_COMMAND.handler(*ctx, string.[]));
-    expect(!RUN_COMMAND.handler(*ctx, string.[]));
+    expect(!TEST_COMMAND.handler(*ctx, string.["one", "two"]));
 }

@@ -8,7 +8,7 @@
 
 1. **静态命令注册表**
    - 所有命令在 `src/commands/registry.jai` 中显式声明
-   - 每个命令定义名称、描述、用法、前置依赖、可见性和处理函数
+   - 每个命令定义名称、描述、用法、前置依赖和处理函数
    - 使用 Jai 的静态数组字面量语法：`Command.[...]`
 
 2. **智能命令调度**
@@ -19,21 +19,21 @@
 
 3. **命令特定准备逻辑**
    - `clean` 不再加载 manifest 或解析依赖
-   - `build` 和 `run` 通过前置依赖图自动触发 workspace 准备
+   - `build`、`run` 和 `test` 经 workspace 模块的一次幂等调用（`ensure_workspace_prepared`）消费 prepared workspace
    - 未知命令在 workspace 准备前被拒绝
 
 ### 执行依赖图
 
 ```
-run → build → prepare-workspace
-build → prepare-workspace  
-clean → (无前置)
+run → build
+build / run / test → ensure_workspace_prepared（幂等，不作为 command 注册）
+clean → 自身 handler 内 discovery
 ```
 
 ### 关键设计选择
 
 - **显式注册 vs 链接器魔法**：使用 Jai 的 `#load` 和静态数组，而非平台相关的链接器段机制
-- **内部命令**：`prepare-workspace` 作为不可直接调用的前置命令存在
+- **workspace 准备不作为 command**：registry 只收录可执行 command；准备是 workspace 模块的一次幂等调用（票 0040）
 - **职责分离**：handler 返回 `bool`，main 负责 `exit(1)`
 - **参数所有权**：每个命令只解析命令名后的参数
 
@@ -43,8 +43,7 @@ clean → (无前置)
 src/
 ├── commands/
 │   ├── command.jai      # 共享类型定义
-│   ├── registry.jai     # 静态命令注册表
-│   ├── prepare.jai      # 内部: workspace 准备
+│   ├── registry.jai     # 静态命令注册表（仅可执行 command）
 │   ├── build.jai        # 构建所有 target
 │   ├── run.jai          # 构建并运行 target
 │   ├── clean.jai        # 清理输出（无 manifest 依赖）

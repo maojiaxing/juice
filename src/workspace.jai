@@ -175,16 +175,28 @@ get_prepared_workspace :: (state: *Workspace_State) -> *Prepared_Workspace {
     return *state.prepared;
 }
 
-// Command-side guard over the prepared workspace (票 0037): prints the
-// command-specific preparation error and returns null on failure; callers
-// treat null as the command's own failure. get_prepared_workspace stays the
-// raw state accessor for tests.
-require_prepared_workspace :: (name: string, state: *Workspace_State) -> *Prepared_Workspace {
-    prepared := get_prepared_workspace(state);
-    if prepared == null {
-        print("[juice ERROR] Command '%' requires workspace preparation.\n", name);
-    }
-    return prepared;
+// Command-side preparation entry (票 0040): one idempotent call chains the
+// two phases — discovery then preparation — and hands back the prepared
+// workspace (null = failure, already reported by the phase that failed).
+// The phase machine makes repeats free: an already prepared state is
+// returned untouched, so run's handler can call this after build's
+// prerequisite run has prepared the state. The two phases stay injectable
+// as internal seams for this module's own tests, mirroring
+// prepare_workspace's production defaults. The command-specific guard
+// (票 0037) is absorbed: the failure message now names the concrete
+// discovery/preparation error instead of a generic requirement.
+ensure_workspace_prepared :: (
+    root_dir: string,
+    cache_dir: string,
+    state: *Workspace_State,
+    discover: #type (root_dir: string, cache_dir: string) -> (Workspace_Discovery, bool) = discover_workspace,
+    resolve: #type (pkg: Package) -> Artifact_Plan_Result = resolve_artifact_plans,
+    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Package) -> (bool) = resolve_and_fetch_dependencies
+) -> *Prepared_Workspace {
+    if state.phase == .PREPARED return *state.prepared;
+    if !ensure_workspace_discovered(root_dir, cache_dir, state, discover) return null;
+    if !prepare_workspace(root_dir, cache_dir, state, resolve, prepare_dependencies) return null;
+    return *state.prepared;
 }
 
 // ---------------------------------------------------------------------------
@@ -288,14 +300,20 @@ test "Preparation requires discovery" {
     expect(state.phase == .EMPTY && test_dependency_attempts == 0);
 }
 
-// Command-side guard（票 0037）：空状态打印共享报错并返回 null，已 prepared
-// 状态原样交出结果——报错文案与旧的三处逐字守卫一致。
-test "Prepared workspace guard fails on an empty state" {
+// Command-side preparation entry（票 0040）：一次幂等调用链两步并直接交出
+// prepared 结果，null = 失败已打印。守卫（票 0037）职责被本入口吸收——
+// 失败时打印的是具体错误（如「No package.jai found」），而非笼统的
+// 「requires workspace preparation」。
+test "Prepared workspace ensure fails on an empty state" {
+    reset_preparation_test();
+    test_fake_discovery_ok = true;
+    test_fake_discovery.has_package = false;
     state: Workspace_State;
-    expect(require_prepared_workspace("build", *state) == null);
+    expect(ensure_workspace_prepared("", "", *state, test_fake_discover, test_fake_resolve, test_fake_prepare_dependencies) == null);
+    expect(state.phase == .EMPTY && test_discovery_attempts == 1);
 }
 
-test "Prepared workspace guard hands back the prepared result" {
+test "Prepared workspace ensure hands back the prepared result" {
     reset_preparation_test();
     test_fake_discovery_ok = true;
     test_fake_discovery.has_package = true;
@@ -304,10 +322,24 @@ test "Prepared workspace guard hands back the prepared result" {
     test_plan_resolution_success = true;
     test_resolved_plans = Artifact_Plan.[];
     state: Workspace_State;
-    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
-    expect(prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies));
-    prepared := require_prepared_workspace("test", *state);
-    expect(prepared != null && !prepared.dependencies_prepared && prepared.artifact_plans.count == 0);
+    prepared := ensure_workspace_prepared("", "", *state, test_fake_discover, test_fake_resolve, test_fake_prepare_dependencies);
+    expect(prepared != null && state.phase == .PREPARED);
+    expect(!prepared.dependencies_prepared && prepared.artifact_plans.count == 0);
+}
+
+test "Prepared workspace ensure is idempotent" {
+    reset_preparation_test();
+    test_fake_discovery_ok = true;
+    test_fake_discovery.has_package = true;
+    test_fake_discovery.root_package.name = "demo";
+    test_fake_discovery.root_package.version = "1";
+    test_plan_resolution_success = true;
+    test_resolved_plans = Artifact_Plan.[];
+    state: Workspace_State;
+    first := ensure_workspace_prepared("", "", *state, test_fake_discover, test_fake_resolve, test_fake_prepare_dependencies);
+    expect(first != null);
+    second := ensure_workspace_prepared("", "", *state, test_fake_discover, test_fake_resolve, test_fake_prepare_dependencies);
+    expect(second == first && test_discovery_attempts == 1);
 }
 
 // test_fake_fetch/test_fake_link_member 与记录全局见 tests/test_support.jai。

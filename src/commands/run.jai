@@ -9,7 +9,6 @@ RUN_COMMAND :: Command.{
     description   = "Build and run an executable target",
     usage         = "juice run [target]",
     prerequisites = string.["build"],
-    visible       = true,
     handler       = run_command_handler,
     validate_arguments = run_arguments_are_valid,
 };
@@ -20,7 +19,7 @@ run_arguments_are_valid :: (arguments: [] string) -> bool {
 
 run_command_handler :: (ctx: *Command_Context, arguments: [] string) -> bool {
     if !command_arguments_are_valid(RUN_COMMAND, arguments) return false;
-    prepared := require_prepared_workspace("run", *ctx.workspace);
+    prepared := ensure_workspace_prepared(ctx.root_dir, ctx.cache_dir, *ctx.workspace);
     if prepared == null return false;
     target_name := ifx arguments.count == 1 then arguments[0] else "";
     return run_prepared_workspace(prepared, target_name);

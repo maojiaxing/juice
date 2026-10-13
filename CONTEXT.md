@@ -8,7 +8,7 @@ Juice 是一个面向 Jai  的命令行构建工具；本上下文统一描述�
 用户通过 Juice 请求的一项可命名操作，例如 `build`、`run` 或 `clean`。一个 command 具有自己的参数语义、前置条件和成功/失败结果。
 
 **Prerequisite command（前置 command）**:
-在目标 command 之前必须成功完成的另一个 command。前置关系表达命令之间的执行依赖，而不是把两个 command 合并为一个 command。
+在目标 command 之前必须成功完成的另一个 command。前置关系表达命令之间的执行依赖，而不是把两个 command 合并为一个 command。当前唯一实例是 `run` 依赖 `build`。Workspace 准备不作为 command、不参与前置关系（见 Workspace preparation）。
 
 **Build**:
 根据当前 workspace 的 package 与 target 定义，产生可执行输出的 command。Build 从入口闭包探测 test block：闭包含之则以剥离视图编译，不含则原样直编。Testing 断言模块源码含 test block 时不可被 jai 直接编译，Build 以该模块的 STRIP 视图替代 `#import "Testing"` 解析，视图落 `target/testing-module/`（与 Test 的 EXPAND 编译视图同路径、与 Bootstrap build 的 STRIP 视图同语义，三路径对称的特例，各自运行前重写；模块 test-free 或不存在时无此行为）。Build 构建 root package 的全部 effective target，但不会在每次构建前自动清空 target directory。没有 effective target 时，Build 无需准备 dependencies，也不创建 target directory 或 artifact，但仍成功完成并明确说明没有可构建目标。对 LIB package，Build 仅验证导入入口，不调用编译器。
@@ -20,7 +20,7 @@ Juice 是一个面向 Jai  的命令行构建工具；本上下文统一描述�
 递归删除 root package 与 workspace member 的 target directory 整目录（含依赖 shim 与转译产物）。Clean 通过 workspace discovery 确定 member，但不解析、获取或更新 dependencies。所有清理路径先完成验证；单个删除失败不阻止其他已验证路径的清理，但会使 Clean 整体失败。
 
 **Test**:
-执行当前 package 单元测试的 command。Test 以 prepare-workspace 为前置 command，不依赖 build；消费 prepared workspace 但不消费 artifact plan——LIB package 没有 effective target 时依然可测。Test 接受至多一个 pattern 参数，对最终报告名做大小写敏感子串匹配。没有发现任何 test block 或 pattern 零命中时，Test 成功完成并明确说明，不进入测试构建；测试失败使 command 失败，与编译失败共用非零退出码。
+执行当前 package 单元测试的 command。Test 经一次幂等的 workspace 准备调用消费 prepared workspace，不依赖 build；不消费 artifact plan——LIB package 没有 effective target 时依然可测。Test 接受至多一个 pattern 参数，对最终报告名做大小写敏感子串匹配。没有发现任何 test block 或 pattern 零命中时，Test 成功完成并明确说明，不进入测试构建；测试失败使 command 失败，与编译失败共用非零退出码。
 
 **Bootstrap build（自举构建）**:
 仓库根 `build.jai` metaprogram 直接构建 juice 自身的路径，独立于 Build command。src 原文件内联 test block 后，Bootstrap build 的构建输入是剥离视图——与 Build command 共用同一转译器与视图契约（[ADR 0006](docs/adr/0006-bootstrap-build-strips-inline-test-blocks.md)）；行号与诊断经视图映射对应原文件。Test support 文件不在其构建输入内。
@@ -29,7 +29,7 @@ _Avoid_: 发布视图树（预生成剥离源码树作为构建输入的方案�
 ## Workspace language
 
 **Workspace preparation**:
-为需要 package、target 和依赖信息的 command 准备当前 workspace 状态的过程。它包含读取 root package、发现 workspace member、解析 effective target，以及按 command 需要解析或获取 dependencies。
+为需要 package、target 和依赖信息的 command 准备当前 workspace 状态的过程。它包含读取 root package、发现 workspace member、解析 effective target，以及按 command 需要解析或获取 dependencies。对 command 表现为 workspace 模块的一次幂等调用；不作为 command 注册，不可被用户直接调用。
 
 **Workspace discovery**:
 通过执行 root package manifest 来发现并验证位于 package root 内的 workspace member 的过程。Workspace discovery 产生独立的 discovery 结果，不解析、获取或更新 dependencies；因 manifest 本身是可执行的 Jai 声明，所以它不承诺没有 manifest 自身产生的副作用。Discovery 保留已评估的 member declaration；dependency preparation 消费同一快照，不重新执行 workspace manifest。没有 package declaration 时，当前目录仍可产生仅包含自身的最小 discovery，供 Clean 使用；已有但无效的 package declaration 不产生可清理的 workspace。
@@ -110,7 +110,7 @@ _Avoid_: test runner（无运行期 runner 进程）、测试可执行文件。
 ## Command organization
 
 **Command registry**:
-Juice 当前可用 command 的目录。它让 command 的名称、说明、参数责任和前置关系可被统一发现，但不改变各 command 自己拥有其行为的事实。
+Juice 当前可执行 command 的目录。它让 command 的名称、说明、参数责任和前置关系可被统一发现，但不改变各 command 自己拥有其行为的事实；目录中的每个 command 都可被用户直接调用。
 
 **Dispatcher**:
 根据用户输入在 command registry 中选择 command，按其前置关系执行所需 command，并把最终成功/失败结果交给 CLI 进程。Dispatcher 在执行任何 prerequisite 之前用目标 command 自身的参数规则验证用户参数；参数无效时任何 command 都不执行。
@@ -123,7 +123,7 @@ _Avoid_: 各 command 自持 metaprogram 骨架（会复制消息循环与哨兵�
 
 - Dispatcher 从 command registry 选择一个 command。
 - Command 可以声明零个或多个 prerequisite command；prerequisite command 成功后，目标 command 才能执行。
-- `run` 依赖 `build`；`build` 依赖完整的 workspace preparation；workspace preparation 依赖 workspace discovery。
+- `run` 依赖 `build`（唯一 command 前置关系）；`build` 依赖完整的 workspace preparation；workspace preparation 依赖 workspace discovery。
 - `clean` 依赖 workspace discovery，但不解析、获取或更新 dependencies；它递归删除 root package 与已验证 workspace member 的 target directory 整目录。
 - Workspace discovery 与 prepared workspace 是递进但不同的结果：Clean 只消费前者，Build、Run 与 Test 消费后者。
 - Package declaration 保留作者声明；effective target 和 artifact plan 表达约定补全后的构建含义。
@@ -134,7 +134,7 @@ _Avoid_: 各 command 自持 metaprogram 骨架（会复制消息循环与哨兵�
 - Build 按全部 artifact plan 产生 artifact；Run 在同一组 artifact plan 中选择并启动 artifact。
 - Effective target 先于 dependency preparation 得到验证；没有 effective target 时，Build 不触发 dependency preparation。
 - Command registry 描述可发现的 command；Dispatcher 负责执行顺序，但不拥有 build、run、clean、test 的业务行为。
-- `test` 依赖 prepare-workspace（不依赖 build）；消费 prepared workspace 但不消费 artifact plan，LIB package 无 effective target 时仍可测。
+- `test` 与 `build` 经一次幂等的 workspace 准备调用消费 prepared workspace；`test` 不依赖 `build`，不消费 artifact plan，LIB package 无 effective target 时仍可测。
 - Test block 必须经 Transpile 转换为视图后才能编译；build 探测后剥离、test 展开，run 经 build 继承。
 - Bootstrap build 与 Build command 共用同一转译器与视图契约；Test support 被 Test discovery 扫描收录、不进 Build 闭包与 Bootstrap build 输入。
 - Test discovery 消费 workspace discovery 快照但不并入；member 以自身为 root 测试，依赖不发现不执行。

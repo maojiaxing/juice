@@ -15,7 +15,6 @@ Command :: struct {
     description:        string;
     usage:              string;
     prerequisites:      [] string;
-    visible:            bool = true;
     handler:            Command_Handler;
     validate_arguments: Command_Argument_Validator = command_accepts_no_arguments;
 }

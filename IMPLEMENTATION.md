@@ -8,13 +8,12 @@ Juice uses an explicit static command registry and prerequisite Dispatcher. Each
 | --- | --- |
 | `src/commands/command.jai` | Shared `Command`, `Command_Context`, handler and argument-validator types |
 | `src/commands/registry.jai` | Static array of command-owned declarations |
-| `src/commands/prepare.jai` | Internal discovery/preparation declarations; thin adapters over the workspace state |
 | `src/commands/build.jai` | Build declaration, argument contract, compilation, batch revalidation, prepared-workspace orchestration, and build import-directory assembly |
 | `src/commands/run.jai` | Run declaration, argument contract, target selection, diagnostics, and artifact launch |
 | `src/commands/clean.jai` | Clean declaration, argument contract, cleanup scope, all-path validation, and deletion policy |
 | `src/commands/test.jai` | Test declaration, argument contract, discovery scan, transpile orchestration, driver generation, and the Testing module view special case (`testing_module_view` helper) |
 | `src/dispatcher.jai` | Registry validation, lookup, planning, and execution; production and test registries share it |
-| `src/workspace.jai` | Workspace discovery, member validation, the discovery/preparation state machine, and the command-side prepared-workspace guard |
+| `src/workspace.jai` | Workspace discovery, member validation, the discovery/preparation state machine, and the command-side preparation entry (`ensure_workspace_prepared`) |
 | `src/dependency.jai` | Dependency fetching, workspace-member lookup over the discovery snapshot, and the local dependency directory derivation (`packages_dir`) |
 | `src/target.jai` | Shared effective-target resolution, artifact plans, and artifact-path revalidation |
 | `src/path_safety.jai` | Shared filesystem/path inspection and validation, plus the juice modules directory derivation |
@@ -22,7 +21,7 @@ Juice uses an explicit static command registry and prerequisite Dispatcher. Each
 | `src/metaprogram.jai` | Shared compiler metaprogram generator (one-shot workspace/intercept/message-loop skeleton) consumed by Build and Test |
 | `src/main.jai` | File loading, context initialization (package root and cache paths), CLI argument slicing, and dispatch |
 
-Command metadata, prerequisites, visibility, handlers, and the argument contract are declared in the owning command file. Handlers print usage from their own declaration rather than maintaining a second usage string. Adding a command requires adding its file to the load list and its declaration to the registry; no automatic registration is involved.
+Command metadata, prerequisites, handlers, and the argument contract are declared in the owning command file. Handlers print usage from their own declaration rather than maintaining a second usage string. Adding a command requires adding its file to the load list and its declaration to the registry; no automatic registration is involved.
 
 Build and Run still consume the same artifact plan.
 
@@ -33,19 +32,17 @@ Build and Run still consume the same artifact plan.
 The Dispatcher builds and validates the complete selected graph before invoking any handler:
 
 1. Validate the registry: declarations, duplicate names, and missing prerequisites.
-2. Look up the requested command; reject unknown and internal commands.
+2. Look up the requested command; reject unknown commands.
 3. Plan the selected graph with the requested command's own argument validator. Invalid arguments stop the dispatch before any prerequisite runs.
 4. Detect cycles during planning, before any execution.
 5. Execute the ordered graph once per command. Prerequisites receive empty arguments; only the requested command receives the user's arguments.
 6. Propagate prerequisite and handler failures with `Dispatch_Result` instead of bare bools.
 
-Internal commands still run as prerequisites, but direct invocation is now rejected with `INTERNAL_COMMAND_INVOKED`.
-
 ## Command execution
 
 ```text
-run → build → prepare-workspace → discover-workspace
-build → prepare-workspace → discover-workspace
+run → build
+build / run / test → ensure_workspace_prepared → ensure_workspace_discovered → prepare_workspace
 clean → discovery within its own handler, without dependency preparation
 ```
 
@@ -62,8 +59,9 @@ clean → discovery within its own handler, without dependency preparation
 
 - `ensure_workspace_discovered` publishes the discovery result and prints the discovery message. Repeated calls are idempotent.
 - `prepare_workspace` resolves effective targets and artifact plans, then prepares dependencies only when plans exist. It publishes a prepared result only after every required step succeeds; a failed attempt leaves discovery reusable and exposes no partial prepared workspace.
-- `get_prepared_workspace` returns the prepared result, or null before preparation. Build and Run consume the result through this accessor.
-- The internal discovery/preparation commands are thin adapters over these transitions and no longer own resolution or dependency policy.
+- `ensure_workspace_prepared` is the command-side entry (ticket 0040): one idempotent call chains the two phases and hands back the prepared result (null = failure, already reported by the failing phase). Build, Run and Test call it as their first step; Run's call after Build's prerequisite run is a no-op on the phase machine. The command-specific guard (ticket 0037) is absorbed — the failure message now names the concrete discovery/preparation error.
+- `get_prepared_workspace` stays the raw state accessor for tests.
+- Workspace preparation is not registered as a command; the registry holds only invocable commands.
 
 `Workspace_Discovery` retains the evaluated member declarations (`member_packages`, root first) instead of only member paths. Dependency preparation consumes this snapshot and no longer re-executes member manifests; workspace-member lookups no longer load manifests.
 
@@ -77,7 +75,7 @@ The production implementation is the test surface:
 - `run_prepared_workspace` accepts a launch operation, defaulting to `run_artifact_plan`. Tests use a recording adapter to verify selection, exact artifact/root forwarding, no launch on invalid selection, and launch-failure propagation.
 - `clean_discovered_workspace` accepts validation and deletion operations, defaulting to the real filesystem operations. Recording adapters verify deletion scope, all-path validation before deletion, no deletion after validation failure, and continued deletion after an individual failure.
 - `build_prepared_workspace` accepts a compile operation, defaulting to `compile_artifact_plan`. Recording adapters verify the targetless no-op, the revalidation gate before any compilation, exact per-plan forwarding, and fail-fast on the first compile failure.
-- `ensure_workspace_discovered` and `prepare_workspace` accept discovery, resolution, and dependency operations with production defaults. Tests verify the state transitions, no-dependency no-op for targetless packages, and that failures publish nothing.
+- `ensure_workspace_discovered`, `prepare_workspace` and `ensure_workspace_prepared` accept discovery, resolution, and dependency operations with production defaults. Tests verify the state transitions, no-dependency no-op for targetless packages, that failures publish nothing, and the entry's idempotency.
 - `fetch_workspace_dependencies` accepts a fetch operation, defaulting to `fetch_dependency`. Tests verify member dependencies are skipped and fetch failures propagate.
 
 Production handlers use the defaults. Real process execution, compilation, workspace discovery, and dependency fetching remain in the production path; the build revalidation gate runs in tests over the real filesystem checks.

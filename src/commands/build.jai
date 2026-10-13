@@ -10,14 +10,13 @@ BUILD_COMMAND :: Command.{
     name          = "build",
     description   = "Build all targets in the root package",
     usage         = "juice build",
-    prerequisites = string.["prepare-workspace"],
-    visible       = true,
+    prerequisites = string.[],
     handler       = build_command,
 };
 
 build_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     if !command_arguments_are_valid(BUILD_COMMAND, arguments) return false;
-    prepared := require_prepared_workspace("build", *ctx.workspace);
+    prepared := ensure_workspace_prepared(ctx.root_dir, ctx.cache_dir, *ctx.workspace);
     if prepared == null return false;
     if !build_prepared_workspace(prepared) return false;
     if prepared.artifact_plans.count == 0 {

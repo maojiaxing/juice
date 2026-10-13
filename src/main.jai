@@ -13,7 +13,6 @@
 #load "transpile_cache.jai";
 #load "metaprogram.jai";
 #load "commands/command.jai";
-#load "commands/prepare.jai";
 #load "commands/build.jai";
 #load "commands/run.jai";
 #load "commands/clean.jai";

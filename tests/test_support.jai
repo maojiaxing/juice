@@ -390,44 +390,39 @@ strict_arguments_are_invalid :: (arguments: [] string) -> bool {
 }
 
 TEST_REGISTRY_SIMPLE :: Command.[
-    .{name = "a", description = "Command A", usage = "test a", prerequisites = string.[], visible = true, handler = test_handler_a},
-    .{name = "b", description = "Command B", usage = "test b", prerequisites = string.[], visible = true, handler = test_handler_b},
+    .{name = "a", description = "Command A", usage = "test a", prerequisites = string.[], handler = test_handler_a},
+    .{name = "b", description = "Command B", usage = "test b", prerequisites = string.[], handler = test_handler_b},
 ];
 
 TEST_REGISTRY_DUPLICATE :: Command.[
-    .{name = "a", description = "Command A", usage = "test a", prerequisites = string.[], visible = true, handler = test_handler_a},
-    .{name = "a", description = "Command A Duplicate", usage = "test a", prerequisites = string.[], visible = true, handler = test_handler_b},
+    .{name = "a", description = "Command A", usage = "test a", prerequisites = string.[], handler = test_handler_a},
+    .{name = "a", description = "Command A Duplicate", usage = "test a", prerequisites = string.[], handler = test_handler_b},
 ];
 
 TEST_REGISTRY_MISSING_PREREQ :: Command.[
-    .{name = "a", description = "Command A", usage = "test a", prerequisites = string.["nonexistent"], visible = true, handler = test_handler_a},
-];
-
-TEST_REGISTRY_INTERNAL :: Command.[
-    .{name = "internal", description = "Internal Command", usage = "test internal", prerequisites = string.[], visible = false, handler = test_handler_a},
-    .{name = "public", description = "Public Command", usage = "test public", prerequisites = string.["internal"], visible = true, handler = test_handler_b},
+    .{name = "a", description = "Command A", usage = "test a", prerequisites = string.["nonexistent"], handler = test_handler_a},
 ];
 
 TEST_REGISTRY_CYCLE :: Command.[
-    .{name = "a", description = "Command A", usage = "test a", prerequisites = string.["b"], visible = true, handler = test_handler_a},
-    .{name = "b", description = "Command B", usage = "test b", prerequisites = string.["a"], visible = true, handler = test_handler_b},
+    .{name = "a", description = "Command A", usage = "test a", prerequisites = string.["b"], handler = test_handler_a},
+    .{name = "b", description = "Command B", usage = "test b", prerequisites = string.["a"], handler = test_handler_b},
 ];
 
 TEST_REGISTRY_DIAMOND :: Command.[
-    .{name = "a", description = "Command A", usage = "test a", prerequisites = string.[], visible = true, handler = test_handler_a},
-    .{name = "b", description = "Command B", usage = "test b", prerequisites = string.["a"], visible = true, handler = test_handler_b},
-    .{name = "c", description = "Command C", usage = "test c", prerequisites = string.["a"], visible = true, handler = test_handler_c},
-    .{name = "d", description = "Command D", usage = "test d", prerequisites = string.["b", "c"], visible = true, handler = test_handler_d},
+    .{name = "a", description = "Command A", usage = "test a", prerequisites = string.[], handler = test_handler_a},
+    .{name = "b", description = "Command B", usage = "test b", prerequisites = string.["a"], handler = test_handler_b},
+    .{name = "c", description = "Command C", usage = "test c", prerequisites = string.["a"], handler = test_handler_c},
+    .{name = "d", description = "Command D", usage = "test d", prerequisites = string.["b", "c"], handler = test_handler_d},
 ];
 
 TEST_REGISTRY_FAILURE :: Command.[
-    .{name = "failing", description = "Failing Command", usage = "test failing", prerequisites = string.[], visible = true, handler = test_handler_fail},
-    .{name = "target", description = "Target Command", usage = "test target", prerequisites = string.["failing"], visible = true, handler = test_handler_b},
+    .{name = "failing", description = "Failing Command", usage = "test failing", prerequisites = string.[], handler = test_handler_fail},
+    .{name = "target", description = "Target Command", usage = "test target", prerequisites = string.["failing"], handler = test_handler_b},
 ];
 
 TEST_REGISTRY_ARGUMENTS :: Command.[
-    .{name = "sideeffect", description = "Side Effect Command", usage = "test sideeffect", prerequisites = string.[], visible = true, handler = test_handler_a},
-    .{name = "strict", description = "Strict Command", usage = "test strict", prerequisites = string.["sideeffect"], visible = true, validate_arguments = strict_arguments_are_invalid, handler = test_handler_b},
+    .{name = "sideeffect", description = "Side Effect Command", usage = "test sideeffect", prerequisites = string.[], handler = test_handler_a},
+    .{name = "strict", description = "Strict Command", usage = "test strict", prerequisites = string.["sideeffect"], validate_arguments = strict_arguments_are_invalid, handler = test_handler_b},
 ];
 
 // ===========================================================================

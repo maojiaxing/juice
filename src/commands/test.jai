@@ -17,8 +17,7 @@ TEST_COMMAND :: Command.{
     name          = "test",
     description   = "Run unit tests in the root package",
     usage         = "juice test [pattern]",
-    prerequisites = string.["prepare-workspace"],
-    visible       = true,
+    prerequisites = string.[],
     handler       = test_command,
     validate_arguments = test_arguments_are_valid,
 };
@@ -29,7 +28,7 @@ test_arguments_are_valid :: (arguments: [] string) -> bool {
 
 test_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     if !command_arguments_are_valid(TEST_COMMAND, arguments) return false;
-    prepared := require_prepared_workspace("test", *ctx.workspace);
+    prepared := ensure_workspace_prepared(ctx.root_dir, ctx.cache_dir, *ctx.workspace);
     if prepared == null return false;
     pattern := ifx arguments.count == 1 then arguments[0] else "";
     files, ok := collect_test_files(prepared);
@@ -885,21 +884,18 @@ test "Collection skips symlinks and junctions" {
 // ---------------------------------------------------------------------------
 
 test "Test command declaration and argument contract" {
-    expect(TEST_COMMAND.name == "test" && TEST_COMMAND.visible);
+    expect(TEST_COMMAND.name == "test");
     expect(TEST_COMMAND.usage == "juice test [pattern]");
-    expect(TEST_COMMAND.prerequisites.count == 1 && TEST_COMMAND.prerequisites[0] == "prepare-workspace");
+    expect(TEST_COMMAND.prerequisites.count == 0);
     expect(TEST_COMMAND.handler == test_command);
     expect(TEST_COMMAND.validate_arguments == test_arguments_are_valid);
     expect(TEST_COMMAND.validate_arguments(string.[]) && TEST_COMMAND.validate_arguments(string.["x"]));
     expect(!TEST_COMMAND.validate_arguments(string.["x", "y"]));
 }
 
-test "Test command argument and preparation guards" {
+test "Test command argument guard" {
     ctx: Command_Context;
     expect(!TEST_COMMAND.handler(*ctx, string.["one", "two"]));
-    // Zero arguments with an empty workspace state: the missing prepared
-    // workspace must be reported without touching anything else.
-    expect(!TEST_COMMAND.handler(*ctx, string.[]));
 }
 
 // ---------------------------------------------------------------------------
