@@ -10,11 +10,14 @@
 #load "target.jai";
 #load "dependency.jai";
 #load "driver.jai";
+#load "transpile.jai";
+#load "transpile_cache.jai";
 #load "commands/command.jai";
 #load "commands/prepare.jai";
 #load "commands/build.jai";
 #load "commands/run.jai";
 #load "commands/clean.jai";
+#load "commands/test.jai";
 #load "commands/registry.jai";
 #load "dispatcher.jai";
 
@@ -30,7 +33,8 @@ main :: () {
 
     driver: Build_Driver;
     driver.root_dir     = get_working_directory();
-    driver.packages_dir = tprint("%1/.packages", driver.root_dir);
+    // 依赖导入 shim 落 target/packages/（target directory 的一部分）。
+    driver.packages_dir = tprint("%1/target/packages", driver.root_dir);
 
     // 初始化 XDG 路径
     driver.cache_dir    = tprint("%1/juice", get_cache_home());
