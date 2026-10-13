@@ -41,14 +41,15 @@ clean_discovered_workspace :: (
     paths: [..] string;
     paths.allocator = temp;
 
+    // Clean deletes the whole target/ directory of the root package and every
+    // validated workspace member. Legacy result/ and .packages directories are
+    // no longer managed and are never touched.
     if discovery.has_package {
         for member: discovery.member_packages {
-            array_add(*paths, tprint("%1/result", member.dir));
+            array_add(*paths, tprint("%1/target", member.dir));
         }
-        array_add(*paths, tprint("%1/.packages", discovery.root_dir));
     } else {
-        array_add(*paths, tprint("%1/result", driver.root_dir));
-        array_add(*paths, tprint("%1/.packages", driver.root_dir));
+        array_add(*paths, tprint("%1/target", driver.root_dir));
     }
 
     // Validate every deletion target before deleting any of them.

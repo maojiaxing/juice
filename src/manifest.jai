@@ -43,7 +43,6 @@ build_eval_code :: (manifest_path: string, output_path: string) -> string {
     append(*builder, "    print_to_builder(*builder, \"VERSION=%\\n\", PACKAGE.version);\n");
     append(*builder, "    print_to_builder(*builder, \"TYPE=%\\n\", cast(s64) PACKAGE.type);\n");
     append(*builder, "    print_to_builder(*builder, \"DESCRIPTION=%\\n\", PACKAGE.description);\n");
-    append(*builder, "    print_to_builder(*builder, \"ROOT_FILE=%\\n\", PACKAGE.root_file);\n");
     append(*builder, "    print_to_builder(*builder, \"BUILD_SCRIPT=%\\n\", PACKAGE.build_script);\n\n");
 
     append(*builder, "    for target: PACKAGE.targets {\n");
@@ -72,14 +71,11 @@ build_eval_code :: (manifest_path: string, output_path: string) -> string {
 
 parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
     result: Manifest_Parse_Result;
-    result.package.type = .BIN;
-    result.package.root_file = "modulejai";
 
     seen_name := false;
     seen_version := false;
     seen_type := false;
     seen_description := false;
-    seen_root_file := false;
     seen_build_script := false;
 
     targets: [..] Target;
@@ -121,10 +117,10 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
                 if seen_type return manifest_parse_failure(line_index + 1, "Duplicate TYPE record.");
                 seen_type = true;
                 if value == "" {
-                    result.package.type = .BIN;
+                    result.package.type = .UNSPECIFIED;
                 } else {
                     enum_value, enum_ok, remainder := string_to_int(value);
-                    if !enum_ok || remainder.count != 0 || (enum_value != 0 && enum_value != 1) {
+                    if !enum_ok || remainder.count != 0 || (enum_value != 0 && enum_value != 1 && enum_value != 2) {
                         return manifest_parse_failure(line_index + 1, "Invalid package type enum.");
                     }
                     result.package.type = cast(Package_Type) enum_value;
@@ -134,11 +130,6 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
                 if seen_description return manifest_parse_failure(line_index + 1, "Duplicate DESCRIPTION record.");
                 seen_description = true;
                 result.package.description = copy_string(value);
-
-            case "ROOT_FILE";
-                if seen_root_file return manifest_parse_failure(line_index + 1, "Duplicate ROOT_FILE record.");
-                seen_root_file = true;
-                if value != "" result.package.root_file = copy_string(value);
 
             case "BUILD_SCRIPT";
                 if seen_build_script return manifest_parse_failure(line_index + 1, "Duplicate BUILD_SCRIPT record.");

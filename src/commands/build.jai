@@ -22,23 +22,33 @@ build_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
         return false;
     }
     if !build_prepared_workspace(ctx.driver, prepared) return false;
+    if prepared.artifact_plans.count == 0 {
+        if prepared.package_type == .LIB {
+            print("[juice] Library package '%'; nothing to build.\n", prepared.discovery.root_package.name);
+        } else {
+            print("[juice] No executable targets; nothing to build.\n");
+        }
+    }
     print("[juice] Build completed successfully!\n");
     return true;
 }
 
-compiler_import_arguments :: (driver: *Build_Driver) -> [..] string {
-    args: [..] string;
-    args.allocator = temp;
+// Import directories every compile gets beyond jai's own defaults: the
+// juice module directory (adjacent to the running executable, holds
+// Testing.jai/Juice.jai) and the package's dependency shim directory.
+compiler_import_directories :: (driver: *Build_Driver) -> [..] string {
+    dirs: [..] string;
+    dirs.allocator = temp;
 
     exe_path := get_path_of_running_executable();
     bin_dir  := path_strip_filename(exe_path);
     global_modules_dir := to_forward_slashes(tprint("%1/../modules", bin_dir));
-    if is_directory(global_modules_dir) array_add(*args, "-import_dir", global_modules_dir);
+    if is_directory(global_modules_dir) array_add(*dirs, global_modules_dir);
 
     if is_directory(driver.packages_dir) {
-        array_add(*args, "-import_dir", to_forward_slashes(driver.packages_dir));
+        array_add(*dirs, to_forward_slashes(driver.packages_dir));
     }
-    return args;
+    return dirs;
 }
 
 // Revalidate the whole build input before compiling anything, so an unsafe
@@ -66,30 +76,35 @@ revalidate_build_plans :: (prepared: *Prepared_Workspace) -> bool {
     return true;
 }
 
-compile_artifact_plan :: (driver: *Build_Driver, plan: Artifact_Plan) -> bool {
-    source_file := to_forward_slashes(plan.target.source_path);
+compile_artifact_plan :: (driver: *Build_Driver, plan: Artifact_Plan, entry: string) -> bool {
+    // The compile entry is chosen by the transpile front: the original
+    // entry file (test-free closure, zero transpile) or its strip view.
+    source_file := to_forward_slashes(entry);
     if !path_exists_as_regular_file(source_file) {
         print("[juice ERROR] Target source file not found: %\n", source_file);
         return false;
     }
 
-    if !make_directory_if_it_does_not_exist(plan.result_dir, recursive = true) {
-        print("[juice ERROR] Could not create result directory: %\n", plan.result_dir);
+    if !make_directory_if_it_does_not_exist(plan.target_dir, recursive = true) {
+        print("[juice ERROR] Could not create target directory: %\n", plan.target_dir);
         return false;
     }
 
-    print("[juice Build] Compiling Target '%' (%) -> result/...\n", plan.target.name, plan.target.main_file);
+    print("[juice Build] Compiling Target '%' (%) -> target/...\n", plan.target.name, plan.target.main_file);
 
-    args: [..] string;
-    array_add(*args, "jai");
-    array_add(*args, source_file);
-    array_add(*args, "-exe", plan.target.name);
-    array_add(*args, "-output_path", plan.result_dir);
+    // The compile runs through a generated metaprogram (session product in
+    // the target directory, like the test command's driver/metaprogram):
+    // jai has no flag for Build_Options.intermediate_path, so the
+    // metaprogram sets it to the target directory — compiler intermediates
+    // (.obj, .lib, .added_strings_*) land there instead of a .build
+    // directory next to the entry, and Clean removes them with target/.
+    metaprogram_path := to_forward_slashes(tprint("%1/build-%2.jai", plan.target_dir, plan.target.name));
+    if !write_entire_file(metaprogram_path, generate_build_metaprogram(driver, plan, source_file)) {
+        print("[juice ERROR] Could not write build metaprogram: %\n", metaprogram_path);
+        return false;
+    }
 
-    import_args := compiler_import_arguments(driver);
-    for arg: import_args array_add(*args, arg);
-
-    result := run_command(..args);
+    result := run_command("jai", metaprogram_path);
     if result.exit_code != 0 {
         print("[juice ERROR] Compilation failed for target '%'.\n", plan.target.name);
         return false;
@@ -102,21 +117,313 @@ compile_artifact_plan :: (driver: *Build_Driver, plan: Artifact_Plan) -> bool {
     return true;
 }
 
-// The compile seam mirrors run's launch and clean's validate/delete seams:
-// production handlers use the default; tests cross the same interface with a
-// recording adapter instead of invoking the real compiler.
+// Generated build metaprogram: the same one-shot workspace/message-loop
+// shape as the test metaprogram and the repository's bootstrap build.jai.
+// It sets output_executable_name, output_path and intermediate_path to the
+// plan's target directory, extends import_path with the juice module
+// directory and the dependency shim directory, and adds the (possibly
+// viewed) entry. The message loop only consumes messages — jai exits
+// non-zero on its own when the intercepted workspace has errors (ticket
+// 0015 finding). All generated paths are absolute: relative paths in
+// set_build_options/add_build_file resolve against the metaprogram's own
+// location (target/), not the package root.
+generate_build_metaprogram :: (driver: *Build_Driver, plan: Artifact_Plan, entry: string) -> string {
+    builder: String_Builder;
+    print_to_builder(*builder, "#import \"Basic\";\n");
+    print_to_builder(*builder, "#import \"Compiler\";\n\n");
+    print_to_builder(*builder, "#run {\n");
+    print_to_builder(*builder, "    set_build_options_dc(.{do_output = false});\n");
+    print_to_builder(*builder, "    workspace := compiler_create_workspace(\"Juice Build\");\n");
+    print_to_builder(*builder, "    if !workspace return;\n");
+    print_to_builder(*builder, "    options := get_build_options(workspace);\n");
+    print_to_builder(*builder, "    options.output_executable_name = %1;\n", quote_jai_string(plan.target.name));
+    print_to_builder(*builder, "    options.output_path            = %1;\n", quote_jai_string(to_forward_slashes(plan.target_dir)));
+    print_to_builder(*builder, "    options.intermediate_path      = %1;\n", quote_jai_string(to_forward_slashes(plan.target_dir)));
+    print_to_builder(*builder, "    import_paths: [..] string;\n");
+    print_to_builder(*builder, "    array_add(*import_paths, .. options.import_path);\n");
+    for dir: compiler_import_directories(driver) {
+        print_to_builder(*builder, "    array_add(*import_paths, %1);\n", quote_jai_string(dir));
+    }
+    print_to_builder(*builder, "    options.import_path = import_paths;\n");
+    print_to_builder(*builder, "    set_build_options(options, workspace);\n");
+    print_to_builder(*builder, "    compiler_begin_intercept(workspace);\n");
+    print_to_builder(*builder, "    add_build_file(%1, workspace);\n", quote_jai_string(to_forward_slashes(entry)));
+    print_to_builder(*builder, "    while true {\n");
+    print_to_builder(*builder, "        msg := compiler_wait_for_message();\n");
+    print_to_builder(*builder, "        if !msg continue;\n");
+    print_to_builder(*builder, "        if msg.workspace == workspace {\n");
+    print_to_builder(*builder, "            if msg.kind == {\n");
+    print_to_builder(*builder, "                case .ERROR;\n");
+    print_to_builder(*builder, "                case .COMPLETE;\n");
+    print_to_builder(*builder, "                    break;\n");
+    print_to_builder(*builder, "            }\n");
+    print_to_builder(*builder, "        }\n");
+    print_to_builder(*builder, "    }\n");
+    print_to_builder(*builder, "    compiler_end_intercept(workspace);\n");
+    print_to_builder(*builder, "}\n");
+    return builder_to_string(*builder);
+}
+
+// ---------------------------------------------------------------------------
+// Build transpile front (ADR 0004, tickets 0008/0021): per target, probe the
+// entry's closure of literal in-package #loads. A test-free closure compiles
+// the original entry unchanged (zero transpile, zero cache); a closure
+// containing test blocks is viewed wholesale — every closure file gets a
+// strip view and the entry becomes the entry file's view. Non-literal and
+// out-of-package #load targets are never viewed or rewritten; test blocks
+// there surface as plain jai compile errors.
+// ---------------------------------------------------------------------------
+
+// One build source file: package-relative path ("/" separated) and absolute
+// path, mirroring the test command's Test_Source_File.
+Build_Source_File :: struct {
+    rel_path: string;
+    abs_path: string;
+}
+
+// One probed closure file: its resolved in-package literal #load targets in
+// statement order, and whether it contains test blocks.
+Build_Closure_File :: struct {
+    file:      Build_Source_File;
+    loads:     [..] string;
+    has_tests: bool;
+}
+
+// The transpile step's output for one file: the strip-mode view, the
+// content-addressed cache key, and transpile diagnostics (rejected with the
+// original file coordinates).
+Build_File_Output :: struct {
+    view:        string;
+    key:         string;
+    diagnostics: [..] Transpile_Diagnostic;
+}
+
+// The build transpile seam's production default: read the file, strip test
+// blocks, rewrite in-package #load targets to the given view paths, and
+// derive the content-addressed cache key (path + source + mode + version +
+// load targets). The load rewrite table embeds the target views' hash
+// directories, so keys form a Merkle chain computable in dependency order.
+transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output {
+    output: Build_File_Output;
+    source, ok := read_entire_file(file.abs_path);
+    if !ok {
+        array_add(*output.diagnostics, .{line = 0, column = 0, message = tprint("无法读取源文件: %1", file.abs_path)});
+        return output;
+    }
+    ctx: Transpile_Context;
+    ctx.mode = .STRIP;
+    ctx.path = file.rel_path;
+    ctx.load_targets = load_targets;
+    result := transpile_source(source, ctx);
+    output.view = result.view;
+    output.key = transpile_view_key(file.rel_path, source, .STRIP, load_targets, JUICE_VERSION);
+    output.diagnostics = result.diagnostics;
+    return output;
+}
+
+// The transpile subtree root: <package root>/target/transpile/ — the same
+// tree the test command uses; content addressing keeps the modes apart.
+build_transpile_dir :: (prepared: *Prepared_Workspace) -> string {
+    return to_forward_slashes(tprint("%1/target/transpile", prepared.discovery.root_dir));
+}
+
+probe_visited :: (visited: [] string, rel_path: string) -> bool {
+    for seen: visited {
+        if seen == rel_path return true;
+    }
+    return false;
+}
+
+// Probe one target's closure: DFS from the entry over literal in-package
+// #load edges. Non-literal and out-of-package targets are not followed
+// (issue 0008 resolution 4). Files are listed in DFS preorder — the entry
+// first, then each load target's subtree in statement order.
+probe_build_closure :: (prepared: *Prepared_Workspace, plan: Artifact_Plan) -> [..] Build_Closure_File, bool {
+    package_root := prepared.discovery.root_dir;
+    entry: Build_Source_File;
+    entry.rel_path = path_slashes(plan.target.main_file);
+    entry.abs_path = to_forward_slashes(plan.target.source_path);
+
+    files: [..] Build_Closure_File;
+    visited: [..] string;
+    stack: [..] Build_Source_File;
+    array_add(*stack, entry);
+
+    while stack.count > 0 {
+        file := stack[stack.count - 1];
+        stack.count -= 1;
+        if probe_visited(visited, file.rel_path) continue;
+        array_add(*visited, copy_string(file.rel_path));
+
+        source, ok := read_entire_file(file.abs_path);
+        if !ok {
+            print("[juice ERROR] Could not read source file for build: %\n", file.abs_path);
+            return files, false;
+        }
+
+        cf: Build_Closure_File;
+        cf.file = file;
+        cf.has_tests = source_has_test_block(source);
+        cf.loads = source_load_targets(source, file.rel_path);
+        array_add(*files, cf);
+
+        // Push in reverse so targets pop in statement order.
+        i := cf.loads.count;
+        while i > 0 {
+            i -= 1;
+            target: Build_Source_File;
+            target.rel_path = cf.loads[i];
+            target.abs_path = to_forward_slashes(tprint("%1/%2", package_root, cf.loads[i]));
+            array_add(*stack, target);
+        }
+    }
+    return files, true;
+}
+
+// Shared state of one closure's view computation: per-file states (0 =
+// uncomputed, 1 = computing, 2 = done) and the resulting view paths.
+// "Computing" re-entry means the literal in-package #load graph has a
+// cycle and the path rewrites cannot be resolved (issue 0008 resolution 2).
+Build_View_State :: struct {
+    transpile_dir: string;
+    closure:       [] Build_Closure_File;
+    transpile:     #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output;
+    states:        [..] s64;
+    view_paths:    [..] string;
+    failed:        bool;
+}
+
+closure_index :: (state: *Build_View_State, rel_path: string) -> (s64, bool) {
+    for i: 0..state.closure.count-1 {
+        if state.closure[i].file.rel_path == rel_path return i, true;
+    }
+    return -1, false;
+}
+
+// Compute one closure file's strip view in dependency order (children
+// first, Merkle chain) and write it content-addressed into the transpile
+// tree. Returns the absolute view path.
+view_of_file :: (state: *Build_View_State, index: s64) -> string, bool {
+    if state.failed return "", false;
+    if state.states[index] == 2 return state.view_paths[index], true;
+    if state.states[index] == 1 {
+        print("[juice ERROR] %1: 循环加载无法重写路径\n", state.closure[index].file.rel_path);
+        state.failed = true;
+        return "", false;
+    }
+    state.states[index] = 1;
+
+    // Children first: every in-package load target is in the closure by
+    // construction, so its view path exists before the parent's key embeds
+    // it in a load rewrite.
+    load_targets: [..] Load_Target;
+    for resolved: state.closure[index].loads {
+        child_index, found := closure_index(state, resolved);
+        if !found {
+            print("[juice ERROR] %1: in-package #load 缺少视图目标\n", state.closure[index].file.rel_path);
+            state.failed = true;
+            return "", false;
+        }
+        child_path, ok := view_of_file(state, child_index);
+        if !ok return "", false;
+        target: Load_Target;
+        target.from = resolved;
+        target.to = child_path;
+        array_add(*load_targets, target);
+    }
+
+    output := state.transpile(state.closure[index].file, load_targets);
+    if output.diagnostics.count > 0 {
+        for diagnostic: output.diagnostics {
+            print("[juice ERROR] %1:%2,%3: %4\n", state.closure[index].file.rel_path, diagnostic.line, diagnostic.column, diagnostic.message);
+        }
+        state.failed = true;
+        return "", false;
+    }
+
+    view_path := transpile_view_path(state.transpile_dir, output.key, state.closure[index].file.rel_path);
+    // The parent must exist before the existence check: the inspection
+    // scans the parent directory, and a missing parent would make
+    // visit_files log a spurious "Unable to open directory" error.
+    if !make_directory_if_it_does_not_exist(path_strip_filename(view_path), recursive = true) {
+        print("[juice ERROR] Could not create view directory for %\n", state.closure[index].file.rel_path);
+        state.failed = true;
+        return "", false;
+    }
+    if !path_exists_as_regular_file(view_path) {
+        if !write_entire_file(view_path, output.view) {
+            print("[juice ERROR] Could not write view for %\n", state.closure[index].file.rel_path);
+            state.failed = true;
+            return "", false;
+        }
+    }
+
+    state.view_paths[index] = copy_string(view_path);
+    state.states[index] = 2;
+    return view_path, true;
+}
+
+// Decide one plan's compile entry: probe the entry's closure; a test-free
+// closure compiles the original entry unchanged, a closure containing test
+// blocks is viewed all-or-nothing (issue 0008 resolution 1/2) and the entry
+// becomes the entry file's view.
+build_plan_entry :: (
+    prepared: *Prepared_Workspace,
+    plan: Artifact_Plan,
+    transpile: #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output
+) -> (string, bool) {
+    closure, ok := probe_build_closure(prepared, plan);
+    if !ok return "", false;
+
+    has_tests := false;
+    for file: closure {
+        if file.has_tests {
+            has_tests = true;
+            break;
+        }
+    }
+    if !has_tests return to_forward_slashes(plan.target.source_path), true;
+
+    state: Build_View_State;
+    state.transpile_dir = build_transpile_dir(prepared);
+    state.closure = closure;
+    state.transpile = transpile;
+    for _: closure {
+        array_add(*state.states, 0);
+        array_add(*state.view_paths, "");
+    }
+    entry_index, found := closure_index(*state, path_slashes(plan.target.main_file));
+    if !found return "", false;
+    entry_path, view_ok := view_of_file(*state, entry_index);
+    return entry_path, view_ok;
+}
+
+// The compile seam mirrors run's launch and clean's validate/delete seams;
+// the transpile front mirrors the test command's orchestration seam (spec
+// 0013 Testing Decisions): production handlers use the defaults; tests cross
+// the same interfaces with recording adapters instead of the real compiler.
 build_prepared_workspace :: (
     driver: *Build_Driver,
     prepared: *Prepared_Workspace,
-    compile: #type (driver: *Build_Driver, plan: Artifact_Plan) -> bool = compile_artifact_plan
+    transpile: #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output = transpile_build_file,
+    compile: #type (driver: *Build_Driver, plan: Artifact_Plan, entry: string) -> bool = compile_artifact_plan
 ) -> bool {
     // Empty target sets are an intentional no-op. In particular, do not
-    // create result/ and do not prepare dependencies for such a package.
+    // create target/ and do not prepare dependencies for such a package.
     if prepared.artifact_plans.count == 0 return true;
     if !revalidate_build_plans(prepared) return false;
 
+    // Transpile front: per plan, probe the entry's closure and choose
+    // between the original entry and the entry file's strip view.
+    entries: [..] string;
     for plan: prepared.artifact_plans {
-        if !compile(driver, plan) return false;
+        entry, ok := build_plan_entry(prepared, plan, transpile);
+        if !ok return false;
+        array_add(*entries, entry);
+    }
+
+    for plan, index: prepared.artifact_plans {
+        if !compile(driver, plan, entries[index]) return false;
     }
     return true;
 }

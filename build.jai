@@ -9,6 +9,14 @@
     // -------------------------------------------------------------
     build_args := get_toplevel_command_line();
 
+    // 本文件被 `juice test` 作为视图加载进测试程序时（测试程序的编译入口是
+    // 生成的 target/transpile/first.jai），跳过构建：编译期执行会连累整棵
+    // 构建树进入测试程序编译。直接 `jai build.jai` 时末参数是本文件自身。
+    if build_args.count > 0 {
+        last_arg := build_args[build_args.count - 1];
+        if ends_with(last_arg, "/first.jai") || ends_with(last_arg, "\\first.jai") return;
+    }
+
     is_release := false;
     for arg: build_args {
         if arg == "release" || arg == "-release" {
@@ -30,9 +38,10 @@
     // -------------------------------------------------------------
     options := get_build_options(workspace);
     options.output_executable_name = "juice";
-    options.output_path            = "bin";
+    options.output_path            = "target";
+    options.intermediate_path      = "target";
 
-    // 关键：确保 bin 目录存在，防止链接器报错 LNK1104
+    // 关键：确保 target 目录存在，防止链接器报错 LNK1104
     make_directory_if_it_does_not_exist(options.output_path);
 
     // 模块导入路径设置

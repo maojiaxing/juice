@@ -152,6 +152,7 @@ prepare_workspace :: (
     prepared: Prepared_Workspace;
     prepared.discovery = state.discovery;
     prepared.artifact_plans = plans_result.plans;
+    prepared.package_type = plans_result.package_type;
     if prepared.artifact_plans.count > 0 {
         print("[juice] Preparing workspace dependencies...\n");
         if !prepare_dependencies(driver, state.discovery.member_packages) {

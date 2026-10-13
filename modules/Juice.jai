@@ -1,9 +1,13 @@
 #import "Basic";
 
 
+// UNSPECIFIED means the role is derived from convention during target
+// resolution: src/main.jai (or declared targets) means BIN; an import entry
+// means LIB; anything else stays BIN.
 Package_Type :: enum {
     LIB;
     BIN;
+    UNSPECIFIED;
 }
 
 // Raw target declaration as written by package.jai.
@@ -20,9 +24,11 @@ Effective_Target :: struct {
 }
 
 // The complete output contract consumed by Build and Run.
+// target_dir is the package's unified target/ directory root; the artifact
+// lands directly inside it (no profile sublayers).
 Artifact_Plan :: struct {
     target:      Effective_Target;
-    result_dir:  string;
+    target_dir:  string;
     artifact_path: string;
 }
 
@@ -41,11 +47,10 @@ Workspace_Config :: struct {
 Package :: struct {
     name:         string;
     version:      string;
-    type:         Package_Type = .BIN;
+    type:         Package_Type = .UNSPECIFIED;
     description:  string = "";
 
     targets:      [] Target;
-    root_file:    string = "modulejai";
 
     dependencies: [] Dependency;
     workspace:    Workspace_Config;
@@ -69,5 +74,7 @@ Workspace_Discovery :: struct {
 Prepared_Workspace :: struct {
     discovery:     Workspace_Discovery;
     artifact_plans: [] Artifact_Plan;
+    // The package role after UNSPECIFIED has been resolved by convention.
+    package_type:  Package_Type;
     dependencies_prepared: bool;
 }

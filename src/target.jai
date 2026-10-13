@@ -15,6 +15,8 @@ Target_Resolution_Error :: enum {
     SOURCE_NOT_FOUND;
     SOURCE_NOT_REGULAR;
     SOURCE_OUTSIDE_PACKAGE;
+    LIBRARY_TARGET_CONFLICT;
+    MODULE_ENTRY_NOT_FOUND;
 }
 
 Target_Resolution_Result :: struct {
@@ -22,6 +24,8 @@ Target_Resolution_Result :: struct {
     targets:      [] Effective_Target;
     error:        Target_Resolution_Error;
     error_message: string;
+    // The package role after UNSPECIFIED has been resolved by convention.
+    package_type:  Package_Type;
 }
 
 Artifact_Plan_Result :: struct {
@@ -29,6 +33,8 @@ Artifact_Plan_Result :: struct {
     plans:        [] Artifact_Plan;
     error:        Target_Resolution_Error;
     error_message: string;
+    // The package role after UNSPECIFIED has been resolved by convention.
+    package_type:  Package_Type;
 }
 
 make_resolution_failure :: (error: Target_Resolution_Error, message: string) -> Target_Resolution_Result {
@@ -89,11 +95,62 @@ make_effective_target :: (pkg: Package, name: string, main_file: string) -> Effe
     return target, .NONE, "";
 }
 
+// Convention lookup for a library's import entry: module.jai at the package
+// root first, then src/module.jai. Both are what "#import <package name>"
+// resolves to once the package is linked into a dependency directory.
+library_import_entry :: (pkg: Package) -> string, bool {
+    package_root, root_ok := normalize_existing_path(pkg.dir);
+    if !root_ok return "", false;
+    for candidate: string.["module.jai", "src/module.jai"] {
+        spelling := tprint("%1/%2", package_root, candidate);
+        entry := inspect_path_entry(spelling);
+        if entry.exists && !entry.is_directory && !entry.is_symlink && !entry.is_junction {
+            return copy_string(spelling), true;
+        }
+    }
+    return "", false;
+}
+
+// An unspecified package role is derived from convention: declared targets or
+// the default executable entry mean BIN; an import entry means LIB; anything
+// else stays BIN (a package with nothing to build).
+derive_package_type :: (pkg: Package) -> Package_Type {
+    if pkg.targets.count > 0 return .BIN;
+    default_entry := tprint("%1/src/main.jai", path_slashes(pkg.dir));
+    if path_exists_as_regular_file(default_entry) return .BIN;
+    _, has_import_entry := library_import_entry(pkg);
+    if has_import_entry return .LIB;
+    return .BIN;
+}
+
+// A LIB package is an import source, never a compiled output: it declares no
+// executable targets and is only validated for importability.
+validate_library_package :: (pkg: Package) -> Target_Resolution_Result {
+    if pkg.targets.count > 0 {
+        return make_resolution_failure(.LIBRARY_TARGET_CONFLICT, tprint("Library package '%' cannot declare executable targets.", pkg.name));
+    }
+
+    _, found := library_import_entry(pkg);
+    if !found {
+        return make_resolution_failure(.MODULE_ENTRY_NOT_FOUND, "Library package must provide module.jai at the package root or src/module.jai.");
+    }
+    return .{success = true, package_type = .LIB};
+}
+
 resolve_effective_targets :: (pkg: Package) -> Target_Resolution_Result {
     identity_result, identity_ok := validate_package_identity(pkg);
     if !identity_ok return identity_result;
 
     targets: [..] Effective_Target;
+
+    effective_type := pkg.type;
+    if effective_type == .UNSPECIFIED effective_type = derive_package_type(pkg);
+
+    if effective_type == .LIB {
+        library_result := validate_library_package(pkg);
+        if !library_result.success return library_result;
+        return .{success = true, targets = targets, package_type = .LIB};
+    }
 
     if pkg.targets.count == 0 {
         implicit_source := tprint("%1/src/main.jai", path_slashes(pkg.dir));
@@ -107,7 +164,7 @@ resolve_effective_targets :: (pkg: Package) -> Target_Resolution_Result {
             array_add(*targets, target);
         }
 
-        return .{success = true, targets = targets};
+        return .{success = true, targets = targets, package_type = .BIN};
     }
 
     for declaration, declaration_index: pkg.targets {
@@ -127,24 +184,25 @@ resolve_effective_targets :: (pkg: Package) -> Target_Resolution_Result {
         array_add(*targets, target);
     }
 
-    return .{success = true, targets = targets};
+    return .{success = true, targets = targets, package_type = .BIN};
 }
 
 make_artifact_plan :: (pkg: Package, target: Effective_Target) -> Artifact_Plan, bool {
     package_root, root_ok := normalize_existing_path(pkg.dir);
     if !root_ok return .{}, false;
 
-    result_dir := tprint("%1/result", package_root);
+    // Artifacts land directly in the unified target/ directory root.
+    target_dir := tprint("%1/target", package_root);
     #if OS == .WINDOWS {
         artifact_name := tprint("%1.exe", target.name);
     } else {
         artifact_name := target.name;
     }
-    artifact_path := tprint("%1/%2", result_dir, artifact_name);
+    artifact_path := tprint("%1/%2", target_dir, artifact_name);
 
     plan: Artifact_Plan;
     plan.target = target;
-    plan.result_dir = copy_string(result_dir);
+    plan.target_dir = copy_string(target_dir);
     plan.artifact_path = copy_string(artifact_path);
     return plan, true;
 }
@@ -161,16 +219,16 @@ resolve_artifact_plans :: (pkg: Package) -> Artifact_Plan_Result {
         if !ok return make_artifact_failure(.INVALID_PACKAGE_ROOT, "Could not construct artifact path.");
         array_add(*plans, plan);
     }
-    return .{success = true, plans = plans};
+    return .{success = true, plans = plans, package_type = target_result.package_type};
 }
 
 revalidate_artifact_plan :: (plan: Artifact_Plan, package_root: string) -> bool {
     root_entry := inspect_path_entry(package_root);
     if !root_entry.exists || !root_entry.is_directory || root_entry.is_symlink || root_entry.is_junction return false;
-    if !path_is_within(package_root, plan.result_dir) return false;
+    if !path_is_within(package_root, plan.target_dir) return false;
     if !path_is_within(package_root, plan.artifact_path) return false;
-    result_entry := inspect_path_entry(plan.result_dir);
-    if result_entry.exists && (!result_entry.is_directory || result_entry.is_symlink || result_entry.is_junction) return false;
+    target_entry := inspect_path_entry(plan.target_dir);
+    if target_entry.exists && (!target_entry.is_directory || target_entry.is_symlink || target_entry.is_junction) return false;
     artifact_entry := inspect_path_entry(plan.artifact_path);
     if artifact_entry.exists && (artifact_entry.is_directory || artifact_entry.is_symlink || artifact_entry.is_junction) return false;
     if !path_is_portable_filename(plan.target.name) return false;

@@ -24,6 +24,14 @@ path_slashes :: (path: string) -> string {
     return result;
 }
 
+path_backslashes :: (path: string) -> string {
+    result := copy_string(path);
+    for i: 0..result.count-1 {
+        if result[i] == #char "/" result[i] = #char "\\";
+    }
+    return result;
+}
+
 paths_equal :: (left: string, right: string) -> bool {
     a := path_slashes(left);
     b := path_slashes(right);
