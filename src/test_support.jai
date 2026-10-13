@@ -10,6 +10,12 @@
 //
 // 本文件不被 src/main.jai #load → 不在 Build 入口闭包 → 不转译、不编译、
 // 不进发布产物。测试程序路径下本文件 test-free，EXPAND 视图恒等输出。
+//
+// 本文件含 Testing 模块自测支撑段，以机器标记注释行框定（标记名见下段
+// 首尾，开头带 `//` 前缀；注意：本处与任何其他注释不得含该标记行的完整
+// 文本——生成器按子串定位标记，误命中会切错段）。src/commands/test.jai 的
+// testing_module_support_block 按标记整段切取进模块编译视图。标记是切段的
+// 稳定锚点：改段内注释不再破坏切段；移动段内声明时同步移动标记。
 // ---------------------------------------------------------------------------
 
 #import "Basic";
@@ -20,6 +26,17 @@
 #import "String";
 #import "Juice";
 
+// ===========================================================================
+// Testing 模块自测支撑段（票 0033）：模块编译视图以本段 + 生成器前置的
+// #scope_file 与文件级 import 构成。模块是密封作用域（how_to 151），自测块
+// 引用的声明必须驻模块自身作用域；本段内的全部声明（记录全局、child 场景
+// helper、自足 juice_root）必须位于两个机器标记之间，缺标记或声明移出段外
+// 会使模块自测编译失败。child 场景 helper 亦供本文件之外的测试块共用
+// （test support 程序级共享）。
+// ===========================================================================
+
+// __testing_module_support_begin__
+
 // ---------------------------------------------------------------------------
 // 路径基准（0027 决议）：所有 fixture 与 scratch 路径共同派生的包根。基准
 // 是 juice 的调用 cwd——juice 于 package root 运行，workspace discovery 由
@@ -27,16 +44,140 @@
 // intermediate_path = <root>/target。旧实现基于测试文件位置（测试程序入口
 // target/transpile 向上两级）推导仓库根，随迁移弃用：它绑定生成文件的
 // 布局，与共享声明的组织无关。
+//
+// 自足形态（票 0033）：本段被整体切取进 Testing 模块编译视图——模块是密封
+// 作用域，看不到 src/path_safety 的 lexical_absolute_path 声明，故此处不
+// 调用它。测试 metaprogram 以绝对 target 目录设置 intermediate_path
+// （"/" 分隔），剥掉尾部分隔符即为包根，无需路径归一。
 // ---------------------------------------------------------------------------
-
 juice_root :: () -> string {
     options := get_build_options();
-    // path_strip_filename 保留尾部分隔符（String 模块语义）；剥掉后归一为
-    // 绝对路径，与 src/commands/test.jai 的 scan_entry_parent 同姿势。
+    // path_strip_filename 保留尾部分隔符（String 模块语义）；剥掉后为绝对
+    // 路径，与 src/commands/test.jai 的 scan_entry_parent 同姿势。
     root := path_strip_filename(options.intermediate_path);
     while root.count > 0 && (root[root.count - 1] == #char "/" || root[root.count - 1] == #char "\\") root.count -= 1;
-    return lexical_absolute_path(root);
+    return root;
 }
+
+// Testing 模块自测的记录全局（旧 tests/ 测试文件顶层声明迁移，票 0032）。
+g_reached := false;
+g_first_reached := false;
+g_second_reached := false;
+g_defer_ran := false;
+
+// The tests below drive Testing's run()/finish() directly, which resets the
+// global register. Each test drains leftover failures at its start into the
+// accumulator so the final latch test can still fail the suite — otherwise a
+// failure registered before a finish() call would be silently masked (in the
+// old per-executable harness each process was isolated). The scenario's own
+// counts are checked directly by the assertions instead.
+testing_module_failures: s64 = 0;
+
+// Absolute path of juice.exe in the repository's target directory. The
+// package root comes from juice_root(): the test program executes at compile
+// time in the jai compiler child of juice, where the process working
+// directory is the entry file's directory (target/transpile), not the
+// invocation cwd. 历史上按来源前缀存在四份同体拷贝（juice_exe/
+// test_command_juice_exe/testing_juice_exe/tp_juice_exe），已合并为本一份。
+juice_exe :: () -> string {
+    return tprint("%1/target/juice.exe", juice_root());
+}
+
+// Child 场景：真实 juice.exe 在 fixture package 上跑 `juice test`。
+// fixture_base 区分 fixture 树（commands 场景 tests/data/、转译 run matrix
+// tests/data/transpile/run/、Testing 自测 tests/data/testing-child/）。
+// 历史上 tp_run_juice_test 与本实现同体（仅 fixture 基目录不同），已合并。
+run_juice_test :: (fixture: string, pattern := "", fixture_base := "tests/data/") -> Process_Result, string, string {
+    juice := juice_exe();
+    fixture_abs := tprint("%1/%2%3", juice_root(), fixture_base, fixture);
+    args: [..] string;
+    array_add(*args, juice);
+    array_add(*args, "test");
+    if pattern != "" array_add(*args, pattern);
+    result, output, errors, _ := run_command(..args, working_directory = fixture_abs, capture_and_return_output = true);
+    return result, output, errors;
+}
+
+testing_child_run :: (scenario: string) -> Process_Result, string, string {
+    result, output, errors := run_juice_test(scenario, "", "tests/data/testing-child/");
+    return result, output, errors;
+}
+
+// 退出码检查（child 场景共用）：历史上按来源前缀存在四份同体拷贝
+// （expect_child_exit/expect_exit/testing_expect_exit/tp_expect_exit），
+// 差异仅在失败诊断前缀；合并为一份后以前缀参数保留各自的诊断文本。
+expect_exit :: (name: string, result: Process_Result, want: s32, tag := "child") -> bool {
+    if result.type == .EXITED && result.exit_code == want return true;
+    print("[%1 %2] exit result %3/%4, want %5\n", tag, name, result.type, result.exit_code, want);
+    return false;
+}
+
+// Normalize CRLF to LF so expected blocks are compared line by line
+// regardless of the child process's native line endings. 历史上按来源前缀
+// 存在三份逐字拷贝（normalize_crlf/testing_normalize_crlf/
+// tp_normalize_crlf），已合并为本一份。
+normalize_crlf :: (s: string) -> string {
+    has_cr := false;
+    for ch: s {
+        if ch == #char "\r" {
+            has_cr = true;
+            break;
+        }
+    }
+    if !has_cr return s;
+    builder: String_Builder;
+    cursor := 0;
+    i := 0;
+    while i < s.count {
+        if s[i] == #char "\r" {
+            print_to_builder(*builder, "%", slice(s, cursor, i - cursor));
+            print_to_builder(*builder, "\n");
+            if i + 1 < s.count && s[i+1] == #char "\n" i += 1;
+            cursor = i + 1;
+        }
+        i += 1;
+    }
+    if cursor < s.count print_to_builder(*builder, "%", slice(s, cursor, s.count - cursor));
+    return builder_to_string(*builder);
+}
+
+// 输出断言（child 场景共用）：逐 needle 检查出现/不出现（want）。历史上按
+// 来源前缀存在三份同体拷贝（output_matches/testing_output_matches/
+// tp_output_matches），差异仅在失败诊断前缀；合并后以前缀参数保留。
+output_matches :: (name: string, output: string, needles: [] string, want := true, tag := "child") -> bool {
+    normalized := normalize_crlf(output);
+    for needle: needles {
+        found := find_index_from_left(normalized, needle) >= 0;
+        if found != want {
+            print("[%1 %2] output %3 '%4'\n", tag, name, ifx found then "unexpectedly contains" else "missing", needle);
+            print("  output was:\n%\n", output);
+            return false;
+        }
+    }
+    return true;
+}
+
+// 1-based line/column of the first occurrence of `needle` in `file`; 0,0 if
+// the source cannot be read or the needle is missing. Used to build expected
+// failure lines without hardcoding line numbers. 历史上 testing_line_col 与
+// 本实现逐字相同，已合并。
+fixture_line_col :: (file: string, needle: string) -> (line: s64, col: s64) {
+    source, ok := read_entire_file(file);
+    if !ok return 0, 0;
+    index := find_index_from_left(source, needle);
+    if index < 0 return 0, 0;
+    line := 1;
+    line_start := 0;
+    for i: 0..index-1 {
+        if source[i] == #char "\n" {
+            line += 1;
+            line_start = i + 1;
+        }
+    }
+    return line, index - line_start + 1;
+}
+
+// __testing_module_support_end__
 
 // ===========================================================================
 // 旧 tests/ 测试文件顶层声明迁移（票 0032）——run/clean/compile 记录 fake、
@@ -96,15 +237,18 @@ test_compile_artifact :: (driver: *Build_Driver, plan: Artifact_Plan, entry: str
     return test_compile_success;
 }
 
-// Fake build transpile step: records every call and returns a canned view
-// with a flat (collision-free by construction) key. The orchestration feeds
-// the key through the pure path function; the fake only fills in content.
-build_fake_key :: (rel: string) -> string {
+// Fake transpile step: records every call and returns a canned view with a
+// flat (collision-free by construction) key. The orchestration feeds the key
+// through the pure path function; the fake only fills in content. build 与
+// test 两个 seam 的 fake 共用同一键函数（历史上 build_fake_key/fake_key
+// 两份同体，仅前缀不同，已合并）——fake 键只在 seam 内部流通，测试块以
+// 同一函数重建期望路径。
+fake_key :: (rel: string) -> string {
     result := copy_string(rel);
     for i: 0..result.count-1 {
         if result[i] == #char "/" result[i] = #char "_";
     }
-    return tprint("build-key-%1", result);
+    return tprint("key-%1", result);
 }
 
 test_build_transpile_calls: s64;
@@ -120,7 +264,7 @@ fake_build_transpile :: (file: Build_Source_File, load_targets: [] Load_Target) 
     }
     output: Build_File_Output;
     output.view = tprint("// fake build view of %1\n", file.rel_path);
-    output.key = build_fake_key(file.rel_path);
+    output.key = fake_key(file.rel_path);
     if test_build_fake_diagnostic != "" {
         array_add(*output.diagnostics, .{line = 2, column = 1, message = test_build_fake_diagnostic});
     }
@@ -177,10 +321,6 @@ build_seam_write :: (root: string, rel: string, content: string) -> bool {
     return write_entire_file(path, content);
 }
 
-juice_exe :: () -> string {
-    return tprint("%1/target/juice.exe", juice_root());
-}
-
 run_juice_child :: (fixture: string, command: string, target := "") -> (Process_Result, string, string) {
     juice := juice_exe();
     fixture_abs := tprint("%1/tests/data/%2", juice_root(), fixture);
@@ -190,12 +330,6 @@ run_juice_child :: (fixture: string, command: string, target := "") -> (Process_
     if target != "" array_add(*args, target);
     result, output, errors, _ := run_command(..args, working_directory = fixture_abs, capture_and_return_output = true);
     return result, output, errors;
-}
-
-expect_child_exit :: (name: string, result: Process_Result, want: s32) -> bool {
-    if result.type == .EXITED && result.exit_code == want return true;
-    print("[build child %1] exit result %2/%3, want %4\n", name, result.type, result.exit_code, want);
-    return false;
 }
 
 child_output_contains :: (name: string, output: string, needle: string) -> bool {
@@ -376,16 +510,8 @@ library_fixture_package :: () -> Package {
 
 // ===========================================================================
 // 旧 tests/ 测试文件顶层声明迁移（票 0032）——test 编排 seam 的记录 fake、
-// 缓存树扫描 helper 与 E2E child 场景 helper
+// 缓存树扫描 helper
 // ===========================================================================
-
-// Absolute path of juice.exe in the repository's target directory. The package
-// root comes from juice_root(): the test program executes at compile time in
-// the jai compiler child of juice, where the process working directory is the
-// entry file's directory (target/transpile), not the invocation cwd.
-test_command_juice_exe :: () -> string {
-    return tprint("%1/target/juice.exe", juice_root());
-}
 
 test_transpiled_files: [..] Test_Source_File;
 test_transpiled_numbers: [..] s64;
@@ -396,14 +522,6 @@ test_fake_diagnostic: string = "";
 // one canned diagnostic (for the rejection path). The key is canned too (flat
 // by construction): the orchestration only feeds it through the pure path
 // function.
-fake_key :: (rel: string) -> string {
-    result := copy_string(rel);
-    for i: 0..result.count-1 {
-        if result[i] == #char "/" result[i] = #char "_";
-    }
-    return tprint("key-%1", result);
-}
-
 fake_transpile :: (file: Test_Source_File, next_test_number: s64) -> Test_File_Output {
     array_add(*test_transpiled_files, file);
     array_add(*test_transpiled_numbers, next_test_number);
@@ -490,88 +608,15 @@ make_test_link :: (link: string, target: string, directory: bool, junction: bool
     return result.exit_code == 0;
 }
 
-run_juice_test :: (fixture: string, pattern := "") -> Process_Result, string, string {
-    juice := test_command_juice_exe();
-    fixture_abs := tprint("%1/tests/data/%2", juice_root(), fixture);
-    args: [..] string;
-    array_add(*args, juice);
-    array_add(*args, "test");
-    if pattern != "" array_add(*args, pattern);
-    result, output, errors, _ := run_command(..args, working_directory = fixture_abs, capture_and_return_output = true);
-    return result, output, errors;
-}
-
-expect_exit :: (name: string, result: Process_Result, want: s32) -> bool {
-    if result.type == .EXITED && result.exit_code == want return true;
-    print("[child %1] exit result %2/%3, want %4\n", name, result.type, result.exit_code, want);
-    return false;
-}
-
-// Normalize CRLF to LF so expected blocks are compared line by line
-// regardless of the child process's native line endings.
-normalize_crlf :: (s: string) -> string {
-    has_cr := false;
-    for ch: s {
-        if ch == #char "\r" {
-            has_cr = true;
-            break;
-        }
-    }
-    if !has_cr return s;
-    builder: String_Builder;
-    cursor := 0;
-    i := 0;
-    while i < s.count {
-        if s[i] == #char "\r" {
-            print_to_builder(*builder, "%", slice(s, cursor, i - cursor));
-            print_to_builder(*builder, "\n");
-            if i + 1 < s.count && s[i+1] == #char "\n" i += 1;
-            cursor = i + 1;
-        }
-        i += 1;
-    }
-    if cursor < s.count print_to_builder(*builder, "%", slice(s, cursor, s.count - cursor));
-    return builder_to_string(*builder);
-}
-
-output_matches :: (name: string, output: string, needles: [] string, want := true) -> bool {
-    normalized := normalize_crlf(output);
-    for needle: needles {
-        found := find_index_from_left(normalized, needle) >= 0;
-        if found != want {
-            print("[child %1] output %2 '%3'\n", name, ifx found then "unexpectedly contains" else "missing", needle);
-            print("  output was:\n%\n", output);
-            return false;
-        }
-    }
-    return true;
-}
-
-// 1-based line/column of the first occurrence of `needle` in `file`.
-fixture_line_col :: (file: string, needle: string) -> (line: s64, col: s64) {
-    source, ok := read_entire_file(file);
-    if !ok return 0, 0;
-    index := find_index_from_left(source, needle);
-    if index < 0 return 0, 0;
-    line := 1;
-    line_start := 0;
-    for i: 0..index-1 {
-        if source[i] == #char "\n" {
-            line += 1;
-            line_start = i + 1;
-        }
-    }
-    return line, index - line_start + 1;
-}
-
-// Direct children of the transpile tree: hash directories and the
-// regenerated driver.jai / first.jai products.
-Cache_Dir_Scan :: struct {
+// 目录扫描（转译树与 golden case 目录共用）：直接子项按文件/目录收集。
+// 历史上 Cache_Dir_Scan/Case_Dir_Scan 两对同形结构与 visitor 各自一份，
+// 已合并。
+Dir_Scan :: struct {
     dirs:  [..] string;
     files: [..] string;
 }
 
-cache_dir_scan_visitor :: (info: *File_Visit_Info, scan: *Cache_Dir_Scan) {
+dir_scan_visitor :: (info: *File_Visit_Info, scan: *Dir_Scan) {
     if info.is_directory {
         array_add(*scan.dirs, copy_string(info.short_name));
     } else {
@@ -579,118 +624,34 @@ cache_dir_scan_visitor :: (info: *File_Visit_Info, scan: *Cache_Dir_Scan) {
     }
 }
 
+dir_scan_entries :: (dir: string) -> (Dir_Scan, bool) {
+    scan: Dir_Scan;
+    visited := visit_files(dir, false, *scan, dir_scan_visitor, visit_files = true, visit_directories = true);
+    return scan, visited;
+}
+
+// 字节序字典比较（strcmp 语义）与插入排序。历史上 sort_strings（基于
+// String.compare）与 tp_sort_strings/tp_string_less（转译测试）两份同语义
+// 实现并存，已合并为显式字节序比较的一份。
+string_less :: (a: string, b: string) -> bool {
+    n := min(a.count, b.count);
+    for i: 0..n-1 {
+        if a[i] != b[i] return a[i] < b[i];
+    }
+    return a.count < b.count;
+}
+
 sort_strings :: (items: [] string) {
     for i: 1..items.count-1 {
         if i >= items.count break;
         key := items[i];
         j := i - 1;
-        while j >= 0 && compare(items[j], key) > 0 {
+        while j >= 0 && string_less(key, items[j]) {
             items[j+1] = items[j];
             j -= 1;
         }
         items[j+1] = key;
     }
-}
-
-cache_dir_entries :: (dir: string) -> (Cache_Dir_Scan, bool) {
-    scan: Cache_Dir_Scan;
-    visited := visit_files(dir, false, *scan, cache_dir_scan_visitor, visit_files = true, visit_directories = true);
-    return scan, visited;
-}
-
-// ===========================================================================
-// 旧 tests/ 测试文件顶层声明迁移（票 0032）——Testing 模块自测的记录全局与
-// child 场景 helper；Testing 自测所需的 helper 按决议同驻本文件，不驻
-// modules/Testing.jai 顶层
-// ===========================================================================
-
-g_reached := false;
-g_first_reached := false;
-g_second_reached := false;
-g_defer_ran := false;
-
-// The tests below drive Testing's run()/finish() directly, which resets the
-// global register. Each test drains leftover failures at its start into the
-// accumulator so the final latch test can still fail the suite — otherwise a
-// failure registered before a finish() call would be silently masked (in the
-// old per-executable harness each process was isolated). The scenario's own
-// counts are checked directly by the assertions instead.
-testing_module_failures: s64 = 0;
-
-testing_juice_exe :: () -> string {
-    return tprint("%1/target/juice.exe", juice_root());
-}
-
-testing_child_run :: (scenario: string) -> Process_Result, string, string {
-    juice := testing_juice_exe();
-    fixture_abs := tprint("%1/tests/data/testing-child/%2", juice_root(), scenario);
-    result, output, errors, _ := run_command(juice, "test", working_directory = fixture_abs, capture_and_return_output = true);
-    return result, output, errors;
-}
-
-testing_expect_exit :: (name: string, result: Process_Result, want: s32) -> bool {
-    if result.type == .EXITED && result.exit_code == want return true;
-    print("[child %1] exit result %2/%3, want %4\n", name, result.type, result.exit_code, want);
-    return false;
-}
-
-// Normalize CRLF to LF so expected blocks compare regardless of the child
-// process's native line endings.
-testing_normalize_crlf :: (s: string) -> string {
-    has_cr := false;
-    for ch: s {
-        if ch == #char "\r" {
-            has_cr = true;
-            break;
-        }
-    }
-    if !has_cr return s;
-    builder: String_Builder;
-    cursor := 0;
-    i := 0;
-    while i < s.count {
-        if s[i] == #char "\r" {
-            print_to_builder(*builder, "%", slice(s, cursor, i - cursor));
-            print_to_builder(*builder, "\n");
-            if i + 1 < s.count && s[i+1] == #char "\n" i += 1;
-            cursor = i + 1;
-        }
-        i += 1;
-    }
-    if cursor < s.count print_to_builder(*builder, "%", slice(s, cursor, s.count - cursor));
-    return builder_to_string(*builder);
-}
-
-testing_output_matches :: (name: string, output: string, needles: [] string, want := true) -> bool {
-    normalized := testing_normalize_crlf(output);
-    for needle: needles {
-        found := find_index_from_left(normalized, needle) >= 0;
-        if found != want {
-            print("[child %1] output %2 '%3'\n", name, ifx found then "unexpectedly contains" else "missing", needle);
-            print("  output was:\n%\n", output);
-            return false;
-        }
-    }
-    return true;
-}
-
-// 1-based line and character column of the first occurrence of `needle` in
-// `file`; 0,0 if the source cannot be read or the needle is missing. Used to
-// build the expected failure lines without hardcoding line numbers.
-testing_line_col :: (file: string, needle: string) -> (line: s64, col: s64) {
-    source, ok := read_entire_file(file);
-    if !ok return 0, 0;
-    index := find_index_from_left(source, needle);
-    if index < 0 return 0, 0;
-    line := 1;
-    line_start := 0;
-    for i: 0..index-1 {
-        if source[i] == #char "\n" {
-            line += 1;
-            line_start = i + 1;
-        }
-    }
-    return line, index - line_start + 1;
 }
 
 // ===========================================================================
@@ -814,27 +775,6 @@ read_case_config :: (dir: string) -> Case_Config {
     return config;
 }
 
-tp_string_less :: (a: string, b: string) -> bool {
-    n := min(a.count, b.count);
-    for i: 0..n-1 {
-        if a[i] != b[i] return a[i] < b[i];
-    }
-    return a.count < b.count;
-}
-
-tp_sort_strings :: (list: [..] string) {
-    for i: 1..list.count-1 {
-        if i >= list.count break;
-        key := list[i];
-        j := i - 1;
-        while j >= 0 && tp_string_less(key, list[j]) {
-            list[j+1] = list[j];
-            j -= 1;
-        }
-        list[j+1] = key;
-    }
-}
-
 // A case directory's input files in production scan order (issue 0003,
 // ticket 0019): within each directory, files first (lexicographic by name),
 // then subdirectories (lexicographic), recursing. The driver golden derives
@@ -846,11 +786,10 @@ collect_case_files :: (dir: string) -> [..] string {
 }
 
 collect_case_files_rec :: (dir: string, rel_prefix: string, files: *[..] string) {
-    scan: Case_Dir_Scan;
-    visited := visit_files(dir, false, *scan, case_dir_scan_visitor, visit_files = true, visit_directories = true);
+    scan, visited := dir_scan_entries(dir);
     if !visited return;
-    tp_sort_strings(scan.files);
-    tp_sort_strings(scan.dirs);
+    sort_strings(scan.files);
+    sort_strings(scan.dirs);
     for name: scan.files {
         // driver.jai / first.jai are the case's own expected products,
         // never inputs.
@@ -861,19 +800,6 @@ collect_case_files_rec :: (dir: string, rel_prefix: string, files: *[..] string)
     for name: scan.dirs {
         if name.count > 0 && name[0] == #char "." continue;
         collect_case_files_rec(tprint("%1/%2", dir, name), tprint("%1%2/", rel_prefix, name), files);
-    }
-}
-
-Case_Dir_Scan :: struct {
-    files: [..] string;
-    dirs:  [..] string;
-}
-
-case_dir_scan_visitor :: (info: *File_Visit_Info, scan: *Case_Dir_Scan) {
-    if info.is_directory {
-        array_add(*scan.dirs, copy_string(info.short_name));
-    } else {
-        array_add(*scan.files, copy_string(info.short_name));
     }
 }
 
@@ -1020,78 +946,4 @@ run_negative_cases :: (update: bool) -> bool {
         if !compare_or_update(tprint("%1/diagnostic.txt", dir), builder_to_string(*rendered), update) all_ok = false;
     }
     return all_ok;
-}
-
-tp_juice_exe :: () -> string {
-    return tprint("%1/target/juice.exe", juice_root());
-}
-
-tp_run_juice_test :: (fixture: string, pattern := "") -> Process_Result, string, string {
-    juice := tp_juice_exe();
-    fixture_abs := tprint("%1/tests/data/transpile/run/%2", juice_root(), fixture);
-    args: [..] string;
-    array_add(*args, juice);
-    array_add(*args, "test");
-    if pattern != "" array_add(*args, pattern);
-    result, output, errors, _ := run_command(..args, working_directory = fixture_abs, capture_and_return_output = true);
-    return result, output, errors;
-}
-
-tp_expect_exit :: (name: string, result: Process_Result, want: s32) -> bool {
-    if result.type == .EXITED && result.exit_code == want return true;
-    print("[run %1] exit result %2/%3, want %4\n", name, result.type, result.exit_code, want);
-    return false;
-}
-
-// Normalize CRLF to LF so expected blocks compare regardless of the child
-// process's native line endings.
-tp_normalize_crlf :: (s: string) -> string {
-    has_cr := false;
-    for ch: s {
-        if ch == #char "\r" {
-            has_cr = true;
-            break;
-        }
-    }
-    if !has_cr return s;
-    builder: String_Builder;
-    cursor := 0;
-    i := 0;
-    while i < s.count {
-        if s[i] == #char "\r" {
-            print_to_builder(*builder, "%", slice(s, cursor, i - cursor));
-            print_to_builder(*builder, "\n");
-            if i + 1 < s.count && s[i+1] == #char "\n" i += 1;
-            cursor = i + 1;
-        }
-        i += 1;
-    }
-    if cursor < s.count print_to_builder(*builder, "%", slice(s, cursor, s.count - cursor));
-    return builder_to_string(*builder);
-}
-
-tp_output_matches :: (name: string, output: string, needles: [] string, want := true) -> bool {
-    normalized := tp_normalize_crlf(output);
-    for needle: needles {
-        found := find_index_from_left(normalized, needle) >= 0;
-        if found != want {
-            print("[run %1] output %2 '%3'\n", name, ifx found then "unexpectedly contains" else "missing", needle);
-            print("  output was:\n%\n", output);
-            return false;
-        }
-    }
-    return true;
-}
-
-// 1-based line of the first occurrence of `needle` in `file`; 0 when missing.
-fixture_line :: (file: string, needle: string) -> s64 {
-    source, ok := read_entire_file(file);
-    if !ok return 0;
-    index := find_index_from_left(source, needle);
-    if index < 0 return 0;
-    line := 1;
-    for i: 0..index-1 {
-        if source[i] == #char "\n" line += 1;
-    }
-    return line;
 }

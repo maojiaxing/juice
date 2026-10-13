@@ -135,6 +135,9 @@ compile_artifact_plan :: (driver: *Build_Driver, plan: Artifact_Plan, entry: str
 // directly; the directory holding its STRIP view (which contains a file
 // named Testing.jai) is prepended to the import path, so `#import "Testing"`
 // resolves to the test-free view instead of the module source file.
+// 哨兵约定："" 表示「未启用编译视图特例」——与 testing_module_strip_view_dir
+// 的返回值、Test 的 generate_test_metaprogram 参数同一约定（生成输出与
+// 特例前逐字节一致）。
 generate_build_metaprogram :: (driver: *Build_Driver, plan: Artifact_Plan, entry: string, testing_view_dir: string = "") -> string {
     builder: String_Builder;
     print_to_builder(*builder, "#import \"Basic\";\n");
@@ -551,7 +554,7 @@ test "Build forwards each prepared plan to compilation" {
     expect(test_build_transpiled_files[closure.count - 1] == "src/main.jai");
     // Compilation receives the entry file's (fake) strip view, not the
     // original source path.
-    entry_view := tprint("%1/target/transpile/%2/src/main.jai", root, build_fake_key("src/main.jai"));
+    entry_view := tprint("%1/target/transpile/%2/src/main.jai", root, fake_key("src/main.jai"));
     expect(test_compiled_entry == entry_view);
     expect(file_exists(entry_view));
     expect(test_compiled_plan.target.name == "beta" && test_compiled_plan.artifact_path == tprint("%1/target/beta.exe", root));
@@ -641,14 +644,14 @@ test "Build front: a test closure is viewed all-or-nothing with load rewrites" {
     expect(test_build_transpiled_files[0] == "src/math.jai" && test_build_transpiled_files[1] == "src/main.jai");
 
     // The entry's load rewrite points at the child's fake view path.
-    math_view := tprint("%1/target/transpile/%2/src/math.jai", root, build_fake_key("src/math.jai"));
+    math_view := tprint("%1/target/transpile/%2/src/math.jai", root, fake_key("src/math.jai"));
     expect(test_build_transpiled_rewrites.count == 1);
     expect(test_build_transpiled_rewrites[0] == tprint("src/math.jai -> %1", math_view));
 
     // The fake views were written content-addressed; the compile seam
     // received the entry file's fake view exactly once.
     expect(test_build_compile_calls == 1);
-    entry_view := tprint("%1/target/transpile/%2/src/main.jai", root, build_fake_key("src/main.jai"));
+    entry_view := tprint("%1/target/transpile/%2/src/main.jai", root, fake_key("src/main.jai"));
     expect(test_build_compiled_entries[0] == entry_view);
     main_view, ok := read_entire_file(entry_view);
     expect(ok && main_view == "// fake build view of src/main.jai\n");
@@ -778,7 +781,7 @@ test "Build strip keeps unrewritable loads verbatim" {
 
 // ---------------------------------------------------------------------------
 // E2E child scenarios: real juice.exe on fixture packages（juice_exe、
-// run_juice_child、expect_child_exit、child_output_contains 见
+// run_juice_child、expect_exit、child_output_contains 见
 // src/test_support.jai）。
 // ---------------------------------------------------------------------------
 
@@ -791,14 +794,14 @@ test "E2E: embedded-tests package builds through strip views" {
     defer delete_directory_full(tprint("%1/target", fixture_root));
 
     result, output, _ := run_juice_child("test-package", "build");
-    expect(expect_child_exit("build", result, 0));
+    expect(expect_exit("build", result, 0, "build child"));
     expect(child_output_contains("build", output, "[juice Build] Compiling Target 'test-package' (src/main.jai) -> target/..."));
 
     // The artifact exists and behaves like the original program.
     artifact := tprint("%1/target/test-package.exe", fixture_root);
     expect(file_exists(artifact));
     run_result, run_output, _, _ := run_command(artifact, capture_and_return_output = true);
-    expect(expect_child_exit("artifact", run_result, 0));
+    expect(expect_exit("artifact", run_result, 0, "build child"));
     expect(child_output_contains("artifact", run_output, "hello from test-package"));
 
     // Both closure files have strip views at their pure-contract paths.
@@ -832,7 +835,7 @@ test "E2E: test-free package builds with zero transpile" {
     defer delete_directory_full(tprint("%1/target", fixture_root));
 
     result, output, _ := run_juice_child("build-empty", "build");
-    expect(expect_child_exit("build-empty", result, 0));
+    expect(expect_exit("build-empty", result, 0, "build child"));
     expect(file_exists(tprint("%1/target/build-empty.exe", fixture_root)));
     expect(!file_exists(tprint("%1/target/transpile", fixture_root)));
 }

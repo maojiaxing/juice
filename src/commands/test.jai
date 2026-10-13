@@ -251,7 +251,7 @@ test_prepared_workspace :: (
         }
     }
 
-    // 5. The Testing module compile view: a session product like driver.jai
+    // 6. The Testing module compile view: a session product like driver.jai
     //    (regenerated on every run, never cached — its content is the module
     //    view plus the driver-specific support block, not the pure transpile
     //    output). Its directory is prepended to the metaprogram's import
@@ -259,6 +259,8 @@ test_prepared_workspace :: (
     //    under target/ directly — outside the transpile tree, whose direct
     //    children the cache-tree tests assert to be exactly the hash
     //    directories plus driver.jai/first.jai.
+    // 哨兵："" 表示「未启用编译视图特例」（use_testing_view 为 false），与
+    // 各生成器的 testing_view_dir/testing_module_view 同一约定。
     testing_module_dir := "";
     if use_testing_view {
         testing_module_dir = to_forward_slashes(tprint("%1/target/testing-module", prepared.discovery.root_dir));
@@ -273,7 +275,7 @@ test_prepared_workspace :: (
         }
     }
 
-    // 6. Driver and metaprogram are products of this run's test list, so
+    // 7. Driver and metaprogram are products of this run's test list, so
     //    they are regenerated and written on every run, never cached.
     driver_path := tprint("%1/driver.jai", transpile_dir);
     metaprogram_path := tprint("%1/first.jai", transpile_dir);
@@ -315,37 +317,28 @@ testing_module_source :: (prepared: *Prepared_Workspace) -> (file: Test_Source_F
 }
 
 // The self-test support block appended to the EXPAND module compile view
-// (ticket 0033): file-scoped imports plus the Testing self-test segment of
-// the test support view, under #scope_file so the declarations stay in the
-// module compile view's file scope (they must not enter the module's export
-// list — the driver #loads the same view into the application scope and
-// duplicates there would clash). The segment's helpers call juice_root();
-// the test support file's own juice_root depends on src/path_safety
-// declarations the sealed module cannot see, so the block provides a
-// self-contained root instead: the test metaprogram sets intermediate_path
-// to the package target directory (absolute), so stripping the tail yields
-// the package root without path normalization. Returns "" when the segment
-// marker is missing.
+// (ticket 0033): the Testing self-test segment of the test support view, cut
+// out by the stable machine markers in src/test_support.jai — 段标记是稳定
+// 锚点，段内注释改名不再破坏切段——under #scope_file so the declarations
+// stay in the module compile view's file scope (they must not enter the
+// module's export list — the driver #loads the same view into the
+// application scope and duplicates there would clash). The segment carries
+// its own self-contained juice_root (the module is a sealed scope and cannot
+// see the src/path_safety declarations the rest of the test support file
+// relies on). Returns "" when a marker is missing.
 testing_module_support_block :: (support_view: string) -> string {
-    marker := "// 旧 tests/ 测试文件顶层声明迁移（票 0032）——Testing 模块自测的记录全局与";
-    pos := find_index_from_left(support_view, marker);
-    if pos < 0 return "";
-    // Back to the start of the marker's line, then to the start of the
-    // separator line above it.
-    while pos > 0 && support_view[pos - 1] != #char "\n" pos -= 1;
-    if pos > 0 {
-        pos -= 1;
-        while pos > 0 && support_view[pos - 1] != #char "\n" pos -= 1;
-    }
-    // The segment ends where the next migration section begins.
-    end_marker := "// 旧 tests/ 测试文件顶层声明迁移（票 0032）——golden/negative harness 与";
-    end_pos := find_index_from_left(support_view, end_marker);
-    if end_pos < 0 {
-        end_pos = support_view.count;
-    } else {
-        while end_pos > 0 && support_view[end_pos - 1] != #char "\n" end_pos -= 1;
-    }
-    segment := slice(support_view, pos, end_pos - pos);
+    // 定位标记行：标记必须独占其行，按「换行 + 标记」锚定，注释正文中的
+    // 提及不会误命中。
+    begin := find_index_from_left(support_view, "\n// __testing_module_support_begin__");
+    if begin < 0 return "";
+    begin += 1;
+    end := find_index_from_left(support_view, "\n// __testing_module_support_end__");
+    if end < 0 return "";
+    end += 1;
+    // 段含结束标记行整行（标记注释随段进入模块视图，注明来源与纪律）。
+    while end < support_view.count && support_view[end] != #char "\n" end += 1;
+    if end < support_view.count end += 1;
+    segment := slice(support_view, begin, end - begin);
 
     builder: String_Builder;
     print_to_builder(*builder, "#scope_file;\n");
@@ -354,13 +347,6 @@ testing_module_support_block :: (support_view: string) -> string {
     print_to_builder(*builder, "#import \"File\";\n");
     print_to_builder(*builder, "#import \"Process\";\n");
     print_to_builder(*builder, "#import \"String\";\n");
-    print_to_builder(*builder, "\n");
-    print_to_builder(*builder, "juice_root :: () -> string {\n");
-    print_to_builder(*builder, "    options := get_build_options();\n");
-    print_to_builder(*builder, "    root := path_strip_filename(options.intermediate_path);\n");
-    print_to_builder(*builder, "    while root.count > 0 && (root[root.count - 1] == #char \"/\" || root[root.count - 1] == #char \"\\\\\") root.count -= 1;\n");
-    print_to_builder(*builder, "    return root;\n");
-    print_to_builder(*builder, "}\n");
     print_to_builder(*builder, "\n");
     print_to_builder(*builder, "%", segment);
     return builder_to_string(*builder);
@@ -394,6 +380,8 @@ juice_modules_dir :: () -> string {
 // absolute path of the generated Testing module compile view. When set, the
 // module's self-test blocks run through it and its path-mapping entry prints
 // module failure coordinates as the package-relative "modules/Testing.jai".
+// 哨兵约定："" 表示「未启用编译视图特例」——与 generate_test_metaprogram 的
+// testing_view_dir 同一约定（生成输出与特例前逐字节一致）。
 generate_test_driver :: (files: [] Test_Source_File, view_paths: [] string, matches: [] Test_Entry, testing_module_view: string = "") -> string {
     builder: String_Builder;
     print_to_builder(*builder, "#import \"Basic\";\n\n");
@@ -434,6 +422,9 @@ generate_test_driver :: (files: [] Test_Source_File, view_paths: [] string, matc
 // directly; the directory holding its EXPAND view (which contains a file
 // named Testing.jai) is prepended to the import path, so `#import "Testing"`
 // resolves to the view instead of the module source file.
+// 哨兵约定："" 表示「未启用编译视图特例」——与 Build 的
+// generate_build_metaprogram 参数、bootstrap build.jai 的 testing_view_dir
+// 同一约定（生成输出与特例前逐字节一致）。
 generate_test_metaprogram :: (driver_path: string, modules_dir: string, target_dir: string, testing_view_dir: string = "") -> string {
     builder: String_Builder;
     print_to_builder(*builder, "#import \"Basic\";\n");
@@ -633,7 +624,7 @@ test_file_rel_path :: (absolute: string, root: string) -> string {
 // 的编排 seam（记录 fake：转译步骤按文件调用、fake 视图流入生成的 driver、
 // compile seam 收到生成产物）、全量 discovery 扫描（排除集、member 边界、
 // 链接跳过、确定性顺序）与 fixture package 的 E2E child 场景。共享声明
-// （test_command_juice_exe、seam 记录 fake 与记录全局、缓存树扫描 helper、
+// （juice_exe、seam 记录 fake 与记录全局、缓存树扫描 helper、
 // E2E child 场景 helper）见 src/test_support.jai。
 // ---------------------------------------------------------------------------
 
@@ -1004,8 +995,8 @@ test "E2E: repeated scans are byte-stable" {
 // ---------------------------------------------------------------------------
 
 // Direct children of the transpile tree: hash directories and the
-// regenerated driver.jai / first.jai products。Cache_Dir_Scan 结构、
-// cache_dir_scan_visitor、sort_strings、cache_dir_entries 见
+// regenerated driver.jai / first.jai products。Dir_Scan 结构、
+// dir_scan_visitor、sort_strings、dir_scan_entries 见
 // src/test_support.jai。
 
 test "E2E: cached views match the pure contract and hit on repeats" {
@@ -1044,7 +1035,7 @@ test "E2E: cached views match the pure contract and hit on repeats" {
     expect(path_exists_as_regular_file(tprint("%1/driver.jai", transpile_dir)));
     expect(path_exists_as_regular_file(tprint("%1/first.jai", transpile_dir)));
     // The tree holds exactly the expected hash directories, nothing else.
-    scan, ok3 := cache_dir_entries(transpile_dir);
+    scan, ok3 := dir_scan_entries(transpile_dir);
     expect(ok3);
     if scan.files.count != 2 || scan.dirs.count != expected_keys.count {
         print("[child cache] transpile tree has %1 dirs, %2 files; want %3, 2\n", scan.dirs.count, scan.files.count, expected_keys.count);
@@ -1063,7 +1054,7 @@ test "E2E: cached views match the pure contract and hit on repeats" {
     result2, output2, _ := run_juice_test("test-package");
     expect(expect_exit("cache-hit", result2, 0));
     expect(normalize_crlf(output) == normalize_crlf(output2));
-    scan2, ok4 := cache_dir_entries(transpile_dir);
+    scan2, ok4 := dir_scan_entries(transpile_dir);
     expect(ok4 && scan2.files.count == 2 && scan2.dirs.count == expected_keys.count);
     sort_strings(scan2.dirs);
     for i: 0..sorted_expected.count-1 {
@@ -1074,7 +1065,7 @@ test "E2E: cached views match the pure contract and hit on repeats" {
     }
 }
 
-// cache_dir_entries 见 src/test_support.jai。
+// dir_scan_entries 见 src/test_support.jai。
 
 // Content addressing without active cleanup: changing a source creates a new
 // hash directory next to the old one, and both hold their views.
@@ -1089,7 +1080,7 @@ test "E2E: a content change creates a new hash directory" {
     expect(write_entire_file(tprint("%1/src/check.jai", root), source1));
 
     root_abs := lexical_absolute_path(root);
-    juice := test_command_juice_exe();
+    juice := juice_exe();
     result1, output1, _, _ := run_command(juice, "test", working_directory = root_abs, capture_and_return_output = true);
     expect(expect_exit("cache-change-1", result1, 0));
     expect(output_matches("cache-change-1", output1, string.["[juice Test] Found 1 tests; compiling test program...", "1 passed, 0 failed\n"]));
@@ -1121,7 +1112,7 @@ test "E2E: clean removes the transpile cache with the target directory" {
     transpile_dir := tprint("%1/tests/data/test-package/target/transpile", juice_root());
     expect(path_exists_as_directory(transpile_dir));
 
-    juice := test_command_juice_exe();
+    juice := juice_exe();
     fixture_abs := tprint("%1/tests/data/test-package", juice_root());
     clean_result, _, _, _ := run_command(juice, "clean", working_directory = fixture_abs, capture_and_return_output = true);
     expect(expect_exit("clean", clean_result, 0));

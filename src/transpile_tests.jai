@@ -371,40 +371,40 @@ test "Negative cases" {
 // package-level fixtures under tests/data/transpile/run/, executed end to
 // end via the real juice.exe `test` command; exit codes and the output
 // contract are asserted (no full-output goldens)。Run matrix helper
-// （tp_juice_exe、tp_run_juice_test、tp_expect_exit、tp_normalize_crlf、
-// tp_output_matches、fixture_line）见 src/test_support.jai。
+// （juice_exe、run_juice_test、expect_exit、normalize_crlf、output_matches、
+// fixture_line_col）见 src/test_support.jai。
 // ---------------------------------------------------------------------------
 
 // LIB packages have no effective target; `juice test` still discovers and
 // runs every test in the package (spec 0013 US 23).
 test "Run: LIB package passes via juice test" {
-    result, output, _ := tp_run_juice_test("lib-package");
-    expect(tp_expect_exit("lib", result, 0));
-    expect(tp_output_matches("lib", output, string.["[juice Test] Found 3 tests; compiling test program..."]));
-    anon_line := fixture_line(tprint("%1/tests/data/transpile/run/lib-package/module.jai", juice_root()), "test {");
+    result, output, _ := run_juice_test("lib-package", fixture_base = "tests/data/transpile/run/");
+    expect(expect_exit("lib", result, 0, "run"));
+    expect(output_matches("lib", output, string.["[juice Test] Found 3 tests; compiling test program..."], tag = "run"));
+    anon_line, _ := fixture_line_col(tprint("%1/tests/data/transpile/run/lib-package/module.jai", juice_root()), "test {");
     expect(anon_line != 0);
-    expect(tp_output_matches("lib", output, string.[
+    expect(output_matches("lib", output, string.[
         tprint("[test] lib arithmetic\n[test] lib strings\n[test] module.jai:%1\n3 passed, 0 failed\n", anon_line),
-    ]));
+    ], tag = "run"));
 }
 
 // Pattern filtering end to end: a hit runs exactly the matched tests, a
 // zero-hit pattern succeeds with an explanation and skips the build
 // (spec 0013 US 16/17).
 test "Run: pattern hit filters the executed tests" {
-    result, output, _ := tp_run_juice_test("lib-package", "strings");
-    expect(tp_expect_exit("pattern-hit", result, 0));
-    expect(tp_output_matches("pattern-hit", output, string.[
+    result, output, _ := run_juice_test("lib-package", "strings", fixture_base = "tests/data/transpile/run/");
+    expect(expect_exit("pattern-hit", result, 0, "run"));
+    expect(output_matches("pattern-hit", output, string.[
         "[juice Test] Found 1 tests; compiling test program...",
         "[test] lib strings\n1 passed, 0 failed\n",
-    ]));
-    expect(tp_output_matches("pattern-hit", output, string.["[test] lib arithmetic"], want = false));
+    ], tag = "run"));
+    expect(output_matches("pattern-hit", output, string.["[test] lib arithmetic"], want = false, tag = "run"));
 }
 
 test "Run: zero-hit pattern succeeds with an explanation" {
-    result, output, _ := tp_run_juice_test("lib-package", "zzz");
-    expect(tp_expect_exit("pattern-zero", result, 0));
-    expect(tp_output_matches("pattern-zero", output, string.["[juice Test] No tests matched 'zzz'."]));
+    result, output, _ := run_juice_test("lib-package", "zzz", fixture_base = "tests/data/transpile/run/");
+    expect(expect_exit("pattern-zero", result, 0, "run"));
+    expect(output_matches("pattern-zero", output, string.["[juice Test] No tests matched 'zzz'."], tag = "run"));
 }
 
 // Crash semantics (spec 0013 US 28): a bare assert inside a test crashes the
@@ -412,18 +412,18 @@ test "Run: zero-hit pattern succeeds with an explanation" {
 // summary; the crash point stays attributable by the [test] start line, and
 // the compiler's own assert noise surfaces on stderr.
 test "Run: bare-assert crash is non-zero without clean attribution" {
-    result, output, errors := tp_run_juice_test("crash-package");
+    result, output, errors := run_juice_test("crash-package", fixture_base = "tests/data/transpile/run/");
     if result.type != .EXITED || result.exit_code == 0 {
         print("[run crash] exit result %1/%2, want non-zero\n", result.type, result.exit_code);
     }
     expect(result.type == .EXITED && result.exit_code != 0);
-    expect(tp_output_matches("crash", output, string.[
+    expect(output_matches("crash", output, string.[
         "[test] crashy",
         "[juice ERROR] Test compilation failed.",
-    ]));
+    ], tag = "run"));
     // No clean attribution: no mapped original-path failure line on stdout...
-    expect(tp_output_matches("crash", output, string.["src/main.jai:"], want = false));
+    expect(output_matches("crash", output, string.["src/main.jai:"], want = false, tag = "run"));
     // ...and no N passed / M failed summary.
-    expect(tp_output_matches("crash", output, string.[" passed, "], want = false));
-    expect(tp_output_matches("crash", errors, string.["Assertion failed!"]));
+    expect(output_matches("crash", output, string.[" passed, "], want = false, tag = "run"));
+    expect(output_matches("crash", errors, string.["Assertion failed!"], tag = "run"));
 }

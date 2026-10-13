@@ -264,14 +264,19 @@ bootstrap_strip_front :: (entry_rel: string, use_view: *bool, entry_view: *strin
     // 析到模块源文件。模块含 test block 时把 STRIP 视图写到
     // target/testing-module/Testing.jai 并把其目录前置进 import path——
     // 与 Build command 的 testing_module_strip_view_dir 同路径同语义
-    // （各自运行前重写；juice test 运行时再写 EXPAND 视图）。目录必须排
-    // 在默认 import path 之前：默认首条 "modules" 以本 metaprogram 所在
-    // 目录（仓库根）为基准解析，会先命中含 test block 的模块源文件。
-    // 模块 test-free 或不存在时 testing_view_dir 保持 ""，零变化。
+    // （ADR 0006：本文件是自举 metaprogram、不 #load 运行时源码，此处为
+    // bootstrap 内嵌复制，两处实现保持对称；各自运行前重写，juice test
+    // 运行时再写 EXPAND 视图）。目录必须排在默认 import path 之前：默认
+    // 首条 "modules" 以本 metaprogram 所在目录（仓库根）为基准解析，会先
+    // 命中含 test block 的模块源文件。模块 test-free 或不存在时
+    // testing_view_dir 保持 ""，零变化。
     // -------------------------------------------------------------
+    // 哨兵约定：testing_view_dir == "" 表示「未启用编译视图特例」——与
+    // Build command 的 testing_module_strip_view_dir 返回值、Test command
+    // 的 generate_test_metaprogram 参数同一约定。
     testing_view_dir := "";
-    testing_module_abs := "modules/Testing.jai";
-    module_source, ok := read_entire_file(testing_module_abs);
+    testing_module_rel := "modules/Testing.jai";
+    module_source, ok := read_entire_file(testing_module_rel);
     if ok && source_has_test_block(module_source) {
         ctx: Transpile_Context;
         ctx.mode = .STRIP;

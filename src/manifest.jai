@@ -198,7 +198,10 @@ parse_manifest_data :: (content: string) -> Package {
 }
 
 // FNV-1a 64 位散列 → 16 位小写十六进制（本地复制：与 src/transpile_cache.jai
-// 的 hash_hex 同语义；#load 是文件作用域，声明跨文件不共享）。
+// 的 hash_hex 同语义）。#load 注入的声明跨文件共享（如 to_forward_slashes），
+// 但仅对 #load 语句之后加载的文件可见：main.jai 中 manifest.jai 先于
+// transpile_cache.jai 加载，故此处不可见 hash_hex 声明；调整 #load 顺序会
+// 牵动生产构建链（transpile_cache 依赖 transpile.jai 的类型），保持复制。
 manifest_hash_hex :: (s: string) -> string {
     hash := fnv1a_hash(s.data, s.count);
     out: [16] u8;

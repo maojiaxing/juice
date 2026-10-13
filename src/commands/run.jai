@@ -151,7 +151,7 @@ test "E2E: run inherits strip semantics through build" {
     defer delete_directory_full(tprint("%1/target", fixture_root));
 
     result, output, _ := run_juice_child("test-package", "run");
-    expect(expect_child_exit("run", result, 0));
+    expect(expect_exit("run", result, 0, "build child"));
     expect(child_output_contains("run", output, "[juice Run] Launching"));
     expect(child_output_contains("run", output, "hello from test-package"));
 }
