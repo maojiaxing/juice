@@ -15,13 +15,12 @@ Juice uses an explicit static command registry and prerequisite Dispatcher. Each
 | `src/commands/test.jai` | Test declaration, argument contract, discovery scan, transpile orchestration, driver generation, and the Testing module view special case |
 | `src/dispatcher.jai` | Registry validation, lookup, planning, and execution; production and test registries share it |
 | `src/workspace.jai` | Workspace discovery, member validation, the discovery/preparation state machine, and the command-side prepared-workspace guard |
-| `src/dependency.jai` | Dependency fetching and workspace-member lookup over the discovery snapshot |
-| `src/driver.jai` | Process-wide driver: package root, dependency directory, and XDG cache/data/config paths |
+| `src/dependency.jai` | Dependency fetching, workspace-member lookup over the discovery snapshot, and the local dependency directory derivation (`packages_dir`) |
 | `src/target.jai` | Shared effective-target resolution, artifact plans, and artifact-path revalidation |
 | `src/path_safety.jai` | Shared filesystem/path inspection and validation, plus the juice modules directory derivation |
 | `src/transpile_cache.jai` | Pure content-addressed cache keys/paths for transpiled views, and the transpile subtree root |
 | `src/metaprogram.jai` | Shared compiler metaprogram generator (one-shot workspace/intercept/message-loop skeleton) consumed by Build and Test |
-| `src/main.jai` | File loading, driver initialization, CLI argument slicing, and dispatch |
+| `src/main.jai` | File loading, context initialization (package root and cache paths), CLI argument slicing, and dispatch |
 
 Command metadata, prerequisites, visibility, handlers, and the argument contract are declared in the owning command file. Handlers print usage from their own declaration rather than maintaining a second usage string. Adding a command requires adding its file to the load list and its declaration to the registry; no automatic registration is involved.
 

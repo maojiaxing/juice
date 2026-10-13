@@ -9,7 +9,6 @@
 #load "workspace.jai";
 #load "target.jai";
 #load "dependency.jai";
-#load "driver.jai";
 #load "transpile.jai";
 #load "transpile_cache.jai";
 #load "metaprogram.jai";
@@ -32,18 +31,12 @@ main :: () {
         for i: 2..args.count-1 array_add(*command_arguments, args[i]);
     }
 
-    driver: Build_Driver;
-    driver.root_dir     = get_working_directory();
-    // 依赖导入 shim 落 target/packages/（target directory 的一部分）。
-    driver.packages_dir = tprint("%1/target/packages", driver.root_dir);
-
-    // 初始化 XDG 路径
-    driver.cache_dir    = tprint("%1/juice", get_cache_home());
-    driver.data_dir     = tprint("%1/juice", get_data_home());
-    driver.config_dir   = tprint("%1/juice", get_config_home());
-
     ctx: Command_Context;
-    ctx.driver = *driver;
+    ctx.root_dir = get_working_directory();
+    // Juice 管理的缓存（manifest 求值临时文件、git 仓库缓存）落 XDG cache
+    // home；packages_dir 等其余派生路径由各自持有者从 root_dir 推导
+    // （票 0038：Build_Driver 拆解）。
+    ctx.cache_dir = tprint("%1/juice", get_cache_home());
     result := dispatch_command(COMMAND_REGISTRY, command, *ctx, command_arguments);
     if !result.success exit(1);
 }

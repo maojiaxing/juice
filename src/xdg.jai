@@ -44,31 +44,9 @@ get_user_home_directory :: () -> string {
     }
 }
 
-get_config_home :: () -> string {
-	#if OS == .WINDOWS {
-		app_data := get_env("APPDATA");
-		if app_data && app_data != "" return app_data;
-        return tprint("%1/AppData/Roaming", get_user_home_directory());
-	} else {
-        config_home := get_env("XDG_CONFIG_HOME");
-        if config_home && config_home != "" {
-        	return config_home;
-        }
-        return tprint("%1/.config", get_user_home_directory());
-    }
-}
-
-get_data_home :: () -> string {
-	#if OS == .WINDOWS {
-        local_app_data := get_env("LOCALAPPDATA");
-        if local_app_data && local_app_data != "" return local_app_data;
-        return tprint("%1/AppData/Local", get_user_home_directory());
-    } else {
-        data_home := get_env("XDG_DATA_HOME");
-        if data_home && data_home != "" return data_home;
-        return tprint("%1/.local/share", get_user_home_directory());
-    }
-}
+// 票 0038：get_config_home/get_data_home 曾只服务 Build_Driver 的
+// config_dir/data_dir 死字段，随拆解删除（get_cache_home 保留，manifest
+// 求值器与 git 缓存用）。
 
 get_cache_home :: () -> string {
 	#if OS == .WINDOWS {

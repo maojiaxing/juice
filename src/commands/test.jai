@@ -32,9 +32,9 @@ test_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     prepared := require_prepared_workspace("test", *ctx.workspace);
     if prepared == null return false;
     pattern := ifx arguments.count == 1 then arguments[0] else "";
-    files, ok := collect_test_files(ctx.driver, prepared);
+    files, ok := collect_test_files(prepared);
     if !ok return false;
-    return test_prepared_workspace(ctx.driver, prepared, pattern, files);
+    return test_prepared_workspace(prepared, pattern, files);
 }
 
 // One test source file: the package-relative path ("/" separated, mirrors the
@@ -76,7 +76,7 @@ transpile_test_file :: (file: Test_Source_File, next_test_number: s64) -> Test_F
     return output;
 }
 
-compile_test_program :: (driver: *Build_Driver, transpile_dir: string, driver_path: string, metaprogram_path: string) -> bool {
+compile_test_program :: (transpile_dir: string, driver_path: string, metaprogram_path: string) -> bool {
     // -quiet strips the compiler's banner and stats; the test program's
     // compile-time output (start lines, failures, summary) passes through
     // untouched, and the jai exit code carries pass/fail (issues/0006).
@@ -90,14 +90,14 @@ compile_test_program :: (driver: *Build_Driver, transpile_dir: string, driver_pa
 
 // The orchestration seam (spec 0013 Testing Decisions): the production
 // handler uses the default transpile and compile operations; tests inject
-// recording fakes, exactly like the build compile seam.
+// recording fakes, exactly like the build compile seam. 票 0038：Test 不再
+// 接收任何路径——货载透传清零，编译 seam 只收生成产物路径。
 test_prepared_workspace :: (
-    driver: *Build_Driver,
     prepared: *Prepared_Workspace,
     pattern: string,
     files: [] Test_Source_File,
     transpile: #type (file: Test_Source_File, next_test_number: s64) -> Test_File_Output = transpile_test_file,
-    compile: #type (driver: *Build_Driver, transpile_dir: string, driver_path: string, metaprogram_path: string) -> bool = compile_test_program
+    compile: #type (transpile_dir: string, driver_path: string, metaprogram_path: string) -> bool = compile_test_program
 ) -> bool {
     // 1. Transpile every file in list order, numbering tests globally.
     //    Diagnostics are rejected with the original file coordinates.
@@ -291,7 +291,7 @@ test_prepared_workspace :: (
         print("[juice ERROR] Could not write test metaprogram.\n");
         return false;
     }
-    return compile(driver, transpile_dir, driver_path, metaprogram_path);
+    return compile(transpile_dir, driver_path, metaprogram_path);
 }
 
 // The Testing assertion module's source file for the generator special case
@@ -416,7 +416,7 @@ generate_test_driver :: (files: [] Test_Source_File, view_paths: [] string, matc
 // order: a deterministic DFS where each directory yields its files first
 // (lexicographic by name) and then recurses into its subdirectories
 // (lexicographic) — enumeration, call and report order derive from it.
-collect_test_files :: (driver: *Build_Driver, prepared: *Prepared_Workspace) -> [] Test_Source_File, bool {
+collect_test_files :: (prepared: *Prepared_Workspace) -> [] Test_Source_File, bool {
     collect: Collect_Context;
     collect.root = prepared.discovery.root_dir;
     // Member boundaries come from the workspace discovery snapshot (root
@@ -574,9 +574,8 @@ test_file_rel_path :: (absolute: string, root: string) -> string {
 
 test "Seam: transpile step drives fake views into a compiled driver" {
     reset_seam_test();
-    driver: Build_Driver;
     prepared := seam_prepared();
-    expect(test_prepared_workspace(*driver, *prepared, "", seam_files(), fake_transpile, fake_compile));
+    expect(test_prepared_workspace(*prepared, "", seam_files(), fake_transpile, fake_compile));
 
     // The transpile step ran once per file with the running global number.
     expect(test_transpiled_files.count == 2);
@@ -620,14 +619,13 @@ test "Seam: transpile step drives fake views into a compiled driver" {
 // writes only the missing views.
 test "Seam: a cache hit leaves the existing view untouched" {
     reset_seam_test();
-    driver: Build_Driver;
     prepared := seam_prepared();
     transpile_dir := transpile_tree_dir(prepared.discovery.root_dir);
     stale_path := tprint("%1/%2/src/a.jai", transpile_dir, fake_key("src/a.jai"));
     expect(make_directory_if_it_does_not_exist(path_strip_filename(stale_path), recursive = true));
     expect(write_entire_file(stale_path, "// stale cached view\n"));
 
-    expect(test_prepared_workspace(*driver, *prepared, "", seam_files(), fake_transpile, fake_compile));
+    expect(test_prepared_workspace(*prepared, "", seam_files(), fake_transpile, fake_compile));
 
     // The pre-existing view was not overwritten; the missing one was written.
     expect(file_contains(stale_path, "// stale cached view"));
@@ -640,9 +638,8 @@ test "Seam: a cache hit leaves the existing view untouched" {
 
 test "Seam: pattern filters the generated test list" {
     reset_seam_test();
-    driver: Build_Driver;
     prepared := seam_prepared();
-    expect(test_prepared_workspace(*driver, *prepared, "b.jai", seam_files(), fake_transpile, fake_compile));
+    expect(test_prepared_workspace(*prepared, "b.jai", seam_files(), fake_transpile, fake_compile));
     driver_path := tprint("%1/driver.jai", transpile_tree_dir(prepared.discovery.root_dir));
     expect(test_compile_calls == 1);
     expect(file_contains(driver_path, "run(\"src/b.jai test 0\", juice_test_2);"));
@@ -652,39 +649,35 @@ test "Seam: pattern filters the generated test list" {
 
 test "Seam: zero matches skip the compile" {
     reset_seam_test();
-    driver: Build_Driver;
     prepared := seam_prepared();
-    expect(test_prepared_workspace(*driver, *prepared, "nomatch", seam_files(), fake_transpile, fake_compile));
+    expect(test_prepared_workspace(*prepared, "nomatch", seam_files(), fake_transpile, fake_compile));
     delete_directory_full(tprint("%1/target/seam-root", juice_root()));
     expect(test_compile_calls == 0);
 }
 
 test "Seam: zero tests skip the compile" {
     reset_seam_test();
-    driver: Build_Driver;
     prepared := seam_prepared();
     test_fake_tests_per_file = 0;
-    expect(test_prepared_workspace(*driver, *prepared, "", seam_files(), fake_transpile, fake_compile));
+    expect(test_prepared_workspace(*prepared, "", seam_files(), fake_transpile, fake_compile));
     delete_directory_full(tprint("%1/target/seam-root", juice_root()));
     expect(test_compile_calls == 0);
 }
 
 test "Seam: transpile diagnostics fail before compiling" {
     reset_seam_test();
-    driver: Build_Driver;
     prepared := seam_prepared();
     test_fake_diagnostic = "test block 仅允许文件顶层";
-    expect(!test_prepared_workspace(*driver, *prepared, "", seam_files(), fake_transpile, fake_compile));
+    expect(!test_prepared_workspace(*prepared, "", seam_files(), fake_transpile, fake_compile));
     delete_directory_full(tprint("%1/target/seam-root", juice_root()));
     expect(test_compile_calls == 0);
 }
 
 test "Seam: compile failure propagates" {
     reset_seam_test();
-    driver: Build_Driver;
     prepared := seam_prepared();
     test_seam_compile_success = false;
-    result := test_prepared_workspace(*driver, *prepared, "", seam_files(), fake_transpile, fake_compile);
+    result := test_prepared_workspace(*prepared, "", seam_files(), fake_transpile, fake_compile);
     delete_directory_full(tprint("%1/target/seam-root", juice_root()));
     expect(!result && test_compile_calls == 1);
 }
@@ -705,10 +698,9 @@ test "Real transpile step expands fixture tests" {
 // The walking-skeleton collection: the fixture package's files in
 // lexicographic order, without the manifest.
 test "Collection lists fixture files in lexicographic order" {
-    driver: Build_Driver;
     prepared: Prepared_Workspace;
     prepared.discovery.root_dir = tprint("%1/tests/data/test-package", juice_root());
-    files, ok := collect_test_files(*driver, *prepared);
+    files, ok := collect_test_files(*prepared);
     expect(ok && files.count == 3);
     expect(files[0].rel_path == "src/main.jai");
     expect(files[1].rel_path == "src/math.jai");
@@ -719,10 +711,9 @@ test "Collection lists fixture files in lexicographic order" {
 }
 
 test "Collection rejects a missing package root" {
-    driver: Build_Driver;
     prepared: Prepared_Workspace;
     prepared.discovery.root_dir = tprint("%1/tests/data/no-such-package", juice_root());
-    _, ok := collect_test_files(*driver, *prepared);
+    _, ok := collect_test_files(*prepared);
     expect(!ok);
 }
 
@@ -734,14 +725,13 @@ test "Collection rejects a missing package root" {
 // Included despite same names elsewhere: src/target/, src/modules/,
 // src/data/ and a nested package.jai source file (issue 0003).
 test "Collection applies the exclusion set in scan order" {
-    driver: Build_Driver;
     prepared: Prepared_Workspace;
     prepared.discovery.root_dir = tprint("%1/tests/data/scan-fixture", juice_root());
     prepared.discovery.member_packages = Package.[
         .{name = "scan-fixture", dir = prepared.discovery.root_dir},
         .{name = "member-a", dir = tprint("%1/tests/data/scan-fixture/member-a", juice_root())},
     ];
-    files, ok := collect_test_files(*driver, *prepared);
+    files, ok := collect_test_files(*prepared);
     expect(ok);
     expected := string.[
         "a_root.jai",
@@ -788,10 +778,9 @@ test "Collection skips symlinks and junctions" {
         return;
     }
 
-    driver: Build_Driver;
     prepared: Prepared_Workspace;
     prepared.discovery.root_dir = lexical_absolute_path(root);
-    files, ok := collect_test_files(*driver, *prepared);
+    files, ok := collect_test_files(*prepared);
     expect(ok);
     expected := string.["real_file.jai", "real/with_test.jai"];
     if files.count != expected.count {

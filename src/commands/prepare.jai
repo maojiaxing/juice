@@ -18,10 +18,10 @@ PREPARE_WORKSPACE_COMMAND :: Command.{
 
 discover_workspace_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     if !command_arguments_are_valid(DISCOVER_WORKSPACE_COMMAND, arguments) return false;
-    return ensure_workspace_discovered(ctx.driver, *ctx.workspace);
+    return ensure_workspace_discovered(ctx.root_dir, ctx.cache_dir, *ctx.workspace);
 }
 
 prepare_workspace_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     if !command_arguments_are_valid(PREPARE_WORKSPACE_COMMAND, arguments) return false;
-    return prepare_workspace(ctx.driver, *ctx.workspace);
+    return prepare_workspace(ctx.root_dir, ctx.cache_dir, *ctx.workspace);
 }

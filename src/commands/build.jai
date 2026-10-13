@@ -19,7 +19,7 @@ build_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     if !command_arguments_are_valid(BUILD_COMMAND, arguments) return false;
     prepared := require_prepared_workspace("build", *ctx.workspace);
     if prepared == null return false;
-    if !build_prepared_workspace(ctx.driver, prepared) return false;
+    if !build_prepared_workspace(prepared) return false;
     if prepared.artifact_plans.count == 0 {
         if prepared.package_type == .LIB {
             print("[juice] Library package '%'; nothing to build.\n", prepared.discovery.root_package.name);
@@ -33,17 +33,18 @@ build_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
 
 // Import directories every compile gets beyond jai's own defaults: the
 // juice module directory (adjacent to the running executable, holds
-// Testing.jai/Juice.jai) and the package's dependency shim directory.
-// juice_modules_dir is the shared derivation (src/path_safety.jai, 票 0036).
-compiler_import_directories :: (driver: *Build_Driver) -> [..] string {
+// Testing.jai/Juice.jai) and the package's dependency shim directory
+// (packages_dir 由 dependency 模块派生，票 0038). juice_modules_dir is the
+// shared derivation (src/path_safety.jai, 票 0036).
+compiler_import_directories :: (packages_dir: string) -> [..] string {
     dirs: [..] string;
     dirs.allocator = temp;
 
     global_modules_dir := juice_modules_dir();
     if is_directory(global_modules_dir) array_add(*dirs, global_modules_dir);
 
-    if is_directory(driver.packages_dir) {
-        array_add(*dirs, to_forward_slashes(driver.packages_dir));
+    if is_directory(packages_dir) {
+        array_add(*dirs, to_forward_slashes(packages_dir));
     }
     return dirs;
 }
@@ -73,7 +74,7 @@ revalidate_build_plans :: (prepared: *Prepared_Workspace) -> bool {
     return true;
 }
 
-compile_artifact_plan :: (driver: *Build_Driver, plan: Artifact_Plan, entry: string) -> bool {
+compile_artifact_plan :: (root_dir: string, plan: Artifact_Plan, entry: string) -> bool {
     // The compile entry is chosen by the transpile front: the original
     // entry file (test-free closure, zero transpile) or its strip view.
     source_file := to_forward_slashes(entry);
@@ -96,13 +97,13 @@ compile_artifact_plan :: (driver: *Build_Driver, plan: Artifact_Plan, entry: str
     // (.obj, .lib, .added_strings_*) land there instead of a .build
     // directory next to the entry, and Clean removes them with target/.
     metaprogram_path := to_forward_slashes(tprint("%1/build-%2.jai", plan.target_dir, plan.target.name));
-    testing_dir := testing_module_strip_view_dir(driver.root_dir);
+    testing_dir := testing_module_strip_view_dir(root_dir);
     metaprogram: Compiler_Metaprogram_Options;
     metaprogram.workspace_name    = "Juice Build";
     metaprogram.executable_name   = plan.target.name;
     metaprogram.output_path       = to_forward_slashes(plan.target_dir);
     metaprogram.intermediate_path = to_forward_slashes(plan.target_dir);
-    metaprogram.import_dirs       = compiler_import_directories(driver);
+    metaprogram.import_dirs       = compiler_import_directories(packages_dir(root_dir));
     metaprogram.build_file        = source_file;
     metaprogram.testing_view_dir  = testing_dir;
     if !write_entire_file(metaprogram_path, generate_compiler_metaprogram(metaprogram)) {
@@ -399,11 +400,12 @@ build_plan_entry :: (
 // the transpile front mirrors the test command's orchestration seam (spec
 // 0013 Testing Decisions): production handlers use the defaults; tests cross
 // the same interfaces with recording adapters instead of the real compiler.
+// 票 0038：Build 不再接收任何路径——root 取自 prepared（compile seam 只收
+// root_dir，packages_dir 与 Testing 视图目录都由它派生）。
 build_prepared_workspace :: (
-    driver: *Build_Driver,
     prepared: *Prepared_Workspace,
     transpile: #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output = transpile_build_file,
-    compile: #type (driver: *Build_Driver, plan: Artifact_Plan, entry: string) -> bool = compile_artifact_plan
+    compile: #type (root_dir: string, plan: Artifact_Plan, entry: string) -> bool = compile_artifact_plan
 ) -> bool {
     // Empty target sets are an intentional no-op. In particular, do not
     // create target/ and do not prepare dependencies for such a package.
@@ -420,7 +422,7 @@ build_prepared_workspace :: (
     }
 
     for plan, index: prepared.artifact_plans {
-        if !compile(driver, plan, entries[index]) return false;
+        if !compile(prepared.discovery.root_dir, plan, entries[index]) return false;
     }
     return true;
 }
@@ -434,15 +436,13 @@ build_prepared_workspace :: (
 // ---------------------------------------------------------------------------
 
 test "Build without targets compiles nothing" {
-    driver: Build_Driver;
     prepared: Prepared_Workspace;
     prepared.artifact_plans = Artifact_Plan.[];
     test_compile_count = 0;
-    expect(build_prepared_workspace(*driver, *prepared, fake_build_transpile, test_compile_artifact) && test_compile_count == 0);
+    expect(build_prepared_workspace(*prepared, fake_build_transpile, test_compile_artifact) && test_compile_count == 0);
 }
 
 test "Unsafe package root blocks every compilation" {
-    driver: Build_Driver;
     root := tprint("%1/missing-package-root", juice_root());
     plans := Artifact_Plan.[
         .{target = .{name = "alpha", main_file = "src/main.jai", source_path = tprint("%1/src/main.jai", juice_root())}, target_dir = tprint("%1/target", root), artifact_path = tprint("%1/target/alpha.exe", root)},
@@ -452,12 +452,11 @@ test "Unsafe package root blocks every compilation" {
     prepared.artifact_plans = plans;
     test_compile_count = 0;
     test_build_transpile_calls = 0;
-    expect(!build_prepared_workspace(*driver, *prepared, fake_build_transpile, test_compile_artifact));
+    expect(!build_prepared_workspace(*prepared, fake_build_transpile, test_compile_artifact));
     expect(test_compile_count == 0 && test_build_transpile_calls == 0);
 }
 
 test "Escaping artifact plan blocks compilation" {
-    driver: Build_Driver;
     root := juice_root();
     plans := Artifact_Plan.[
         .{target = .{name = "alpha", main_file = "src/main.jai", source_path = tprint("%1/src/main.jai", root)}, target_dir = tprint("%1/../escape", root), artifact_path = tprint("%1/../escape/alpha.exe", root)},
@@ -466,7 +465,7 @@ test "Escaping artifact plan blocks compilation" {
     prepared.discovery.root_dir = root;
     prepared.artifact_plans = plans;
     test_compile_count = 0;
-    expect(!build_prepared_workspace(*driver, *prepared, fake_build_transpile, test_compile_artifact) && test_compile_count == 0);
+    expect(!build_prepared_workspace(*prepared, fake_build_transpile, test_compile_artifact) && test_compile_count == 0);
 }
 
 // The repository's own entry closure contains inline test blocks (they live
@@ -474,8 +473,6 @@ test "Escaping artifact plan blocks compilation" {
 // and compilation receives the entry file's strip view — the fixture 语义
 // 随迁移翻转（原断言 test-free 直通：零转译、编译入口为原文件）。
 test "Build forwards each prepared plan to compilation" {
-    driver: Build_Driver;
-    driver.root_dir = "driver-root";
     root := juice_root();
     plans := Artifact_Plan.[
         .{target = .{name = "alpha", main_file = "src/main.jai", source_path = tprint("%1/src/main.jai", root)}, target_dir = tprint("%1/target", root), artifact_path = tprint("%1/target/alpha.exe", root)},
@@ -489,9 +486,9 @@ test "Build forwards each prepared plan to compilation" {
     test_compile_count = 0;
     test_compile_success = true;
     test_build_transpile_calls = 0;
-    expect(build_prepared_workspace(*driver, *prepared, fake_build_transpile, test_compile_artifact));
+    expect(build_prepared_workspace(*prepared, fake_build_transpile, test_compile_artifact));
     expect(test_compile_count == 2);
-    expect(test_compiled_driver_root == "driver-root");
+    expect(test_compiled_driver_root == juice_root());
     // The entry closure contains test blocks: the transpile step ran once
     // per closure file and per plan (children first, the entry last).
     expect(test_build_transpile_calls == 2 * closure.count);
@@ -508,7 +505,6 @@ test "Build forwards each prepared plan to compilation" {
 // The final gate before the compiler: a plan with an empty target name must
 // never reach compile_artifact_plan (which would pass "-exe ''" through).
 test "Build rejects a plan with an empty target name" {
-    driver: Build_Driver;
     root := juice_root();
     plans := Artifact_Plan.[
         .{target = .{name = "", main_file = "src/main.jai", source_path = tprint("%1/src/main.jai", root)}, target_dir = tprint("%1/target", root), artifact_path = tprint("%1/target/.exe", root)},
@@ -517,11 +513,10 @@ test "Build rejects a plan with an empty target name" {
     prepared.discovery.root_dir = root;
     prepared.artifact_plans = plans;
     test_compile_count = 0;
-    expect(!build_prepared_workspace(*driver, *prepared, fake_build_transpile, test_compile_artifact) && test_compile_count == 0);
+    expect(!build_prepared_workspace(*prepared, fake_build_transpile, test_compile_artifact) && test_compile_count == 0);
 }
 
 test "Build fails fast on a compile failure" {
-    driver: Build_Driver;
     root := juice_root();
     plans := Artifact_Plan.[
         .{target = .{name = "alpha", main_file = "src/main.jai", source_path = tprint("%1/src/main.jai", root)}, target_dir = tprint("%1/target", root), artifact_path = tprint("%1/target/alpha.exe", root)},
@@ -532,7 +527,7 @@ test "Build fails fast on a compile failure" {
     prepared.artifact_plans = plans;
     test_compile_count = 0;
     test_compile_success = false;
-    expect(!build_prepared_workspace(*driver, *prepared, fake_build_transpile, test_compile_artifact));
+    expect(!build_prepared_workspace(*prepared, fake_build_transpile, test_compile_artifact));
     expect(test_compile_count == 1);
 }
 
@@ -552,11 +547,10 @@ test "Build front: a test-free closure skips the transpile step" {
     expect(build_seam_write(root, "src/main.jai", "#load \"helper.jai\";\n\nmain :: () {}\n"));
     expect(build_seam_write(root, "src/helper.jai", "helper :: () -> s32 { return 1; }\n"));
 
-    driver: Build_Driver;
     plan := build_seam_plan(root, "src/main.jai");
     prepared := build_seam_prepared(root, plan);
     reset_build_seam();
-    expect(build_prepared_workspace(*driver, *prepared, fake_build_transpile, fake_build_compile));
+    expect(build_prepared_workspace(*prepared, fake_build_transpile, fake_build_compile));
     expect(test_build_transpile_calls == 0);
     expect(test_build_compile_calls == 1);
     expect(test_build_compiled_entries[0] == to_forward_slashes(plan.target.source_path));
@@ -576,11 +570,10 @@ test "Build front: a test closure is viewed all-or-nothing with load rewrites" {
     expect(build_seam_write(root, "src/math.jai", "add :: (a: s32, b: s32) -> s32 { return a + b; }\n\ntest \"addition\" {\n}\n"));
     expect(build_seam_write(root, "src/unloaded.jai", "test \"never viewed\" {\n}\n"));
 
-    driver: Build_Driver;
     plan := build_seam_plan(root, "src/main.jai");
     prepared := build_seam_prepared(root, plan);
     reset_build_seam();
-    expect(build_prepared_workspace(*driver, *prepared, fake_build_transpile, fake_build_compile));
+    expect(build_prepared_workspace(*prepared, fake_build_transpile, fake_build_compile));
 
     // Transpile ran once per closure file, children first (Merkle chain):
     // math.jai before main.jai; unloaded.jai stays untouched.
@@ -611,12 +604,11 @@ test "Build front: transpile diagnostics fail before compiling" {
     defer delete_directory_full(root);
     expect(build_seam_write(root, "src/main.jai", "test \"nested in proc\" { }\n\nproc :: () {\n    test \"bad\" { }\n}\n"));
 
-    driver: Build_Driver;
     plan := build_seam_plan(root, "src/main.jai");
     prepared := build_seam_prepared(root, plan);
     reset_build_seam();
     test_build_fake_diagnostic = "test block 仅允许文件顶层";
-    expect(!build_prepared_workspace(*driver, *prepared, fake_build_transpile, fake_build_compile));
+    expect(!build_prepared_workspace(*prepared, fake_build_transpile, fake_build_compile));
     expect(test_build_compile_calls == 0);
 }
 
@@ -629,11 +621,10 @@ test "Build front: a load cycle cannot be rewritten" {
     expect(build_seam_write(root, "src/main.jai", "#load \"a.jai\";\n\nmain :: () {}\n"));
     expect(build_seam_write(root, "src/a.jai", "#load \"main.jai\";\n\ntest \"cycle\" { }\n"));
 
-    driver: Build_Driver;
     plan := build_seam_plan(root, "src/main.jai");
     prepared := build_seam_prepared(root, plan);
     reset_build_seam();
-    expect(!build_prepared_workspace(*driver, *prepared, fake_build_transpile, fake_build_compile));
+    expect(!build_prepared_workspace(*prepared, fake_build_transpile, fake_build_compile));
     expect(test_build_compile_calls == 0);
 }
 

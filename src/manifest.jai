@@ -225,15 +225,15 @@ manifest_temp_file_names :: (cache_dir: string, pkg_dir: string) -> (string, str
     return eval_src, eval_out;
 }
 
-load_package_manifest :: (driver: *Build_Driver, pkg_dir: string) -> Package, bool {
+load_package_manifest :: (cache_dir: string, pkg_dir: string) -> Package, bool {
     manifest_path := to_forward_slashes(tprint("%1/package.jai", pkg_dir));
     if !file_exists(manifest_path) return .{}, false;
 
-    if !make_directory_if_it_does_not_exist(driver.cache_dir, recursive = true) {
-        print("[juice ERROR] Could not create manifest cache directory: %\n", driver.cache_dir);
+    if !make_directory_if_it_does_not_exist(cache_dir, recursive = true) {
+        print("[juice ERROR] Could not create manifest cache directory: %\n", cache_dir);
         return .{}, false;
     }
-    temp_eval_src, temp_eval_out := manifest_temp_file_names(driver.cache_dir, pkg_dir);
+    temp_eval_src, temp_eval_out := manifest_temp_file_names(cache_dir, pkg_dir);
 
     eval_code := build_eval_code(manifest_path, temp_eval_out);
     if !write_entire_file(temp_eval_src, eval_code) {

@@ -15,12 +15,12 @@ CLEAN_COMMAND :: Command.{
 clean_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     if !command_arguments_are_valid(CLEAN_COMMAND, arguments) return false;
 
-    discovery, ok := discover_workspace(ctx.driver);
+    discovery, ok := discover_workspace(ctx.root_dir, ctx.cache_dir);
     if !ok {
         print("[juice ERROR] Clean discovery failed; no files were deleted.\n");
         return false;
     }
-    return clean_discovered_workspace(ctx.driver, discovery);
+    return clean_discovered_workspace(ctx.root_dir, discovery);
 }
 
 clean_path_is_safe :: (path: string) -> bool {
@@ -34,7 +34,7 @@ clean_path_is_safe :: (path: string) -> bool {
 }
 
 clean_discovered_workspace :: (
-    driver: *Build_Driver,
+    root_dir: string,
     discovery: Workspace_Discovery,
     validate_path: #type (path: string) -> bool = clean_path_is_safe,
     delete_path: #type (path: string) -> bool = delete_directory_full
@@ -50,7 +50,7 @@ clean_discovered_workspace :: (
             array_add(*paths, tprint("%1/target", member.dir));
         }
     } else {
-        array_add(*paths, tprint("%1/target", driver.root_dir));
+        array_add(*paths, tprint("%1/target", root_dir));
     }
 
     // Validate every deletion target before deleting any of them.
@@ -77,49 +77,43 @@ clean_discovered_workspace :: (
 // ---------------------------------------------------------------------------
 
 test "Clean validates workspace scope before deletion" {
-    driver: Build_Driver;
-    driver.root_dir = "unused-driver-root";
     discovery: Workspace_Discovery;
     discovery.has_package = true;
     discovery.root_dir = "root";
     discovery.member_packages = Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
     reset_clean_test(2);
-    expect(clean_discovered_workspace(*driver, discovery, test_validate_clean_path, test_delete_clean_path));
+    expect(clean_discovered_workspace("", discovery, test_validate_clean_path, test_delete_clean_path));
     expect(!test_clean_deleted_too_early && test_clean_deleted.count == 2);
     expect(test_clean_deleted[0] == "root/target" && test_clean_deleted[1] == "root/member/target");
 }
 
 test "Clean without a manifest uses the current root" {
-    driver: Build_Driver;
-    driver.root_dir = "root";
     discovery: Workspace_Discovery;
     reset_clean_test(1);
-    expect(clean_discovered_workspace(*driver, discovery, test_validate_clean_path, test_delete_clean_path));
+    expect(clean_discovered_workspace("root", discovery, test_validate_clean_path, test_delete_clean_path));
     expect(!test_clean_deleted_too_early && test_clean_deleted.count == 1);
     expect(test_clean_deleted[0] == "root/target");
 }
 
 test "Unsafe Clean path prevents every deletion" {
-    driver: Build_Driver;
     discovery: Workspace_Discovery;
     discovery.has_package = true;
     discovery.root_dir = "root";
     discovery.member_packages = Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
     reset_clean_test(2);
     test_clean_invalid_path = "root/member/target";
-    expect(!clean_discovered_workspace(*driver, discovery, test_validate_clean_path, test_delete_clean_path));
+    expect(!clean_discovered_workspace("", discovery, test_validate_clean_path, test_delete_clean_path));
     expect(test_clean_validated.count == 2 && test_clean_deleted.count == 0);
 }
 
 test "Clean continues after a deletion fails" {
-    driver: Build_Driver;
     discovery: Workspace_Discovery;
     discovery.has_package = true;
     discovery.root_dir = "root";
     discovery.member_packages = Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
     reset_clean_test(2);
     test_clean_failed_delete = "root/target";
-    expect(!clean_discovered_workspace(*driver, discovery, test_validate_clean_path, test_delete_clean_path));
+    expect(!clean_discovered_workspace("", discovery, test_validate_clean_path, test_delete_clean_path));
     expect(!test_clean_deleted_too_early && test_clean_deleted.count == 2);
     expect(test_clean_deleted[0] == "root/target" && test_clean_deleted[1] == "root/member/target");
 }

@@ -50,29 +50,36 @@ find_files_recursive :: (dir: string, filename: string) -> [..] string {
     return ctx.results;
 }
 
-find_package_in_repo :: (driver: *Build_Driver, repo_dir: string, target_pkg_name: string) -> string, bool {
+// Local dependency directory（CONTEXT）：<package root>/target/packages/。
+// root_dir 的纯推导（票 0038：Build_Driver 拆解后，packages_dir 不再是
+// 结构体字段，由其持有者 dependency 模块统一派生）。
+packages_dir :: (root_dir: string) -> string {
+    return to_forward_slashes(tprint("%1/target/packages", root_dir));
+}
+
+find_package_in_repo :: (cache_dir: string, repo_dir: string, target_pkg_name: string) -> string, bool {
     manifest_files := find_files_recursive(repo_dir, "package.jai");
     defer array_free(manifest_files);
 
     for manifest_path: manifest_files {
         pkg_dir := get_directory_path(manifest_path);
-        pkg, ok := load_package_manifest(driver, pkg_dir);
+        pkg, ok := load_package_manifest(cache_dir, pkg_dir);
         if ok && pkg.name == target_pkg_name return pkg_dir, true;
     }
     return "", false;
 }
 
 // Consume the discovery snapshot; never re-execute workspace manifests.
-resolve_and_fetch_dependencies :: (driver: *Build_Driver, member_packages: [] Package) -> bool {
-    if !make_directory_if_it_does_not_exist(driver.packages_dir, recursive = true) return false;
-    return fetch_workspace_dependencies(driver, member_packages);
+resolve_and_fetch_dependencies :: (root_dir: string, cache_dir: string, member_packages: [] Package) -> bool {
+    if !make_directory_if_it_does_not_exist(packages_dir(root_dir), recursive = true) return false;
+    return fetch_workspace_dependencies(root_dir, cache_dir, member_packages);
 }
 
 // A workspace member is consumed through the local dependency directory: the
 // declaring package lists it as a dependency, and preparation registers an
 // import shim so consumers resolve it with a plain "#import <name>".
-link_workspace_member_dependency :: (driver: *Build_Driver, member: Package) -> bool {
-    return ensure_import_shim(driver.packages_dir, member.name, member.dir);
+link_workspace_member_dependency :: (root_dir: string, member: Package) -> bool {
+    return ensure_import_shim(packages_dir(root_dir), member.name, member.dir);
 }
 
 // "#import <name>" below the dependency directory resolves <name>.jai (a
@@ -113,22 +120,23 @@ find_workspace_member :: (member_packages: [] Package, name: string) -> Package,
 }
 
 fetch_workspace_dependencies :: (
-    driver: *Build_Driver,
+    root_dir: string,
+    cache_dir: string,
     member_packages: [] Package,
-    fetch: #type (driver: *Build_Driver, dep: Dependency) -> bool = fetch_dependency,
-    link_member: #type (driver: *Build_Driver, member: Package) -> bool = link_workspace_member_dependency
+    fetch: #type (root_dir: string, cache_dir: string, dep: Dependency) -> bool = fetch_dependency,
+    link_member: #type (root_dir: string, member: Package) -> bool = link_workspace_member_dependency
 ) -> bool {
     for pkg: member_packages {
         for dep: pkg.dependencies {
             member, is_member := find_workspace_member(member_packages, dep.name);
             if is_member {
-                if !link_member(driver, member) {
+                if !link_member(root_dir, member) {
                     print("[juice ERROR] Failed to link workspace member: %1\n", dep.name);
                     return false;
                 }
                 continue;
             }
-            if !fetch(driver, dep) {
+            if !fetch(root_dir, cache_dir, dep) {
                 print("[juice ERROR] Failed to fetch dependency: %1\n", dep.name);
                 return false;
             }
@@ -137,22 +145,22 @@ fetch_workspace_dependencies :: (
     return true;
 }
 
-fetch_dependency :: (driver: *Build_Driver, dep: Dependency) -> bool {
+fetch_dependency :: (root_dir: string, cache_dir: string, dep: Dependency) -> bool {
     source_type := detect_source_type(dep.source);
 
     if source_type == {
         case .LOCAL_PATH;
             clean_path := clean_local_path(dep.source);
-            return ensure_import_shim(driver.packages_dir, dep.name, clean_path);
+            return ensure_import_shim(packages_dir(root_dir), dep.name, clean_path);
 
         case .GIT_URL;
-            git_cache_base := tprint("%1/git_repos", driver.cache_dir);
+            git_cache_base := tprint("%1/git_repos", cache_dir);
             repo_cache_dir := get_git_repo_cache_path(git_cache_base, dep.source, dep.version);
 
             if !ensure_git_repo_cloned(dep.source, dep.version, repo_cache_dir) return false;
 
             target_name := ifx dep.package != "" then dep.package else dep.name;
-            sub_pkg_dir, found := find_package_in_repo(driver, repo_cache_dir, target_name);
+            sub_pkg_dir, found := find_package_in_repo(cache_dir, repo_cache_dir, target_name);
             if !found {
                 // The repo may be a plain Jai module (no package.jai); its root
                 // is the module directory.
@@ -164,7 +172,7 @@ fetch_dependency :: (driver: *Build_Driver, dep: Dependency) -> bool {
                 }
             }
 
-            return ensure_import_shim(driver.packages_dir, dep.name, sub_pkg_dir);
+            return ensure_import_shim(packages_dir(root_dir), dep.name, sub_pkg_dir);
     }
     return false;
 }

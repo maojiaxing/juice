@@ -233,10 +233,10 @@ test_compiled_driver_root: string;
 test_compiled_entry: string;
 test_compile_success: bool;
 
-test_compile_artifact :: (driver: *Build_Driver, plan: Artifact_Plan, entry: string) -> bool {
+test_compile_artifact :: (root_dir: string, plan: Artifact_Plan, entry: string) -> bool {
     test_compile_count += 1;
     test_compiled_plan = plan;
-    test_compiled_driver_root = driver.root_dir;
+    test_compiled_driver_root = root_dir;
     test_compiled_entry = entry;
     return test_compile_success;
 }
@@ -279,7 +279,7 @@ test_build_compile_calls: s64;
 test_build_compiled_entries: [..] string;
 test_build_compile_success: bool;
 
-fake_build_compile :: (driver: *Build_Driver, plan: Artifact_Plan, entry: string) -> bool {
+fake_build_compile :: (root_dir: string, plan: Artifact_Plan, entry: string) -> bool {
     test_build_compile_calls += 1;
     array_add(*test_build_compiled_entries, entry);
     return test_build_compile_success;
@@ -439,7 +439,7 @@ test_discovery_attempts: s64 = 0;
 test_fake_discovery_ok: bool = false;
 test_fake_discovery: Workspace_Discovery;
 
-test_fake_discover :: (driver: *Build_Driver) -> Workspace_Discovery, bool {
+test_fake_discover :: (root_dir: string, cache_dir: string) -> Workspace_Discovery, bool {
     test_discovery_attempts += 1;
     return test_fake_discovery, test_fake_discovery_ok;
 }
@@ -455,7 +455,7 @@ test_fake_resolve :: (pkg: Package) -> Artifact_Plan_Result {
     return .{success = true, plans = test_resolved_plans};
 }
 
-test_fake_prepare_dependencies :: (driver: *Build_Driver, member_packages: [] Package) -> bool {
+test_fake_prepare_dependencies :: (root_dir: string, cache_dir: string, member_packages: [] Package) -> bool {
     test_dependency_attempts += 1;
     test_dependency_snapshot = member_packages;
     return test_dependency_ok;
@@ -477,12 +477,12 @@ test_fetch_result: bool = false;
 test_linked_member_names: [..] string;
 test_link_result: bool = false;
 
-test_fake_fetch :: (driver: *Build_Driver, dep: Dependency) -> bool {
+test_fake_fetch :: (root_dir: string, cache_dir: string, dep: Dependency) -> bool {
     array_add(*test_fetched_dependency_names, copy_string(dep.name));
     return test_fetch_result;
 }
 
-test_fake_link_member :: (driver: *Build_Driver, member: Package) -> bool {
+test_fake_link_member :: (root_dir: string, member: Package) -> bool {
     array_add(*test_linked_member_names, copy_string(member.name));
     return test_link_result;
 }
@@ -550,7 +550,7 @@ test_compile_driver_path: string;
 test_compile_metaprogram_path: string;
 test_seam_compile_success: bool;
 
-fake_compile :: (driver: *Build_Driver, transpile_dir: string, driver_path: string, metaprogram_path: string) -> bool {
+fake_compile :: (transpile_dir: string, driver_path: string, metaprogram_path: string) -> bool {
     test_compile_calls += 1;
     test_compile_transpile_dir = transpile_dir;
     test_compile_driver_path = driver_path;

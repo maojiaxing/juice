@@ -24,14 +24,15 @@ workspace_path_already_seen :: (paths: [] string, candidate: string) -> bool {
 
 // Discovery loads only manifests and validates member roots. It deliberately
 // does not fetch dependencies; preparation is a separate command prerequisite.
-discover_workspace :: (driver: *Build_Driver) -> Workspace_Discovery, bool {
+// 票 0038：Build_Driver 拆解后，discovery 只收自己持有的两个路径。
+discover_workspace :: (root_dir: string, cache_dir: string) -> Workspace_Discovery, bool {
     discovery: Workspace_Discovery;
-    root_spelling_entry := inspect_path_entry(driver.root_dir);
+    root_spelling_entry := inspect_path_entry(root_dir);
     if !root_spelling_entry.exists || !root_spelling_entry.is_directory || root_spelling_entry.is_symlink || root_spelling_entry.is_junction {
-        print("[juice ERROR] Workspace root is not a safe real directory: %\n", driver.root_dir);
+        print("[juice ERROR] Workspace root is not a safe real directory: %\n", root_dir);
         return discovery, false;
     }
-    root_abs, root_ok := normalize_existing_path(driver.root_dir);
+    root_abs, root_ok := normalize_existing_path(root_dir);
     if !root_ok {
         print("[juice ERROR] Current directory could not be normalized.\n");
         return discovery, false;
@@ -47,7 +48,7 @@ discover_workspace :: (driver: *Build_Driver) -> Workspace_Discovery, bool {
         return .{root_dir = root_abs, has_package = false}, true;
     }
 
-    root_package, package_ok := load_package_manifest(driver, root_abs);
+    root_package, package_ok := load_package_manifest(cache_dir, root_abs);
     if !package_ok {
         print("[juice ERROR] Existing package.jai is invalid.\n");
         return discovery, false;
@@ -87,7 +88,7 @@ discover_workspace :: (driver: *Build_Driver) -> Workspace_Discovery, bool {
             print("[juice ERROR] Workspace member lacks package.jai: %\n", member_abs);
             return discovery, false;
         }
-        member_package, member_ok := load_package_manifest(driver, member_abs);
+        member_package, member_ok := load_package_manifest(cache_dir, member_abs);
         if !member_ok {
             print("[juice ERROR] Workspace member manifest is invalid: %\n", member_abs);
             return discovery, false;
@@ -116,12 +117,13 @@ Workspace_State :: struct {
 }
 
 ensure_workspace_discovered :: (
-    driver: *Build_Driver,
+    root_dir: string,
+    cache_dir: string,
     state: *Workspace_State,
-    discover: #type (driver: *Build_Driver) -> (Workspace_Discovery, bool) = discover_workspace
+    discover: #type (root_dir: string, cache_dir: string) -> (Workspace_Discovery, bool) = discover_workspace
 ) -> bool {
     if state.phase != .EMPTY return true;
-    discovery, ok := discover(driver);
+    discovery, ok := discover(root_dir, cache_dir);
     if !ok || !discovery.has_package {
         if ok print("[juice ERROR] No package.jai found in current directory.\n");
         return false;
@@ -135,10 +137,11 @@ ensure_workspace_discovered :: (
 // Publish a prepared result only after every required step succeeds. A failed
 // attempt leaves discovery reusable and exposes no partial prepared workspace.
 prepare_workspace :: (
-    driver: *Build_Driver,
+    root_dir: string,
+    cache_dir: string,
     state: *Workspace_State,
     resolve: #type (pkg: Package) -> Artifact_Plan_Result = resolve_artifact_plans,
-    prepare_dependencies: #type (driver: *Build_Driver, member_packages: [] Package) -> (bool) = resolve_and_fetch_dependencies
+    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Package) -> (bool) = resolve_and_fetch_dependencies
 ) -> bool {
     if state.phase == .PREPARED return true;
     if state.phase != .DISCOVERED || !state.discovery.has_package {
@@ -156,7 +159,7 @@ prepare_workspace :: (
     prepared.package_type = plans_result.package_type;
     if prepared.artifact_plans.count > 0 {
         print("[juice] Preparing workspace dependencies...\n");
-        if !prepare_dependencies(driver, state.discovery.member_packages) {
+        if !prepare_dependencies(root_dir, cache_dir, state.discovery.member_packages) {
             print("[juice ERROR] Dependency resolution failed.\n");
             return false;
         }
@@ -196,11 +199,10 @@ test "Discovery publishes workspace state once" {
     test_fake_discovery.has_package = true;
     test_fake_discovery.root_package.name = "demo";
     test_fake_discovery.root_package.version = "1";
-    driver: Build_Driver;
     state: Workspace_State;
-    expect(ensure_workspace_discovered(*driver, *state, test_fake_discover));
+    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
     expect(state.phase == .DISCOVERED && test_discovery_attempts == 1);
-    expect(ensure_workspace_discovered(*driver, *state, test_fake_discover));
+    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
     expect(state.phase == .DISCOVERED && test_discovery_attempts == 1);
 }
 
@@ -208,9 +210,8 @@ test "Discovery without a package stays empty" {
     reset_preparation_test();
     test_fake_discovery_ok = true;
     test_fake_discovery.has_package = false;
-    driver: Build_Driver;
     state: Workspace_State;
-    expect(!ensure_workspace_discovered(*driver, *state, test_fake_discover));
+    expect(!ensure_workspace_discovered("", "", *state, test_fake_discover));
     expect(state.phase == .EMPTY && test_discovery_attempts == 1);
 }
 
@@ -222,10 +223,9 @@ test "Preparation without targets skips dependencies" {
     test_fake_discovery.root_package.version = "1";
     test_plan_resolution_success = true;
     test_resolved_plans = Artifact_Plan.[];
-    driver: Build_Driver;
     state: Workspace_State;
-    expect(ensure_workspace_discovered(*driver, *state, test_fake_discover));
-    expect(prepare_workspace(*driver, *state, test_fake_resolve, test_fake_prepare_dependencies));
+    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
+    expect(prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies));
     expect(state.phase == .PREPARED && test_dependency_attempts == 0);
     prepared := get_prepared_workspace(*state);
     expect(prepared != null && !prepared.dependencies_prepared && prepared.artifact_plans.count == 0);
@@ -241,10 +241,9 @@ test "Preparation with targets prepares dependencies" {
     test_plan_resolution_success = true;
     test_resolved_plans = Artifact_Plan.[.{target = .{name = "demo"}}];
     test_dependency_ok = true;
-    driver: Build_Driver;
     state: Workspace_State;
-    expect(ensure_workspace_discovered(*driver, *state, test_fake_discover));
-    expect(prepare_workspace(*driver, *state, test_fake_resolve, test_fake_prepare_dependencies));
+    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
+    expect(prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies));
     expect(state.phase == .PREPARED && test_dependency_attempts == 1);
     expect(test_dependency_snapshot.count == 2 && test_dependency_snapshot[1].name == "member");
     prepared := get_prepared_workspace(*state);
@@ -258,14 +257,13 @@ test "Resolution failure publishes no prepared workspace" {
     test_fake_discovery.root_package.name = "demo";
     test_fake_discovery.root_package.version = "1";
     test_plan_resolution_success = false;
-    driver: Build_Driver;
     state: Workspace_State;
-    expect(ensure_workspace_discovered(*driver, *state, test_fake_discover));
-    expect(!prepare_workspace(*driver, *state, test_fake_resolve, test_fake_prepare_dependencies));
+    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
+    expect(!prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies));
     expect(state.phase == .DISCOVERED && get_prepared_workspace(*state) == null);
     test_plan_resolution_success = true;
     test_resolved_plans = Artifact_Plan.[];
-    expect(prepare_workspace(*driver, *state, test_fake_resolve, test_fake_prepare_dependencies) && state.phase == .PREPARED);
+    expect(prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies) && state.phase == .PREPARED);
 }
 
 test "Dependency failure publishes no prepared workspace" {
@@ -277,18 +275,16 @@ test "Dependency failure publishes no prepared workspace" {
     test_plan_resolution_success = true;
     test_resolved_plans = Artifact_Plan.[.{target = .{name = "demo"}}];
     test_dependency_ok = false;
-    driver: Build_Driver;
     state: Workspace_State;
-    expect(ensure_workspace_discovered(*driver, *state, test_fake_discover));
-    expect(!prepare_workspace(*driver, *state, test_fake_resolve, test_fake_prepare_dependencies));
+    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
+    expect(!prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies));
     expect(state.phase == .DISCOVERED && test_dependency_attempts == 1 && get_prepared_workspace(*state) == null);
 }
 
 test "Preparation requires discovery" {
     reset_preparation_test();
-    driver: Build_Driver;
     state: Workspace_State;
-    expect(!prepare_workspace(*driver, *state, test_fake_resolve, test_fake_prepare_dependencies));
+    expect(!prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies));
     expect(state.phase == .EMPTY && test_dependency_attempts == 0);
 }
 
@@ -307,10 +303,9 @@ test "Prepared workspace guard hands back the prepared result" {
     test_fake_discovery.root_package.version = "1";
     test_plan_resolution_success = true;
     test_resolved_plans = Artifact_Plan.[];
-    driver: Build_Driver;
     state: Workspace_State;
-    expect(ensure_workspace_discovered(*driver, *state, test_fake_discover));
-    expect(prepare_workspace(*driver, *state, test_fake_resolve, test_fake_prepare_dependencies));
+    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
+    expect(prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies));
     prepared := require_prepared_workspace("test", *state);
     expect(prepared != null && !prepared.dependencies_prepared && prepared.artifact_plans.count == 0);
 }
@@ -326,7 +321,7 @@ test "Workspace member dependencies are linked not fetched" {
         .{name = "root", dependencies = Dependency.[.{name = "member-lib"}, .{name = "external"}]},
         .{name = "member-lib", dependencies = Dependency.[.{name = "external2"}]},
     ];
-    expect(fetch_workspace_dependencies(null, packages, test_fake_fetch, test_fake_link_member));
+    expect(fetch_workspace_dependencies("", "", packages, test_fake_fetch, test_fake_link_member));
     expect(test_fetched_dependency_names.count == 2);
     expect(test_fetched_dependency_names[0] == "external" && test_fetched_dependency_names[1] == "external2");
     expect(test_linked_member_names.count == 1 && test_linked_member_names[0] == "member-lib");
@@ -341,7 +336,7 @@ test "Member link failure propagates" {
         .{name = "root", dependencies = Dependency.[.{name = "member-lib"}, .{name = "external"}]},
         .{name = "member-lib"},
     ];
-    expect(!fetch_workspace_dependencies(null, packages, test_fake_fetch, test_fake_link_member));
+    expect(!fetch_workspace_dependencies("", "", packages, test_fake_fetch, test_fake_link_member));
     expect(test_linked_member_names.count == 1 && test_fetched_dependency_names.count == 0);
 }
 
@@ -351,7 +346,7 @@ test "Dependency fetch failure propagates" {
     test_fetch_result = false;
     test_link_result = true;
     packages := Package.[.{name = "root", dependencies = Dependency.[.{name = "external"}]}];
-    expect(!fetch_workspace_dependencies(null, packages, test_fake_fetch, test_fake_link_member));
+    expect(!fetch_workspace_dependencies("", "", packages, test_fake_fetch, test_fake_link_member));
     expect(test_fetched_dependency_names.count == 1);
 }
 
