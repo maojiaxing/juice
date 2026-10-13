@@ -65,6 +65,8 @@ clean → discovery within its own handler, without dependency preparation
 
 `Workspace_Discovery` retains the evaluated member declarations (`member_packages`, root first) instead of only member paths. Dependency preparation consumes this snapshot and no longer re-executes member manifests; workspace-member lookups no longer load manifests.
 
+Manifest evaluation runs one jai child process per manifest. Its temp files (`eval_manifest_<hash>.jai` / `manifest_data_<hash>.txt` in the XDG cache directory) are named by a hash of the manifest's absolute path — distinct manifests never collide across sequential or concurrent evaluations — and the generated evaluator exits non-zero when it cannot write its data, which the loader retries up to twice. The previous shared fixed names plus an unchecked write had produced silent stale reads when an AV scanner briefly locked the data file, intermittently dropping workspace members (ticket 0035).
+
 ## Test seams
 
 The production implementation is the test surface:

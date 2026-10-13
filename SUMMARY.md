@@ -47,7 +47,8 @@ src/
 │   ├── prepare.jai      # 内部: workspace 准备
 │   ├── build.jai        # 构建所有 target
 │   ├── run.jai          # 构建并运行 target
-│   └── clean.jai        # 清理输出（无 manifest 依赖）
+│   ├── clean.jai        # 清理输出（无 manifest 依赖）
+│   └── test.jai         # 测试命令（test block 发现、转译与测试程序生成）
 ├── dispatcher.jai       # 注册表验证、查找和图遍历
 ├── transpile_tests.jai  # 转译器测试（核心转译文件 test-free 约束）
 └── main.jai            # 简化为驱动器初始化和调度调用
