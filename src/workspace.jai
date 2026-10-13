@@ -172,6 +172,18 @@ get_prepared_workspace :: (state: *Workspace_State) -> *Prepared_Workspace {
     return *state.prepared;
 }
 
+// Command-side guard over the prepared workspace (票 0037): prints the
+// command-specific preparation error and returns null on failure; callers
+// treat null as the command's own failure. get_prepared_workspace stays the
+// raw state accessor for tests.
+require_prepared_workspace :: (name: string, state: *Workspace_State) -> *Prepared_Workspace {
+    prepared := get_prepared_workspace(state);
+    if prepared == null {
+        print("[juice ERROR] Command '%' requires workspace preparation.\n", name);
+    }
+    return prepared;
+}
+
 // ---------------------------------------------------------------------------
 // 内联测试（票 0034 自旧 tests/ 迁移）：workspace 状态机、
 // 依赖快照消费与 import shim。共享 helper（discovery/resolution/dependency
@@ -278,6 +290,29 @@ test "Preparation requires discovery" {
     state: Workspace_State;
     expect(!prepare_workspace(*driver, *state, test_fake_resolve, test_fake_prepare_dependencies));
     expect(state.phase == .EMPTY && test_dependency_attempts == 0);
+}
+
+// Command-side guard（票 0037）：空状态打印共享报错并返回 null，已 prepared
+// 状态原样交出结果——报错文案与旧的三处逐字守卫一致。
+test "Prepared workspace guard fails on an empty state" {
+    state: Workspace_State;
+    expect(require_prepared_workspace("build", *state) == null);
+}
+
+test "Prepared workspace guard hands back the prepared result" {
+    reset_preparation_test();
+    test_fake_discovery_ok = true;
+    test_fake_discovery.has_package = true;
+    test_fake_discovery.root_package.name = "demo";
+    test_fake_discovery.root_package.version = "1";
+    test_plan_resolution_success = true;
+    test_resolved_plans = Artifact_Plan.[];
+    driver: Build_Driver;
+    state: Workspace_State;
+    expect(ensure_workspace_discovered(*driver, *state, test_fake_discover));
+    expect(prepare_workspace(*driver, *state, test_fake_resolve, test_fake_prepare_dependencies));
+    prepared := require_prepared_workspace("test", *state);
+    expect(prepared != null && !prepared.dependencies_prepared && prepared.artifact_plans.count == 0);
 }
 
 // test_fake_fetch/test_fake_link_member 与记录全局见 tests/test_support.jai。

@@ -17,11 +17,8 @@ BUILD_COMMAND :: Command.{
 
 build_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     if !command_arguments_are_valid(BUILD_COMMAND, arguments) return false;
-    prepared := get_prepared_workspace(*ctx.workspace);
-    if prepared == null {
-        print("[juice ERROR] Command 'build' requires workspace preparation.\n");
-        return false;
-    }
+    prepared := require_prepared_workspace("build", *ctx.workspace);
+    if prepared == null return false;
     if !build_prepared_workspace(ctx.driver, prepared) return false;
     if prepared.artifact_plans.count == 0 {
         if prepared.package_type == .LIB {

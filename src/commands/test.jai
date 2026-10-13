@@ -29,11 +29,8 @@ test_arguments_are_valid :: (arguments: [] string) -> bool {
 
 test_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     if !command_arguments_are_valid(TEST_COMMAND, arguments) return false;
-    prepared := get_prepared_workspace(*ctx.workspace);
-    if prepared == null {
-        print("[juice ERROR] Command 'test' requires workspace preparation.\n");
-        return false;
-    }
+    prepared := require_prepared_workspace("test", *ctx.workspace);
+    if prepared == null return false;
     pattern := ifx arguments.count == 1 then arguments[0] else "";
     files, ok := collect_test_files(ctx.driver, prepared);
     if !ok return false;
