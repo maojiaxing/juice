@@ -258,8 +258,41 @@ bootstrap_strip_front :: (entry_rel: string, use_view: *bool, entry_view: *strin
     // 关键：确保 target 目录存在，防止链接器报错 LNK1104
     make_directory_if_it_does_not_exist(options.output_path);
 
+    // -------------------------------------------------------------
+    // Testing 断言模块自举特例（票 0033 对称）：modules/Testing.jai 内联
+    // test block 后不可被 jai 直接编译，而闭包内 `#import "Testing"` 会解
+    // 析到模块源文件。模块含 test block 时把 STRIP 视图写到
+    // target/testing-module/Testing.jai 并把其目录前置进 import path——
+    // 与 Build command 的 testing_module_strip_view_dir 同路径同语义
+    // （各自运行前重写；juice test 运行时再写 EXPAND 视图）。目录必须排
+    // 在默认 import path 之前：默认首条 "modules" 以本 metaprogram 所在
+    // 目录（仓库根）为基准解析，会先命中含 test block 的模块源文件。
+    // 模块 test-free 或不存在时 testing_view_dir 保持 ""，零变化。
+    // -------------------------------------------------------------
+    testing_view_dir := "";
+    testing_module_abs := "modules/Testing.jai";
+    module_source, ok := read_entire_file(testing_module_abs);
+    if ok && source_has_test_block(module_source) {
+        ctx: Transpile_Context;
+        ctx.mode = .STRIP;
+        ctx.path = "modules/Testing.jai";
+        stripped := transpile_source(module_source, ctx);
+        if stripped.diagnostics.count > 0 {
+            for diagnostic: stripped.diagnostics {
+                print("[Build System] ❌ %1:%2,%3: %4\n", ctx.path, diagnostic.line, diagnostic.column, diagnostic.message);
+            }
+        } else if make_directory_if_it_does_not_exist("target/testing-module", recursive = true) {
+            if write_entire_file("target/testing-module/Testing.jai", stripped.view) {
+                testing_view_dir = "target/testing-module";
+            }
+        }
+    }
+
     // 模块导入路径设置
     import_paths: [..] string;
+    if testing_view_dir != "" {
+        array_add(*import_paths, testing_view_dir);
+    }
     array_add(*import_paths, .. options.import_path);
     array_add(*import_paths, "./src");
     array_add(*import_paths, "./modules");

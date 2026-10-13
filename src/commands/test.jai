@@ -327,7 +327,7 @@ testing_module_source :: (prepared: *Prepared_Workspace) -> (file: Test_Source_F
 // the package root without path normalization. Returns "" when the segment
 // marker is missing.
 testing_module_support_block :: (support_view: string) -> string {
-    marker := "// tests/test_testing.jai 顶层迁移";
+    marker := "// 旧 tests/ 测试文件顶层声明迁移（票 0032）——Testing 模块自测的记录全局与";
     pos := find_index_from_left(support_view, marker);
     if pos < 0 return "";
     // Back to the start of the marker's line, then to the start of the
@@ -338,7 +338,7 @@ testing_module_support_block :: (support_view: string) -> string {
         while pos > 0 && support_view[pos - 1] != #char "\n" pos -= 1;
     }
     // The segment ends where the next migration section begins.
-    end_marker := "// tests/test_transpiler.jai 顶层迁移";
+    end_marker := "// 旧 tests/ 测试文件顶层声明迁移（票 0032）——golden/negative harness 与";
     end_pos := find_index_from_left(support_view, end_marker);
     if end_pos < 0 {
         end_pos = support_view.count;
