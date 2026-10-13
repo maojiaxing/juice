@@ -99,7 +99,8 @@ compile_artifact_plan :: (driver: *Build_Driver, plan: Artifact_Plan, entry: str
     // (.obj, .lib, .added_strings_*) land there instead of a .build
     // directory next to the entry, and Clean removes them with target/.
     metaprogram_path := to_forward_slashes(tprint("%1/build-%2.jai", plan.target_dir, plan.target.name));
-    if !write_entire_file(metaprogram_path, generate_build_metaprogram(driver, plan, source_file)) {
+    testing_dir := testing_module_strip_view_dir(driver.root_dir);
+    if !write_entire_file(metaprogram_path, generate_build_metaprogram(driver, plan, source_file, testing_dir)) {
         print("[juice ERROR] Could not write build metaprogram: %\n", metaprogram_path);
         return false;
     }
@@ -127,7 +128,13 @@ compile_artifact_plan :: (driver: *Build_Driver, plan: Artifact_Plan, entry: str
 // 0015 finding). All generated paths are absolute: relative paths in
 // set_build_options/add_build_file resolve against the metaprogram's own
 // location (target/), not the package root.
-generate_build_metaprogram :: (driver: *Build_Driver, plan: Artifact_Plan, entry: string) -> string {
+//
+// testing_view_dir (ticket 0033 special case, default "" = off): when the
+// Testing module source contains inline test blocks it cannot be compiled
+// directly; the directory holding its STRIP view (which contains a file
+// named Testing.jai) is prepended to the import path, so `#import "Testing"`
+// resolves to the test-free view instead of the module source file.
+generate_build_metaprogram :: (driver: *Build_Driver, plan: Artifact_Plan, entry: string, testing_view_dir: string = "") -> string {
     builder: String_Builder;
     print_to_builder(*builder, "#import \"Basic\";\n");
     print_to_builder(*builder, "#import \"Compiler\";\n\n");
@@ -141,6 +148,9 @@ generate_build_metaprogram :: (driver: *Build_Driver, plan: Artifact_Plan, entry
     print_to_builder(*builder, "    options.intermediate_path      = %1;\n", quote_jai_string(to_forward_slashes(plan.target_dir)));
     print_to_builder(*builder, "    import_paths: [..] string;\n");
     print_to_builder(*builder, "    array_add(*import_paths, .. options.import_path);\n");
+    if testing_view_dir != "" {
+        print_to_builder(*builder, "    array_add(*import_paths, %1);\n", quote_jai_string(testing_view_dir));
+    }
     for dir: compiler_import_directories(driver) {
         print_to_builder(*builder, "    array_add(*import_paths, %1);\n", quote_jai_string(dir));
     }
@@ -164,7 +174,6 @@ generate_build_metaprogram :: (driver: *Build_Driver, plan: Artifact_Plan, entry
     return builder_to_string(*builder);
 }
 
-// ---------------------------------------------------------------------------
 // Build transpile front (ADR 0004, tickets 0008/0021): per target, probe the
 // entry's closure of literal in-package #loads. A test-free closure compiles
 // the original entry unchanged (zero transpile, zero cache); a closure
@@ -173,6 +182,45 @@ generate_build_metaprogram :: (driver: *Build_Driver, plan: Artifact_Plan, entry
 // out-of-package #load targets are never viewed or rewritten; test blocks
 // there surface as plain jai compile errors.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Testing 断言模块构建特例（票 0033）：模块源文件内联 test block 后不可被
+// jai 直接编译，任何 `#import "Testing"` 的构建都必须解析到 test-free 的
+// STRIP 视图。本函数在每次编译前重写 <package>/target/testing-module/
+// Testing.jai（session product，与 test 命令的编译视图同路径——test 写
+// EXPAND、build 写 STRIP，各自运行前重写）。模块 test-free 或不存在时
+// 返回 ""：metaprogram 输出与特例前字节一致，零变化。
+// ---------------------------------------------------------------------------
+testing_module_strip_view_dir :: (package_root: string) -> string {
+    module_abs := to_forward_slashes(tprint("%1/Testing.jai", juice_modules_dir()));
+    if !path_exists_as_regular_file(module_abs) return "";
+    source, ok := read_entire_file(module_abs);
+    if !ok return "";
+    if !source_has_test_block(source) return "";
+
+    ctx: Transpile_Context;
+    ctx.mode = .STRIP;
+    ctx.path = "modules/Testing.jai";
+    result := transpile_source(source, ctx);
+    if result.diagnostics.count > 0 {
+        for diagnostic: result.diagnostics {
+            print("[juice ERROR] %1:%2,%3: %4\n", ctx.path, diagnostic.line, diagnostic.column, diagnostic.message);
+        }
+        return "";
+    }
+
+    dir := to_forward_slashes(tprint("%1/target/testing-module", package_root));
+    if !make_directory_if_it_does_not_exist(dir, recursive = true) {
+        print("[juice ERROR] Could not create Testing module view directory: %\n", dir);
+        return "";
+    }
+    view := to_forward_slashes(tprint("%1/Testing.jai", dir));
+    if !write_entire_file(view, result.view) {
+        print("[juice ERROR] Could not write Testing module view.\n");
+        return "";
+    }
+    return dir;
+}
 
 // One build source file: package-relative path ("/" separated) and absolute
 // path, mirroring the test command's Test_Source_File.
