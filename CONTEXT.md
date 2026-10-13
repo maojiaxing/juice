@@ -11,7 +11,7 @@ Juice 是一个面向 Jai  的命令行构建工具；本上下文统一描述�
 在目标 command 之前必须成功完成的另一个 command。前置关系表达命令之间的执行依赖，而不是把两个 command 合并为一个 command。
 
 **Build**:
-根据当前 workspace 的 package 与 target 定义，产生可执行输出的 command。Build 从入口闭包探测 test block：闭包含之则以剥离视图编译，不含则原样直编。Testing 断言模块源码含 test block 时不可被 jai 直接编译，Build 以该模块的 STRIP 视图替代 `#import "Testing"` 解析（与 Test 的 EXPAND 视图、Bootstrap build 的 STRIP 视图三路径对称的特例；模块 test-free 或不存在时无此行为）。Build 构建 root package 的全部 effective target，但不会在每次构建前自动清空 target directory。没有 effective target 时，Build 无需准备 dependencies，也不创建 target directory 或 artifact，但仍成功完成并明确说明没有可构建目标。对 LIB package，Build 仅验证导入入口，不调用编译器。
+根据当前 workspace 的 package 与 target 定义，产生可执行输出的 command。Build 从入口闭包探测 test block：闭包含之则以剥离视图编译，不含则原样直编。Testing 断言模块源码含 test block 时不可被 jai 直接编译，Build 以该模块的 STRIP 视图替代 `#import "Testing"` 解析，视图落 `target/testing-module/`（与 Test 的 EXPAND 编译视图同路径、与 Bootstrap build 的 STRIP 视图同语义，三路径对称的特例，各自运行前重写；模块 test-free 或不存在时无此行为）。Build 构建 root package 的全部 effective target，但不会在每次构建前自动清空 target directory。没有 effective target 时，Build 无需准备 dependencies，也不创建 target directory 或 artifact，但仍成功完成并明确说明没有可构建目标。对 LIB package，Build 仅验证导入入口，不调用编译器。
 
 **Run**:
 选择一个 target，先通过 `build` 构建 root package 的全部 effective target，再启动所选 target 的 artifact。只有一个 effective target 时默认选择它；有多个时优先选择与 package 同名的 target，否则必须以大小写完全一致的名称明确指定 target。
@@ -70,7 +70,7 @@ BIN package 没有显式 target、但 package 中存在默认入口文件 `src/m
 Effective target 构建后得到的可执行输出，具有确定的名称与位置；Build 产生 artifact，Run 启动同一个 artifact。Artifact 的默认名称等于 effective target 名称。测试生成物不是 artifact。
 
 **Target directory（目标目录）**:
-Package 的全部 Juice 管理生成物所在的固定约定目录 `target/`：artifact 与编译中间物（obj、构建 metaprogram 等）落其根，依赖导入 shim 落 `target/packages/`，转译产物落 `target/transpile/`。同一 package 的不同 artifact 以各自名称共存于其根。Target directory 必须是位于 package root 内的普通目录，不能是符号链接或其他路径重定向；artifact 也不能以符号链接占据计划路径。Clean 递归删除 root package 与 workspace member 的 target directory 整目录。与 Target declaration 同名异义（生成物目录 vs 构建目标声明），接受撞词。
+Package 的全部 Juice 管理生成物所在的固定约定目录 `target/`：artifact 与编译中间物（obj、构建 metaprogram 等）落其根，依赖导入 shim 落 `target/packages/`，转译产物落 `target/transpile/`，Testing 模块编译视图落 `target/testing-module/`（票 0033 特例：Test 写 EXPAND 视图、Build 与 Bootstrap build 写 STRIP 视图，各自运行前重写）。同一 package 的不同 artifact 以各自名称共存于其根。Target directory 必须是位于 package root 内的普通目录，不能是符号链接或其他路径重定向；artifact 也不能以符号链接占据计划路径。Clean 递归删除 root package 与 workspace member 的 target directory 整目录。与 Target declaration 同名异义（生成物目录 vs 构建目标声明），接受撞词。
 _Avoid_: result 目录（遗留不再管理）、bin 目录。
 
 **Transpile（转译）**:
@@ -78,7 +78,7 @@ _Avoid_: result 目录（遗留不再管理）、bin 目录。
 _Avoid_: 通用语法扩展框架（转译只为 test block 服务）。
 
 **View（视图）**:
-一个源文件经 Transpile 生成、与其一一对应的合法 Jai 产物，镜像 package 相对目录结构。剥离视图删除 test block 并将 in-package `#load` 重写为指向目标视图；测试视图将 test block 转换为带注记的普通过程并剥离 in-package `#load`，符号经程序级可见性共享。视图与原文件行号一一对应，产物中的行列坐标可直接对照原文件；原文件路径的还原由测试驱动携带的映射承担。
+一个源文件经 Transpile 生成、与其一一对应的合法 Jai 产物，镜像 package 相对目录结构。剥离视图删除 test block 并将 in-package `#load` 重写为指向目标视图；测试视图将 test block 转换为带注记的普通过程并剥离 in-package `#load`，符号经程序级可见性共享。视图与原文件行号一一对应，产物中的行列坐标可直接对照原文件；原文件路径的还原由测试驱动携带的映射承担。唯一例外是 Testing 模块编译视图（票 0033 特例）：EXPAND 视图尾部追加自测支撑段，行号不保真，其失败坐标经 path_mapping 映射回 `modules/Testing.jai` 原文坐标。
 _Avoid_: 把视图与一般「产物」混称（视图专指转译产物）。
 
 **Local dependency directory（本地依赖目录）**:
@@ -104,7 +104,7 @@ Juice 的一级断言模块，测试程序中的用户代码以 `#import "Testin
 _Avoid_: 测试专用声明散落其他源文件顶层（会随剥离视图进入发布产物）。
 
 **Test driver**:
-Juice 为执行测试生成的测试程序核心：一个无入口点的生成文件，收录全部视图，以编译期执行方式运行经 pattern 过滤的测试清单，存在失败时使编译失败。测试程序的全部生成物（视图、驱动、metaprogram）位于 target directory 的转译子树，不产生 artifact。测试在编译期环境执行，崩溃即测试构建失败、无汇总；Testing 模块经生成的 metaprogram 注入测试程序。
+Juice 为执行测试生成的测试程序核心：一个无入口点的生成文件，收录全部视图，以编译期执行方式运行经 pattern 过滤的测试清单，存在失败时使编译失败。测试程序的全部生成物（视图、驱动、metaprogram）位于 target directory 的转译子树，不产生 artifact——唯一例外是 Testing 模块编译视图（票 0033 特例），落 `target/testing-module/`：置于转译树内会混入其直接子项，破坏 cache-tree 测试对「转译树直接子项恰为 hash 目录与 driver.jai/first.jai」的断言。测试在编译期环境执行，崩溃即测试构建失败、无汇总；Testing 模块经生成的 metaprogram 注入测试程序。
 _Avoid_: test runner（无运行期 runner 进程）、测试可执行文件。
 
 ## Command organization
@@ -134,7 +134,7 @@ Juice 当前可用 command 的目录。它让 command 的名称、说明、参�
 - Test block 必须经 Transpile 转换为视图后才能编译；build 探测后剥离、test 展开，run 经 build 继承。
 - Bootstrap build 与 Build command 共用同一转译器与视图契约；Test support 被 Test discovery 扫描收录、不进 Build 闭包与 Bootstrap build 输入。
 - Test discovery 消费 workspace discovery 快照但不并入；member 以自身为 root 测试，依赖不发现不执行。
-- 测试程序全部生成物位于 target directory 的转译子树，不是 artifact。
+- 测试程序全部生成物位于 target directory 的转译子树（Testing 模块编译视图除外，落 `target/testing-module/`），不是 artifact。
 - Testing 经生成的 metaprogram 注入测试程序，收口断言与失败汇总。
 - 视图与原文件行号一一对应；失败报告与转译期诊断引用原文件坐标。
 - Clean 递归删除 root 与 member 的 target directory 整目录。

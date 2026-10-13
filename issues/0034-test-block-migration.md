@@ -25,6 +25,8 @@ tests/ 的 147 个存量 test block 全部迁入 src 对应文件（Zig 风格�
 | test_transpiler.jai（45） | `src/transpile.jai`（缓存相关块 → `src/transpile_cache.jai`） |
 | test_workspace.jai（14） | `src/workspace.jai` |
 
+> **落地注记（实际实现与本表有出入，表格保留规划期原貌）**：test_commands.jai 的 27 块全部落 `src/commands/{registry,run,clean,build}.jai`（未落 `src/{dependency,manifest,target,workspace}.jai`）；test_transpiler.jai 的 45 块落 `src/transpile_tests.jai`，原因即下方关键约束：`src/transpile.jai` 与 `src/transpile_cache.jai` 是 build.jai 的 `#load` 目标，必须保持 test-free。
+
 **关键约束（0031 已知风险落地）**：`src/transpile.jai` 与 `src/transpile_cache.jai` 是 build.jai 的 `#load` 目标 / 入口闭包成员——test block 随 metaprogram 编译期文本包含会非法。**这两个文件必须保持 test-free**。转译器的 45 个测试块落独立 src 文件（推荐 `src/transpile_tests.jai`）：不被入口 #load 引用即不进闭包，Test discovery 全包扫描收录（与 test_support.jai 同机制）。落地前 grep 确认无任何 `#load` 指向该文件。
 
 **执行纪律**：
