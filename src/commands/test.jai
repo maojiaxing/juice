@@ -144,80 +144,25 @@ test_prepared_workspace :: (
         array_add(*view_paths, transpile_view_path(transpile_dir, outputs[index].key, file.rel_path));
     }
 
-    // 4. Testing 断言模块特例（票 0033）：模块源文件内联 test block 后不可
-    //    被 jai 直接编译，生成器把 `#import "Testing"` 的解析目标换成生成
-    //    的编译视图（metaprogram 的 import_path 前置其目录，同一模块只加
-    //    载一份，全局计数不分裂）。package 自身的 modules/Testing.jai 存
-    //    在时（in_package），视图用 EXPAND 模式并追加 `#load` test_support
-    //    视图——模块是密封作用域（how_to 151），模块内 #load 的文件挂模块
-    //    的 Module scope，自测块引用测试支撑声明由此可见；其测试块同时收
-    //    进测试列表（全局编号续接）。用户 package 无此文件时视图用 STRIP
-    //    模式（test-free，断言语义同源文件），测试报告与计数零变更。模块
-    //    test-free 时走原路径（原样 #import 模块源文件）。
-    module_file, module_in_package := testing_module_source(prepared);
-    use_testing_view := false;
-    module_source := "";
-    if module_file.abs_path != "" {
-        source, ok := read_entire_file(module_file.abs_path);
-        if ok {
-            module_source = source;
-            if source_has_test_block(source) use_testing_view = true;
-        }
+    // 4. Testing 断言模块特例（票 0033，视图计算内聚于 testing_module_view，
+    //    票 0039）：模块源文件内联 test block 后不可被 jai 直接编译，生成器
+    //    把 `#import "Testing"` 的解析目标换成生成的编译视图（metaprogram
+    //    的 import_path 前置其目录，同一模块只加载一份，全局计数不分裂）。
+    //    此处只做支撑段视图查找、自测块的 pattern 过滤与全局编号续接；写盘
+    //    仍在 zero-match 检查之后的既有位置（步骤 6）。
+    support_view_text := "";
+    for f, index: files {
+        if f.rel_path == "tests/test_support.jai" support_view_text = outputs[index].view;
     }
-    testing_module_view := "";
-    module_view := "";
-    if use_testing_view {
-        if module_in_package {
-            // package 自身的模块：EXPAND 视图（编号续接全局序列），自测块
-            // 进测试列表。
-            module_result := transpile_test_file(module_file, next_number);
-            if module_result.diagnostics.count > 0 {
-                for diagnostic: module_result.diagnostics {
-                    print("[juice ERROR] %1:%2,%3: %4\n", module_file.rel_path, diagnostic.line, diagnostic.column, diagnostic.message);
-                }
-                return false;
+    module_view_result, module_ok := testing_module_view(prepared.discovery.root_dir, support_view_text, next_number);
+    if !module_ok return false;
+    if module_view_result.enabled {
+        for entry: module_view_result.tests {
+            if pattern == "" || find_index_from_left(entry.name, pattern) >= 0 {
+                array_add(*matches, entry);
             }
-            module_view = module_result.view;
-            for entry: module_result.tests {
-                if pattern == "" || find_index_from_left(entry.name, pattern) >= 0 {
-                    array_add(*matches, entry);
-                }
-            }
-            next_number += module_result.tests.count;
-            // EXPAND 编译视图追加自测支撑段：模块是密封作用域（how_to
-            // 151），自测块引用的 helper 必须驻模块自身作用域。test_support
-            // 视图整体内嵌会把其 #import 链与声明挂进模块 export 列表（与
-            // driver #load 的同一视图在 Application 重复），因此只切取
-            // Testing 自测段（helper 声明与记录全局），并配文件级 import
-            // 与自足 root（见 testing_module_support_block）。
-            support_view_text := "";
-            for f, index: files {
-                if f.rel_path == "tests/test_support.jai" support_view_text = outputs[index].view;
-            }
-            if support_view_text == "" {
-                print("[juice ERROR] Testing 自测需要 tests/test_support.jai 视图，但未发现该文件。\n");
-                return false;
-            }
-            support_block := testing_module_support_block(support_view_text);
-            if support_block == "" {
-                print("[juice ERROR] tests/test_support.jai 缺少 Testing 自测段标记。\n");
-                return false;
-            }
-            module_view = tprint("%1\n\n%2", module_view, support_block);
-        } else {
-            // 用户 package 的断言模块来源：STRIP 视图（test-free 编译视图）。
-            strip_ctx: Transpile_Context;
-            strip_ctx.mode = .STRIP;
-            strip_ctx.path = module_file.rel_path;
-            stripped := transpile_source(module_source, strip_ctx);
-            if stripped.diagnostics.count > 0 {
-                for diagnostic: stripped.diagnostics {
-                    print("[juice ERROR] %1:%2,%3: %4\n", module_file.rel_path, diagnostic.line, diagnostic.column, diagnostic.message);
-                }
-                return false;
-            }
-            module_view = stripped.view;
         }
+        next_number = module_view_result.next_test_number;
     }
 
     if matches.count == 0 {
@@ -255,18 +200,20 @@ test_prepared_workspace :: (
     //    path, so every `#import "Testing"` resolves to this file. It lives
     //    under target/ directly — outside the transpile tree, whose direct
     //    children the cache-tree tests assert to be exactly the hash
-    //    directories plus driver.jai/first.jai.
-    // 哨兵："" 表示「未启用编译视图特例」（use_testing_view 为 false），与
-    // 各生成器的 testing_view_dir/testing_module_view 同一约定。
+    //    directories plus driver.jai/first.jai. 计算在 testing_module_view
+    //    （票 0039），此处只写盘——保持在 zero-match 检查之后的既有位置。
+    // 哨兵："" 表示「未启用编译视图特例」（module_view_result.enabled 为
+    // false），与各生成器的 testing_view_dir/testing_module_view 同一约定。
     testing_module_dir := "";
-    if use_testing_view {
-        testing_module_dir = to_forward_slashes(tprint("%1/target/testing-module", prepared.discovery.root_dir));
+    testing_module_view_path := "";
+    if module_view_result.enabled {
+        testing_module_dir = module_view_result.dir;
         if !make_directory_if_it_does_not_exist(testing_module_dir, recursive = true) {
             print("[juice ERROR] Could not create Testing module view directory: %\n", testing_module_dir);
             return false;
         }
-        testing_module_view = to_forward_slashes(tprint("%1/Testing.jai", testing_module_dir));
-        if !write_entire_file(testing_module_view, module_view) {
+        testing_module_view_path = module_view_result.view_path;
+        if !write_entire_file(testing_module_view_path, module_view_result.view_text) {
             print("[juice ERROR] Could not write Testing module view.\n");
             return false;
         }
@@ -276,7 +223,7 @@ test_prepared_workspace :: (
     //    they are regenerated and written on every run, never cached.
     driver_path := tprint("%1/driver.jai", transpile_dir);
     metaprogram_path := tprint("%1/first.jai", transpile_dir);
-    if !write_entire_file(driver_path, generate_test_driver(files, view_paths, matches, testing_module_view)) {
+    if !write_entire_file(driver_path, generate_test_driver(files, view_paths, matches, testing_module_view_path)) {
         print("[juice ERROR] Could not write test driver.\n");
         return false;
     }
@@ -294,6 +241,88 @@ test_prepared_workspace :: (
     return compile(transpile_dir, driver_path, metaprogram_path);
 }
 
+// Testing 断言模块编译视图的计算（票 0033 特例，计算内聚于本函数，票
+// 0039）：模块源文件内联 test block 后不可被 jai 直接编译，测试程序必须
+// 把 `#import "Testing"` 的解析目标换成生成的编译视图。package 自身的
+// modules/Testing.jai 存在时（in_package），视图用 EXPAND 模式并追加
+// #load test_support 视图的 Testing 自测段——模块是密封作用域（how_to
+// 151），模块内 #load 的文件挂模块的 Module scope，自测块引用测试支撑
+// 声明由此可见；其测试块同时收进测试列表（全局编号续接）。用户 package
+// 无此文件时视图用 STRIP 模式（test-free，断言语义同源文件），测试报告
+// 与计数零变更。模块不存在、读取失败或 test-free 时返回未启用结果（原样
+// #import 模块源文件）。只计算不写盘：写盘留在编排的 zero-match 检查
+// 之后（session product 语义与既有行为逐字节一致）。
+Testing_Module_View_Result :: struct {
+    enabled:          bool;           // 未启用 = 原样 #import 模块源文件
+    in_package:       bool;
+    dir:              string;         // 写盘目录 target/testing-module
+    view_path:        string;         // 写盘文件 dir/Testing.jai
+    view_text:        string;         // EXPAND（+支撑段）或 STRIP 视图文本
+    tests:            [..] Test_Entry; // in-package 自测块（编号已续接）
+    next_test_number: s64;            // 续接后的全局编号
+}
+
+testing_module_view :: (package_root: string, support_view: string, next_test_number: s64) -> Testing_Module_View_Result, bool {
+    result: Testing_Module_View_Result;
+    result.next_test_number = next_test_number;
+
+    module_file, module_in_package := testing_module_source(package_root);
+    if module_file.abs_path == "" return result, true;
+
+    source, ok := read_entire_file(module_file.abs_path);
+    if !ok || !source_has_test_block(source) return result, true;
+
+    result.enabled = true;
+    result.in_package = module_in_package;
+    if module_in_package {
+        // package 自身的模块：EXPAND 视图（编号续接全局序列），自测块
+        // 进测试列表。
+        module_result := transpile_test_file(module_file, next_test_number);
+        if module_result.diagnostics.count > 0 {
+            for diagnostic: module_result.diagnostics {
+                print("[juice ERROR] %1:%2,%3: %4\n", module_file.rel_path, diagnostic.line, diagnostic.column, diagnostic.message);
+            }
+            return result, false;
+        }
+        result.view_text = module_result.view;
+        result.tests = module_result.tests;
+        result.next_test_number = next_test_number + module_result.tests.count;
+
+        // EXPAND 编译视图追加自测支撑段：test_support 视图整体内嵌会把
+        // 其 #import 链与声明挂进模块 export 列表（与 driver #load 的同一
+        // 视图在 Application 重复），因此只切取 Testing 自测段（helper
+        // 声明与记录全局），并配文件级 import 与自足 root（见
+        // testing_module_support_block）。
+        if support_view == "" {
+            print("[juice ERROR] Testing 自测需要 tests/test_support.jai 视图，但未发现该文件。\n");
+            return result, false;
+        }
+        support_block := testing_module_support_block(support_view);
+        if support_block == "" {
+            print("[juice ERROR] tests/test_support.jai 缺少 Testing 自测段标记。\n");
+            return result, false;
+        }
+        result.view_text = tprint("%1\n\n%2", result.view_text, support_block);
+    } else {
+        // 用户 package 的断言模块来源：STRIP 视图（test-free 编译视图）。
+        strip_ctx: Transpile_Context;
+        strip_ctx.mode = .STRIP;
+        strip_ctx.path = module_file.rel_path;
+        stripped := transpile_source(source, strip_ctx);
+        if stripped.diagnostics.count > 0 {
+            for diagnostic: stripped.diagnostics {
+                print("[juice ERROR] %1:%2,%3: %4\n", module_file.rel_path, diagnostic.line, diagnostic.column, diagnostic.message);
+            }
+            return result, false;
+        }
+        result.view_text = stripped.view;
+    }
+
+    result.dir = to_forward_slashes(tprint("%1/target/testing-module", package_root));
+    result.view_path = to_forward_slashes(tprint("%1/Testing.jai", result.dir));
+    return result, true;
+}
+
 // The Testing assertion module's source file for the generator special case
 // (ticket 0033): the package's own modules/Testing.jai when present
 // (in_package = true, its self-test blocks join the test list), otherwise
@@ -301,9 +330,9 @@ test_prepared_workspace :: (
 // empty abs_path when no module exists. The rel_path is always
 // "modules/Testing.jai": the module view's file name must stay Testing.jai
 // so the import path resolves it as the Testing module.
-testing_module_source :: (prepared: *Prepared_Workspace) -> (file: Test_Source_File, in_package: bool) {
+testing_module_source :: (package_root: string) -> (file: Test_Source_File, in_package: bool) {
     rel := "modules/Testing.jai";
-    pkg_path := tprint("%1/%2", prepared.discovery.root_dir, rel);
+    pkg_path := tprint("%1/%2", package_root, rel);
     if path_exists_as_regular_file(pkg_path) {
         file: Test_Source_File;
         file.rel_path = rel;
@@ -680,6 +709,64 @@ test "Seam: compile failure propagates" {
     result := test_prepared_workspace(*prepared, "", seam_files(), fake_transpile, fake_compile);
     delete_directory_full(tprint("%1/target/seam-root", juice_root()));
     expect(!result && test_compile_calls == 1);
+}
+
+// ---------------------------------------------------------------------------
+// Testing 模块视图计算（票 0039）：来源探测、哨兵禁用、EXPAND+支撑段与
+// 全局 STRIP 的直接单测。写盘编排路径由 E2E（Testing 自测与 fixture
+// package 场景）覆盖。
+// ---------------------------------------------------------------------------
+
+test "Testing module source: in-package module wins over the global one" {
+    root := tprint("%1/target/tm-source-inpackage", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "modules/Testing.jai", "test \"self\" { }\n"));
+    file, in_package := testing_module_source(root);
+    expect(in_package && file.rel_path == "modules/Testing.jai");
+    expect(file.abs_path == to_forward_slashes(tprint("%1/modules/Testing.jai", root)));
+}
+
+// 全局模块分支（exe 邻接）在编译期不可直接单测：编译期执行时
+// juice_modules_dir() 解析到 jai 编译器自身的 modules 目录。该分支由
+// E2E child 场景（真实 juice.exe 于 fixture package）端到端覆盖。
+
+test "Testing module view: a test-free module stays disabled" {
+    root := tprint("%1/target/tm-view-testfree", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "modules/Testing.jai", "// no test blocks\n"));
+    result, ok := testing_module_view(root, "", 1);
+    expect(ok && !result.enabled);
+    expect(result.dir == "" && result.view_path == "" && result.tests.count == 0);
+    expect(result.next_test_number == 1);
+}
+
+// In-package 模块：EXPAND 视图 + 支撑段切取，自测块编号续接全局序列。
+test "Testing module view: in-package self-tests join with the support block" {
+    root := tprint("%1/target/tm-view-inpackage", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "modules/Testing.jai", "test \"self one\" { }\ntest \"self two\" { }\n"));
+    support_view := "\n// __testing_module_support_begin__\nhelper :: () {}\n// __testing_module_support_end__\n";
+    result, ok := testing_module_view(root, support_view, 7);
+    expect(ok && result.enabled && result.in_package);
+    expect(result.tests.count == 2);
+    expect(result.tests[0].name == "self one" && result.tests[0].number == 7 && result.tests[1].number == 8);
+    expect(result.next_test_number == 9);
+    expect(result.dir == to_forward_slashes(tprint("%1/target/testing-module", root)));
+    expect(result.view_path == to_forward_slashes(tprint("%1/target/testing-module/Testing.jai", root)));
+    expect(find_index_from_left(result.view_text, "juice_test_7 :: () -> () {") >= 0);
+    expect(find_index_from_left(result.view_text, "__testing_module_support_begin__") >= 0);
+}
+
+test "Testing module view: missing support markers fail the computation" {
+    root := tprint("%1/target/tm-view-nomarkers", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "modules/Testing.jai", "test \"self\" { }\n"));
+    result, ok := testing_module_view(root, "// no markers\n", 1);
+    expect(!ok && result.enabled);
 }
 
 // The transpile seam crosses the same interface as production: the real step

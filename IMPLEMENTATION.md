@@ -12,7 +12,7 @@ Juice uses an explicit static command registry and prerequisite Dispatcher. Each
 | `src/commands/build.jai` | Build declaration, argument contract, compilation, batch revalidation, prepared-workspace orchestration, and build import-directory assembly |
 | `src/commands/run.jai` | Run declaration, argument contract, target selection, diagnostics, and artifact launch |
 | `src/commands/clean.jai` | Clean declaration, argument contract, cleanup scope, all-path validation, and deletion policy |
-| `src/commands/test.jai` | Test declaration, argument contract, discovery scan, transpile orchestration, driver generation, and the Testing module view special case |
+| `src/commands/test.jai` | Test declaration, argument contract, discovery scan, transpile orchestration, driver generation, and the Testing module view special case (`testing_module_view` helper) |
 | `src/dispatcher.jai` | Registry validation, lookup, planning, and execution; production and test registries share it |
 | `src/workspace.jai` | Workspace discovery, member validation, the discovery/preparation state machine, and the command-side prepared-workspace guard |
 | `src/dependency.jai` | Dependency fetching, workspace-member lookup over the discovery snapshot, and the local dependency directory derivation (`packages_dir`) |
