@@ -91,17 +91,16 @@ Production handlers use the defaults. Real process execution, compilation, works
 
 ```bash
 jai build.jai
-cd tests
-jai build_test.jai
-../bin/test_dispatcher.exe
+./target/juice.exe test
 ```
+
+The repository is a BIN package (manifest `package.jai`, target = `src/main.jai`); the development loop is `jai build.jai` then `./target/juice.exe test` at the repository root, and `juice test` is the only test entry — it runs the migrated test-block suite. `juice build` self-builds into `target/`, but on Windows the linker cannot overwrite the running `target/juice.exe` (LNK1104), so the dev-loop binary is rebuilt with `jai build.jai`, not by the running binary. E2E tests in the suite spawn `target/juice.exe` (ticket 0023 bootstrap flow: build juice first, then `juice test`). The old per-executable harness (`tests/build_test.jai`) was retired with the migration. `juice build` compiles through a generated metaprogram (`target/build-<name>.jai`); it, the test metaprogram and the bootstrap `build.jai` all set `Build_Options.intermediate_path` to `target/`, so jai intermediates (`.obj`, `.lib`, temp files) land there and leave with Clean.
 
 `tests/test_commands.jai` covers production registry aggregation, command argument/preparation guards, Run orchestration, and Clean policy. `tests/test_workspace.jai` covers the workspace state machine and dependency snapshot consumption. `tests/test_dispatcher.jai` covers registry validation, lookup, cycle detection, diamond deduplication, argument preflight, and failure propagation through the production Dispatcher.
 
 ## Unchanged limitations
 
 - Dispatcher prerequisite execution still happens in the prepared order; only the requested command receives user arguments.
-- Juice itself has no `package.jai`; build/run smoke tests need a separate package.
 - The existing help formatter can print a `-12` suffix; correcting it is separate from command ownership.
 - On the current Windows toolchain, real Clean attempts on populated directories fail with `Invalid switch`. This was reproduced with both this refactor and an independently compiled, unchanged `69974af` snapshot. Command-policy tests pass, but successful deletion of populated directories is not verified on Windows; fixing the filesystem deletion operation is separate work.
 
