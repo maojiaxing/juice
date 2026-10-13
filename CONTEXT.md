@@ -115,6 +115,10 @@ Juice 当前可用 command 的目录。它让 command 的名称、说明、参�
 **Dispatcher**:
 根据用户输入在 command registry 中选择 command，按其前置关系执行所需 command，并把最终成功/失败结果交给 CLI 进程。Dispatcher 在执行任何 prerequisite 之前用目标 command 自身的参数规则验证用户参数；参数无效时任何 command 都不执行。
 
+**Metaprogram generator（metaprogram 生成器）**:
+Juice 进程内生成编译 metaprogram 源文本的模块（src/metaprogram.jai）：Build 与 Test 共用同一生成器，产出驱动 jai 编译器的一次性 workspace、拦截与消息循环骨架；两个 command 各自组装 options（workspace 名、输出形状、import 目录、入口文件）后调用，Testing 模块编译视图的 "" 哨兵约定在生成器内单点成立。Bootstrap build 不 #load 运行时源码，保留 ADR 0006 对称复制（build.jai 内嵌同骨架）。
+_Avoid_: 各 command 自持 metaprogram 骨架（会复制消息循环与哨兵约定）。
+
 ## Relationships
 
 - Dispatcher 从 command registry 选择一个 command。
@@ -138,3 +142,4 @@ Juice 当前可用 command 的目录。它让 command 的名称、说明、参�
 - Testing 经生成的 metaprogram 注入测试程序，收口断言与失败汇总。
 - 视图与原文件行号一一对应；失败报告与转译期诊断引用原文件坐标。
 - Clean 递归删除 root 与 member 的 target directory 整目录。
+- Build 与 Test 共用同一 Metaprogram generator 生成编译 metaprogram；Bootstrap build 保留内嵌对称复制（ADR 0006）。

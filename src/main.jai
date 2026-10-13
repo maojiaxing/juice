@@ -12,6 +12,7 @@
 #load "driver.jai";
 #load "transpile.jai";
 #load "transpile_cache.jai";
+#load "metaprogram.jai";
 #load "commands/command.jai";
 #load "commands/prepare.jai";
 #load "commands/build.jai";

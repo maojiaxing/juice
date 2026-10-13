@@ -76,3 +76,11 @@ transpile_hash_dir :: (transpile_dir: string, key: string) -> string {
 transpile_view_path :: (transpile_dir: string, key: string, rel_path: string) -> string {
     return tprint("%1/%2/%3", cache_slashes(transpile_dir), key, rel_path);
 }
+
+// The transpile subtree root: <package root>/target/transpile/. Views, the
+// test driver and the test metaprogram products all live under it (Target
+// directory, CONTEXT.md). Build and Test derive it from the same package
+// root (票 0036：build_transpile_dir/test_transpile_dir 逐字同体，收口于此)。
+transpile_tree_dir :: (package_root: string) -> string {
+    return tprint("%1/target/transpile", cache_slashes(package_root));
+}

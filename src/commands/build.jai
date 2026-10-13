@@ -37,13 +37,12 @@ build_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
 // Import directories every compile gets beyond jai's own defaults: the
 // juice module directory (adjacent to the running executable, holds
 // Testing.jai/Juice.jai) and the package's dependency shim directory.
+// juice_modules_dir is the shared derivation (src/path_safety.jai, 票 0036).
 compiler_import_directories :: (driver: *Build_Driver) -> [..] string {
     dirs: [..] string;
     dirs.allocator = temp;
 
-    exe_path := get_path_of_running_executable();
-    bin_dir  := path_strip_filename(exe_path);
-    global_modules_dir := to_forward_slashes(tprint("%1/../modules", bin_dir));
+    global_modules_dir := juice_modules_dir();
     if is_directory(global_modules_dir) array_add(*dirs, global_modules_dir);
 
     if is_directory(driver.packages_dir) {
@@ -101,7 +100,15 @@ compile_artifact_plan :: (driver: *Build_Driver, plan: Artifact_Plan, entry: str
     // directory next to the entry, and Clean removes them with target/.
     metaprogram_path := to_forward_slashes(tprint("%1/build-%2.jai", plan.target_dir, plan.target.name));
     testing_dir := testing_module_strip_view_dir(driver.root_dir);
-    if !write_entire_file(metaprogram_path, generate_build_metaprogram(driver, plan, source_file, testing_dir)) {
+    metaprogram: Compiler_Metaprogram_Options;
+    metaprogram.workspace_name    = "Juice Build";
+    metaprogram.executable_name   = plan.target.name;
+    metaprogram.output_path       = to_forward_slashes(plan.target_dir);
+    metaprogram.intermediate_path = to_forward_slashes(plan.target_dir);
+    metaprogram.import_dirs       = compiler_import_directories(driver);
+    metaprogram.build_file        = source_file;
+    metaprogram.testing_view_dir  = testing_dir;
+    if !write_entire_file(metaprogram_path, generate_compiler_metaprogram(metaprogram)) {
         print("[juice ERROR] Could not write build metaprogram: %\n", metaprogram_path);
         return false;
     }
@@ -119,64 +126,11 @@ compile_artifact_plan :: (driver: *Build_Driver, plan: Artifact_Plan, entry: str
     return true;
 }
 
-// Generated build metaprogram: the same one-shot workspace/message-loop
-// shape as the test metaprogram and the repository's bootstrap build.jai.
-// It sets output_executable_name, output_path and intermediate_path to the
-// plan's target directory, extends import_path with the juice module
-// directory and the dependency shim directory, and adds the (possibly
-// viewed) entry. The message loop only consumes messages — jai exits
-// non-zero on its own when the intercepted workspace has errors (ticket
-// 0015 finding). All generated paths are absolute: relative paths in
-// set_build_options/add_build_file resolve against the metaprogram's own
-// location (target/), not the package root.
-//
-// testing_view_dir (ticket 0033 special case, default "" = off): when the
-// Testing module source contains inline test blocks it cannot be compiled
-// directly; the directory holding its STRIP view (which contains a file
-// named Testing.jai) is prepended to the import path, so `#import "Testing"`
-// resolves to the test-free view instead of the module source file.
-// 哨兵约定："" 表示「未启用编译视图特例」——与 testing_module_strip_view_dir
-// 的返回值、Test 的 generate_test_metaprogram 参数同一约定（生成输出与
-// 特例前逐字节一致）。
-generate_build_metaprogram :: (driver: *Build_Driver, plan: Artifact_Plan, entry: string, testing_view_dir: string = "") -> string {
-    builder: String_Builder;
-    print_to_builder(*builder, "#import \"Basic\";\n");
-    print_to_builder(*builder, "#import \"Compiler\";\n\n");
-    print_to_builder(*builder, "#run {\n");
-    print_to_builder(*builder, "    set_build_options_dc(.{do_output = false});\n");
-    print_to_builder(*builder, "    workspace := compiler_create_workspace(\"Juice Build\");\n");
-    print_to_builder(*builder, "    if !workspace return;\n");
-    print_to_builder(*builder, "    options := get_build_options(workspace);\n");
-    print_to_builder(*builder, "    options.output_executable_name = %1;\n", quote_jai_string(plan.target.name));
-    print_to_builder(*builder, "    options.output_path            = %1;\n", quote_jai_string(to_forward_slashes(plan.target_dir)));
-    print_to_builder(*builder, "    options.intermediate_path      = %1;\n", quote_jai_string(to_forward_slashes(plan.target_dir)));
-    print_to_builder(*builder, "    import_paths: [..] string;\n");
-    print_to_builder(*builder, "    array_add(*import_paths, .. options.import_path);\n");
-    if testing_view_dir != "" {
-        print_to_builder(*builder, "    array_add(*import_paths, %1);\n", quote_jai_string(testing_view_dir));
-    }
-    for dir: compiler_import_directories(driver) {
-        print_to_builder(*builder, "    array_add(*import_paths, %1);\n", quote_jai_string(dir));
-    }
-    print_to_builder(*builder, "    options.import_path = import_paths;\n");
-    print_to_builder(*builder, "    set_build_options(options, workspace);\n");
-    print_to_builder(*builder, "    compiler_begin_intercept(workspace);\n");
-    print_to_builder(*builder, "    add_build_file(%1, workspace);\n", quote_jai_string(to_forward_slashes(entry)));
-    print_to_builder(*builder, "    while true {\n");
-    print_to_builder(*builder, "        msg := compiler_wait_for_message();\n");
-    print_to_builder(*builder, "        if !msg continue;\n");
-    print_to_builder(*builder, "        if msg.workspace == workspace {\n");
-    print_to_builder(*builder, "            if msg.kind == {\n");
-    print_to_builder(*builder, "                case .ERROR;\n");
-    print_to_builder(*builder, "                case .COMPLETE;\n");
-    print_to_builder(*builder, "                    break;\n");
-    print_to_builder(*builder, "            }\n");
-    print_to_builder(*builder, "        }\n");
-    print_to_builder(*builder, "    }\n");
-    print_to_builder(*builder, "    compiler_end_intercept(workspace);\n");
-    print_to_builder(*builder, "}\n");
-    return builder_to_string(*builder);
-}
+// The compile runs through a metaprogram generated by the shared
+// Metaprogram generator (src/metaprogram.jai, 票 0036): Build assembles the
+// options here — executable output into the plan's target directory, the
+// juice module directory and the dependency shim directory as import
+// directories, and the (possibly viewed) entry as the build file.
 
 // Build transpile front (ADR 0004, tickets 0008/0021): per target, probe the
 // entry's closure of literal in-package #loads. A test-free closure compiles
@@ -271,12 +225,6 @@ transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target) 
     output.key = transpile_view_key(file.rel_path, source, .STRIP, load_targets, JUICE_VERSION);
     output.diagnostics = result.diagnostics;
     return output;
-}
-
-// The transpile subtree root: <package root>/target/transpile/ — the same
-// tree the test command uses; content addressing keeps the modes apart.
-build_transpile_dir :: (prepared: *Prepared_Workspace) -> string {
-    return to_forward_slashes(tprint("%1/target/transpile", prepared.discovery.root_dir));
 }
 
 probe_visited :: (visited: [] string, rel_path: string) -> bool {
@@ -437,7 +385,7 @@ build_plan_entry :: (
     if !has_tests return to_forward_slashes(plan.target.source_path), true;
 
     state: Build_View_State;
-    state.transpile_dir = build_transpile_dir(prepared);
+    state.transpile_dir = transpile_tree_dir(prepared.discovery.root_dir);
     state.closure = closure;
     state.transpile = transpile;
     for _: closure {

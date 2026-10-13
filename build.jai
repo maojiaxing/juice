@@ -272,8 +272,8 @@ bootstrap_strip_front :: (entry_rel: string, use_view: *bool, entry_view: *strin
     // testing_view_dir 保持 ""，零变化。
     // -------------------------------------------------------------
     // 哨兵约定：testing_view_dir == "" 表示「未启用编译视图特例」——与
-    // Build command 的 testing_module_strip_view_dir 返回值、Test command
-    // 的 generate_test_metaprogram 参数同一约定。
+    // 共享 Metaprogram generator 的 testing_view_dir 参数（票 0036）、
+    // Build command 的 testing_module_strip_view_dir 返回值同一约定。
     testing_view_dir := "";
     testing_module_rel := "modules/Testing.jai";
     module_source, ok := read_entire_file(testing_module_rel);

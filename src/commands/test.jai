@@ -141,7 +141,7 @@ test_prepared_workspace :: (
     //    package-relative structure mirrored inside the hash directory. The
     //    paths are computed up front: the Testing module special case below
     //    refers to the test support view by rel_path.
-    transpile_dir := test_transpile_dir(prepared);
+    transpile_dir := transpile_tree_dir(prepared.discovery.root_dir);
     view_paths: [..] string;
     for file, index: files {
         array_add(*view_paths, transpile_view_path(transpile_dir, outputs[index].key, file.rel_path));
@@ -283,7 +283,14 @@ test_prepared_workspace :: (
         print("[juice ERROR] Could not write test driver.\n");
         return false;
     }
-    if !write_entire_file(metaprogram_path, generate_test_metaprogram(driver_path, juice_modules_dir(), tprint("%1/target", prepared.discovery.root_dir), testing_module_dir)) {
+    metaprogram: Compiler_Metaprogram_Options;
+    metaprogram.workspace_name    = "Juice Test Program";
+    metaprogram.no_output         = true;
+    metaprogram.intermediate_path = tprint("%1/target", prepared.discovery.root_dir);
+    metaprogram.import_dirs       = string.[juice_modules_dir()];
+    metaprogram.build_file        = driver_path;
+    metaprogram.testing_view_dir  = testing_module_dir;
+    if !write_entire_file(metaprogram_path, generate_compiler_metaprogram(metaprogram)) {
         print("[juice ERROR] Could not write test metaprogram.\n");
         return false;
     }
@@ -352,21 +359,6 @@ testing_module_support_block :: (support_view: string) -> string {
     return builder_to_string(*builder);
 }
 
-// The transpile subtree root: views, driver and metaprogram all live under
-// <package root>/target/transpile/ (Target directory, CONTEXT.md). Derived
-// from the package root because Test consumes the prepared workspace without
-// the artifact plan (LIB packages have none).
-test_transpile_dir :: (prepared: *Prepared_Workspace) -> string {
-    return to_forward_slashes(tprint("%1/target/transpile", prepared.discovery.root_dir));
-}
-
-juice_modules_dir :: () -> string {
-    exe_path := get_path_of_running_executable();
-    bin_dir := path_strip_filename(exe_path);
-    if bin_dir.count > 0 && bin_dir[bin_dir.count - 1] == #char "/" bin_dir.count -= 1;
-    return to_forward_slashes(tprint("%1/../modules", bin_dir));
-}
-
 // Driver (docs/transpiled-output-formatting.md §2): an entry-point-free
 // generated file with four parameterized points — the view list (every
 // discovered package file exactly once, in list order, content-addressed
@@ -380,8 +372,9 @@ juice_modules_dir :: () -> string {
 // absolute path of the generated Testing module compile view. When set, the
 // module's self-test blocks run through it and its path-mapping entry prints
 // module failure coordinates as the package-relative "modules/Testing.jai".
-// 哨兵约定："" 表示「未启用编译视图特例」——与 generate_test_metaprogram 的
-// testing_view_dir 同一约定（生成输出与特例前逐字节一致）。
+// 哨兵约定："" 表示「未启用编译视图特例」——与共享 Metaprogram generator
+// 的 testing_view_dir、bootstrap build.jai 的 testing_view_dir 同一约定
+// （生成输出与特例前逐字节一致，票 0036）。
 generate_test_driver :: (files: [] Test_Source_File, view_paths: [] string, matches: [] Test_Entry, testing_module_view: string = "") -> string {
     builder: String_Builder;
     print_to_builder(*builder, "#import \"Basic\";\n\n");
@@ -407,60 +400,14 @@ generate_test_driver :: (files: [] Test_Source_File, view_paths: [] string, matc
     return builder_to_string(*builder);
 }
 
-// Metaprogram (docs/transpiled-output-formatting.md §3): NO_OUTPUT so the
-// test program has no entry point, import_path gets the Testing module
-// directory, intermediate_path is the package target directory (compiler
-// intermediates land under target/, not a .build directory next to the
-// metaprogram), and the driver is added after the intercept begins. The
-// message loop only consumes messages — the current jai exits non-zero on
-// its own when an intercepted workspace has errors, and calling exit() from
-// a metaprogram would kill the process before jai flushes the collected
-// print output (ticket 0015 finding).
-//
-// testing_view_dir (ticket 0033 special case, default "" = off): when the
-// Testing module source contains inline test blocks it cannot be compiled
-// directly; the directory holding its EXPAND view (which contains a file
-// named Testing.jai) is prepended to the import path, so `#import "Testing"`
-// resolves to the view instead of the module source file.
-// 哨兵约定："" 表示「未启用编译视图特例」——与 Build 的
-// generate_build_metaprogram 参数、bootstrap build.jai 的 testing_view_dir
-// 同一约定（生成输出与特例前逐字节一致）。
-generate_test_metaprogram :: (driver_path: string, modules_dir: string, target_dir: string, testing_view_dir: string = "") -> string {
-    builder: String_Builder;
-    print_to_builder(*builder, "#import \"Basic\";\n");
-    print_to_builder(*builder, "#import \"Compiler\";\n\n");
-    print_to_builder(*builder, "#run {\n");
-    print_to_builder(*builder, "    set_build_options_dc(.{do_output = false});\n");
-    print_to_builder(*builder, "    workspace := compiler_create_workspace(\"Juice Test Program\");\n");
-    print_to_builder(*builder, "    if !workspace return;\n");
-    print_to_builder(*builder, "    options := get_build_options(workspace);\n");
-    print_to_builder(*builder, "    options.output_type = .NO_OUTPUT;\n");
-    print_to_builder(*builder, "    options.intermediate_path = %1;\n", quote_jai_string(to_forward_slashes(target_dir)));
-    print_to_builder(*builder, "    import_paths: [..] string;\n");
-    print_to_builder(*builder, "    array_add(*import_paths, .. options.import_path);\n");
-    if testing_view_dir != "" {
-        print_to_builder(*builder, "    array_add(*import_paths, %1);\n", quote_jai_string(testing_view_dir));
-    }
-    print_to_builder(*builder, "    array_add(*import_paths, %1);\n", quote_jai_string(modules_dir));
-    print_to_builder(*builder, "    options.import_path = import_paths;\n");
-    print_to_builder(*builder, "    set_build_options(options, workspace);\n");
-    print_to_builder(*builder, "    compiler_begin_intercept(workspace);\n");
-    print_to_builder(*builder, "    add_build_file(%1, workspace);\n", quote_jai_string(driver_path));
-    print_to_builder(*builder, "    while true {\n");
-    print_to_builder(*builder, "        msg := compiler_wait_for_message();\n");
-    print_to_builder(*builder, "        if !msg continue;\n");
-    print_to_builder(*builder, "        if msg.workspace == workspace {\n");
-    print_to_builder(*builder, "            if msg.kind == {\n");
-    print_to_builder(*builder, "                case .ERROR;\n");
-    print_to_builder(*builder, "                case .COMPLETE;\n");
-    print_to_builder(*builder, "                    break;\n");
-    print_to_builder(*builder, "            }\n");
-    print_to_builder(*builder, "        }\n");
-    print_to_builder(*builder, "    }\n");
-    print_to_builder(*builder, "    compiler_end_intercept(workspace);\n");
-    print_to_builder(*builder, "}\n");
-    return builder_to_string(*builder);
-}
+// The metaprogram itself is generated by the shared Metaprogram generator
+// (src/metaprogram.jai, 票 0036): NO_OUTPUT so the test program has no entry
+// point, import_path gets the Testing module directory, intermediate_path is
+// the package target directory (compiler intermediates land under target/,
+// not a .build directory next to the metaprogram), and the driver is added
+// after the intercept begins. The byte-for-byte output contract is locked by
+// tests/data/transpile/golden/*/first.jai (docs/transpiled-output-formatting.md
+// §3).
 
 // Full discovery scan (ticket 0019, issue 0003): recursively collects every
 // lowercase ".jai" test source from the package root. Dot entries are
@@ -641,7 +588,7 @@ test "Seam: transpile step drives fake views into a compiled driver" {
 
     // The fake views were written content-addressed into the transpile tree,
     // mirroring the package structure inside the key directory.
-    transpile_dir := test_transpile_dir(*prepared);
+    transpile_dir := transpile_tree_dir(prepared.discovery.root_dir);
     view_a := tprint("%1/%2/src/a.jai", transpile_dir, fake_key("src/a.jai"));
     view_b := tprint("%1/%2/src/b.jai", transpile_dir, fake_key("src/b.jai"));
     expect(file_contains(view_a, "// fake view of src/a.jai"));
@@ -678,7 +625,7 @@ test "Seam: a cache hit leaves the existing view untouched" {
     reset_seam_test();
     driver: Build_Driver;
     prepared := seam_prepared();
-    transpile_dir := test_transpile_dir(*prepared);
+    transpile_dir := transpile_tree_dir(prepared.discovery.root_dir);
     stale_path := tprint("%1/%2/src/a.jai", transpile_dir, fake_key("src/a.jai"));
     expect(make_directory_if_it_does_not_exist(path_strip_filename(stale_path), recursive = true));
     expect(write_entire_file(stale_path, "// stale cached view\n"));
@@ -699,7 +646,7 @@ test "Seam: pattern filters the generated test list" {
     driver: Build_Driver;
     prepared := seam_prepared();
     expect(test_prepared_workspace(*driver, *prepared, "b.jai", seam_files(), fake_transpile, fake_compile));
-    driver_path := tprint("%1/driver.jai", test_transpile_dir(*prepared));
+    driver_path := tprint("%1/driver.jai", transpile_tree_dir(prepared.discovery.root_dir));
     expect(test_compile_calls == 1);
     expect(file_contains(driver_path, "run(\"src/b.jai test 0\", juice_test_2);"));
     expect(!file_contains(driver_path, "run(\"src/a.jai test 0\", juice_test_1);"));

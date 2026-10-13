@@ -1,6 +1,7 @@
 #import "Basic";
 #import "File";
 #import "File_Utilities";
+#import "Process";
 #import "String";
 
 #if OS == .WINDOWS {
@@ -30,6 +31,17 @@ path_backslashes :: (path: string) -> string {
         if result[i] == #char "/" result[i] = #char "\\";
     }
     return result;
+}
+
+// Directory holding Juice's modules (Testing.jai/Juice.jai), adjacent to the
+// running executable. Shared by the build/test commands (compiler import
+// directories, Testing module source lookup) and the manifest evaluator child
+// (-import_dir) — one derivation, three call sites (票 0036).
+juice_modules_dir :: () -> string {
+    exe_path := get_path_of_running_executable();
+    bin_dir := path_strip_filename(exe_path);
+    if bin_dir.count > 0 && bin_dir[bin_dir.count - 1] == #char "/" bin_dir.count -= 1;
+    return path_slashes(tprint("%1/../modules", bin_dir));
 }
 
 paths_equal :: (left: string, right: string) -> bool {

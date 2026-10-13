@@ -911,10 +911,16 @@ run_golden_cases :: (update: bool) -> bool {
         // normalized to the <abs> placeholder before comparing.
         driver_text := generate_test_driver(driver_files, driver_view_paths, matches);
         if !compare_or_update(tprint("%1/driver.jai", dir), normalize_golden_abs(driver_text), update) all_ok = false;
-        first_text := generate_test_metaprogram(
-            tprint("%1/target/transpile/driver.jai", golden_root()),
-            tprint("%1/modules", golden_root()),
-            tprint("%1/target", golden_root()));
+        // 共享 Metaprogram generator 的测试形状（票 0036）：绝对路径经
+        // <abs> 占位符归一后与期望文件逐字节对比——字节一致不变量由
+        // golden 夹具锁定。
+        metaprogram: Compiler_Metaprogram_Options;
+        metaprogram.workspace_name    = "Juice Test Program";
+        metaprogram.no_output         = true;
+        metaprogram.intermediate_path = tprint("%1/target", golden_root());
+        metaprogram.import_dirs       = string.[tprint("%1/modules", golden_root())];
+        metaprogram.build_file        = tprint("%1/target/transpile/driver.jai", golden_root());
+        first_text := generate_compiler_metaprogram(metaprogram);
         if !compare_or_update(tprint("%1/first.jai", dir), normalize_golden_abs(first_text), update) all_ok = false;
     }
     return all_ok;
