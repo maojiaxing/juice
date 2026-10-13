@@ -100,7 +100,7 @@ _Avoid_: 测试函数、容器式测试。
 Juice 的一级断言模块，测试程序中的用户代码以 `#import "Testing"` 引用。提供最小断言集 expect、expect_eq、fail：断言失败即登记并中止当前测试，套件继续；失败即时逐条输出，结束时汇总计数，失败数非零使测试构建失败。失败报告以 `路径:行,列` 语法指向原文件坐标。Testing 仅依赖 Basic，对执行模型中立。
 
 **Test support（测试支撑代码）**:
-`src/test_support.jai` 约定位置，收录供测试程序共享的声明：跨 test block 复用的 helper、recording fake、记录全局与测试常量。Test support 不被入口 `#load` 引用，不进 Build 闭包、不参与发布构建；Test discovery 全包扫描将其收录进测试程序，src 内联 test block 经程序级可见性引用其声明。测试共享声明只允许位于 Test support 文件。
+`tests/test_support.jai` 约定位置（2026-10 用户修订：纯测试支撑代码不驻 src/，由 `src/test_support.jai` 移入），收录供测试程序共享的声明：跨 test block 复用的 helper、recording fake、记录全局与测试常量。Test support 不被入口 `#load` 引用，不进 Build 闭包、不参与发布构建；Test discovery 全包扫描将其收录进测试程序，src 内联 test block 经程序级可见性引用其声明。测试共享声明只允许位于 Test support 文件。
 _Avoid_: 测试专用声明散落其他源文件顶层（会随剥离视图进入发布产物）。
 
 **Test driver**:

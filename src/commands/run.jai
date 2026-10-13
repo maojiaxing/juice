@@ -86,7 +86,7 @@ run_prepared_workspace :: (
 // 内联测试（票 0034 自旧 tests/ 迁移）：Run 目标选择与 launch
 // seam；E2E child 场景验证 run 经由 build 前置继承剥离语义。共享 helper
 // （test_launch_* 记录全局、run_juice_child 等 child 场景 helper）见
-// src/test_support.jai。
+// tests/test_support.jai。
 // ---------------------------------------------------------------------------
 
 test "Run launches the selected prepared artifact" {

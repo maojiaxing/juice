@@ -1,15 +1,19 @@
 // ---------------------------------------------------------------------------
-// Test support（测试支撑代码，组织决议 0027、规格 0032）：测试程序共享声明的
-// 唯一允许位置。收录旧 tests/ 测试文件顶层迁移而来的全部共享声明——helper、
-// recording fake 与记录全局、GOLDEN_CASES 等测试常量，供迁入 src 的内联
-// test block（票 0034）与 Testing 自测共同引用（Test discovery 全包扫描收录
-// 本文件进测试程序，声明程序级共享）。
+// Test support（测试支撑代码，组织决议 0027、规格 0032；2026-10 用户修订：
+// 纯测试支撑代码不驻 src/，由 src/test_support.jai 移至 tests/test_support.jai）
+// ——测试程序共享声明的唯一允许位置。收录旧 tests/ 测试文件顶层迁移而来的
+// 全部共享声明——helper、recording fake 与记录全局、GOLDEN_CASES 等测试
+// 常量，供 src 内联 test block（票 0034）与 Testing 自测共同引用（Test
+// discovery 全包扫描收录本文件进测试程序，声明程序级共享）。
 //
-// 纪律：测试共享声明只允许位于本文件；其他 src 文件顶层不放测试专用声明
-// （STRIP 会保留进发布产物）；modules/Testing.jai 顶层不驻测试 helper。
+// 纪律：测试共享声明只允许位于本文件；其他文件（尤其 src/）顶层不放测试
+// 专用声明（src 文件的顶层声明经 STRIP 会保留进发布产物）；modules/
+// Testing.jai 顶层不驻测试 helper。
 //
 // 本文件不被 src/main.jai #load → 不在 Build 入口闭包 → 不转译、不编译、
 // 不进发布产物。测试程序路径下本文件 test-free，EXPAND 视图恒等输出。
+// 扫描排除集（root 级 target/、tests/data/、modules/）不含 tests/ 本身，
+// 本文件被全包扫描正常收录。
 //
 // 本文件含 Testing 模块自测支撑段，以机器标记注释行框定（标记名见下段
 // 首尾，开头带 `//` 前缀；注意：本处与任何其他注释不得含该标记行的完整

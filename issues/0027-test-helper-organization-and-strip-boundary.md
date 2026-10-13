@@ -32,3 +32,5 @@ blocked-by: []
 3. **Test 路径天然收录**：Test discovery 全包扫描 src/test_support.jai（不在排除集），恒等转译收录进测试程序，src 内联 test block 经程序级可见性引用其声明。Test discovery 排除集不调整。
 4. **纪律**（写进规格）：测试共享声明只允许放 test_support.jai；其他 src 文件顶层不放测试专用声明（若放，STRIP 会保留进发布，由编译/审阅暴露）。
 5. **新词条**：Test support（测试支撑代码）——src/test_support.jai 收录测试共享声明的约定位置；词条定稿与 CONTEXT.md 更新留给 [ADR 与 CONTEXT.md 更新范围](0029-adr-and-context-update.md)。
+
+**修订（2026-10，用户拍板）**：纯测试支撑代码不驻 src/，位置由 `src/test_support.jai` 改为 `tests/test_support.jai`（提交 83bd729）。机制不变：不被入口 #load 引用、不进 Build 闭包、不参与发布构建；扫描排除集（root 级 target/、tests/data/、modules/）不含 tests/ 本身，Test discovery 全包扫描正常收录；生成器按新 rel_path 定位视图。CONTEXT.md Test support 词条与 spec 已同步更新。

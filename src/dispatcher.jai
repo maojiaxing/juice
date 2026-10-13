@@ -142,7 +142,7 @@ print_usage :: (registry: [] Command) {
 // 找、循环检测、菱形去重、参数预检与失败传播（含 manifest 严格协议与
 // target 大小写选择两块的归属按映射表整文件迁入）。共享 helper（记录
 // handler、TEST_REGISTRY_* 常量与 reset_dispatch_counters）见
-// src/test_support.jai。
+// tests/test_support.jai。
 // ---------------------------------------------------------------------------
 
 test "Production registry validation" {

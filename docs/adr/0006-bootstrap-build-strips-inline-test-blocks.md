@@ -12,3 +12,5 @@ src 原文件内联 test block 后（[地图 0025](../issues/0025-spec-src-inlin
 **Considered Options**: (a) 发布视图树（预生成剥离源码树、自举构建编译发布树）——否决：多一条生成步骤与第二个"源码真身"，且 bootstrap 鸡生蛋（无 juice 时谁生成视图树）；(b) src test-free 纪律（不允许 src 内联，测试留 tests/）——否决：与目的地（内联贴近实现）直接冲突；(c) 自举构建退役（bootstrap 冻结快照）——否决：快照腐烂，单一构建入口退化。
 
 **Consequences**: 自举构建从此依赖转译器存在（与 Build command 同等义务）；`build.jai` 成为转译器的第二个消费方，转译器接口变更需同时照顾两条路径；入口视图的虚拟路径诊断需减固定行号偏移还原原文件坐标（实施时由测试覆盖）。
+
+**修订（2026-10，用户拍板）**：第 4 条中测试共享声明的约定位置由 `src/test_support.jai` 改为 `tests/test_support.jai`（纯测试支撑代码不驻 src/；机制不变——不进两条构建路径）。

@@ -4,12 +4,12 @@
 
 ## 1. 背景与目的地
 
-src 原文件允许内联 test block（Zig 风格，贴近实现）；两条构建路径——自举 `jai build.jai` 与 Build command——都正确剥离 test block，编译不再报错；tests/ 的 147 个存量 test block 全部迁入 src（tests/ 仅保留 data/ fixture），Testing 模块的 10 个自测块内联进 `modules/Testing.jai`。
+src 原文件允许内联 test block（Zig 风格，贴近实现）；两条构建路径——自举 `jai build.jai` 与 Build command——都正确剥离 test block，编译不再报错；tests/ 的 147 个存量 test block 全部迁入 src（tests/ 保留 data/ fixture 与 `test_support.jai` 测试支撑文件），Testing 模块的 10 个自测块内联进 `modules/Testing.jai`。
 
 ## 2. 决策摘要
 
 - **自举剥离机制**（[0028 研究](../issues/0028-research-jai-metaprogram-view-feeding.md)、[ADR 0006](adr/0006-bootstrap-build-strips-inline-test-blocks.md)）：`build.jai` metaprogram 内嵌转译器纯函数；入口视图 `add_build_string`（行号偏移恒 +5、列号精确）；闭包其余视图落盘、`#load` 重写为视图绝对路径；插入点 set_build_options 之后、compiler_begin_intercept 之前；与 Build command 共用同一视图契约。
-- **测试共享代码**（[0027 决议](../issues/0027-test-helper-organization-and-strip-boundary.md)）：约 40 个共享声明集中 `src/test_support.jai` 单文件——不被入口 `#load` 引用、不进 Build 闭包、不参与发布构建；Test discovery 全包扫描将其收录进测试程序，程序级共享。STRIP 语义不扩展。
+- **测试共享代码**（[0027 决议](../issues/0027-test-helper-organization-and-strip-boundary.md)）：约 40 个共享声明集中 `tests/test_support.jai` 单文件（2026-10 用户修订：纯测试支撑代码不驻 src/，位置由 `src/test_support.jai` 改为 `tests/test_support.jai`；机制不变）——不被入口 `#load` 引用、不进 Build 闭包、不参与发布构建；Test discovery 全包扫描将其收录进测试程序，程序级共享。STRIP 语义不扩展。
 - **Testing 自测归属**（[0030 决议](../issues/0030-implementation-plan.md)）：10 个自测块内联进 `modules/Testing.jai`；**Test discovery 排除集不变**（modules/ 仍排除）；测试程序生成器特例——若 package 存在 `modules/Testing.jai`，收录其 EXPAND 视图**替代** `#import "Testing"` 作为断言模块来源（同一模块只加载一份，全局计数不分裂）。用户 package 语义零变更。模块含 test block 后不可被 jai 直接编译，因此除测试程序生成器（EXPAND 视图）外，**Build command 与自举构建同样收录该模块的 STRIP 视图替代 `#import "Testing"`**（三路径对称特例，0033 决议）：Build command 在每次编译前重写 `<package>/target/testing-module/Testing.jai` 并前置其目录进 import path；自举 build.jai 对仓库根 `modules/Testing.jai` 做同一特例（同路径同语义）。模块 test-free 或不存在时零变化。
 - **词条与文档**（[0029 决议](../issues/0029-adr-and-context-update.md)）：CONTEXT.md 新增 **Bootstrap build（自举构建）** 与 **Test support（测试支撑代码）** 两词条（已落地）；spec 即本文档。
 
@@ -29,8 +29,8 @@ src 原文件允许内联 test block（Zig 风格，贴近实现）；两条构�
 
 **纪律**：
 
-- 测试共享声明只允许位于 `src/test_support.jai`；其他 src 文件顶层不放测试专用声明（STRIP 会保留进发布）。helper 迁移时路径基准改 cwd（原实现基于测试文件位置推导仓库根）。
-- `modules/Testing.jai` 顶层不驻测试 helper（它是发布模块，被用户 `#import` 会携带 helper 进用户产物）——Testing 自测所需的 helper 同样进 `src/test_support.jai`。
+- 测试共享声明只允许位于 `tests/test_support.jai`；其他文件（尤其 src/）顶层不放测试专用声明（src 文件的顶层声明经 STRIP 会保留进发布）。helper 迁移时路径基准改 cwd（原实现基于测试文件位置推导仓库根）。
+- `modules/Testing.jai` 顶层不驻测试 helper（它是发布模块，被用户 `#import` 会携带 helper 进用户产物）——Testing 自测所需的 helper 同样进 `tests/test_support.jai`。
 - 迁移后测试块总数不变（147 + Testing 自测 10）；`juice test` 的 passed 汇总数**不做硬判据**（Testing.finish 的重置语义使计数依赖执行顺序——当前 "64 passed" 即最后一次重置后的计数）；硬判据 = **0 failed + 退出码 0**。
 - 迁移期中间态：Test discovery 全包扫描同时收录 src 与 tests，每个迁移批次后 `juice test` 必须保持全绿。
 
@@ -44,7 +44,7 @@ src 原文件允许内联 test block（Zig 风格，贴近实现）；两条构�
 - **`juice build`**：仓库根构建成功。
 - **`juice test`**：0 failed、退出码 0；测试块总数 147（+Testing 自测 10）全部执行（输出含全部测试名）。
 - **中间态**：每个实施批次后 `juice test` 保持全绿。
-- **终态**：tests/ 仅剩 data/；grep 仓库无旧测试文件引用；CONTEXT.md 词条与实现一致。
+- **终态**：tests/ 仅剩 data/ 与 test_support.jai；grep 仓库无旧测试文件引用；CONTEXT.md 词条与实现一致。
 
 ## 6. 实施计划（后续 effort 票清单建议）
 
@@ -53,5 +53,5 @@ src 原文件允许内联 test block（Zig 风格，贴近实现）；两条构�
 | 1. build.jai 内嵌剥离 | 按 ADR 0006 改造；src test-free 期验证 test-free 直通零回归 | `jai build.jai` 全绿、`juice build` 全绿、`juice test` 全绿 | — |
 | 2. test_support.jai 抽取 | 约 40 声明迁入（含路径基准调整）；测试文件顶层清理 | `juice test` 全绿 | 1 |
 | 3. Testing 自测内联 | 10 块迁 `modules/Testing.jai`；测试程序生成器收录其视图替代 `#import "Testing"` | `juice test` 全绿且输出含 Testing 自测名 | 2 |
-| 4. 测试块迁入 src | 按映射表分批迁移，每批后 `juice test` 全绿 | tests/ 仅剩 data/、`juice test` 全绿 | 2（3 可并行） |
+| 4. 测试块迁入 src | 按映射表分批迁移，每批后 `juice test` 全绿 | tests/ 仅剩 data/ 与 test_support.jai、`juice test` 全绿 | 2（3 可并行） |
 | 5. 收尾 | CONTEXT.md/IMPLEMENTATION.md 对齐、三路径终验、提交 | 三路径全绿 + 文档一致 | 1–4 |

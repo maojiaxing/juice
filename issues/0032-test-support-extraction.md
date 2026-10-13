@@ -42,3 +42,5 @@ blocked-by: [0031-bootstrap-build-transpile-front.md]
 ## Resolution
 
 已实施（提交 2b67c0f）：约 143 个具名声明（45 组：过程/常量 87、结构体 3、记录全局 53）迁入 src/test_support.jai 单文件；7 个测试文件顶层清理（仅删声明 + 头部注释 + 未用 #import 清理）。路径基准落地：jai 编译器编译期将进程 cwd 改为入口文件目录，"用户调用 cwd 不可直接观测"，故 juice_root() 改为读 get_build_options().intermediate_path（=<root>/target）剥尾分隔符后 lexical_absolute_path 归一——等价 cwd 基准，30 个 golden baseline 全 PASS 佐证。test_support.jai 不被 main.jai #load，Build 路径零影响；Test discovery 全包扫描收录、排除集不调整。三路径全绿、147 块不变。review 修复轮（7dadb2e）完成 helper 家族去重（expect_exit×4→1、output_matches×3→1、juice_exe×4→1 等，tag 参数保留诊断前缀，行为零变化）。
+
+**修订（2026-10，用户拍板）**：纯测试支撑代码不驻 src/，test_support.jai 移至 `tests/test_support.jai`（提交 83bd729，机制不变，见 0027 修订）。
