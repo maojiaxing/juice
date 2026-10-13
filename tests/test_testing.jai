@@ -1,12 +1,5 @@
 #import "Basic";
-#import "File";
-#import "Process";
-#import "String";
 #import "Testing";
-
-// Fixture paths derive from juice_root() (defined in test_commands.jai): the
-// test program executes at compile time, where the working directory is the
-// entry file's directory (target/transpile).
 
 // ---------------------------------------------------------------------------
 // Tests for the Testing assertion module (modules/Testing.jai, ticket 0017).
@@ -20,24 +13,15 @@
 // Jai has no closures, so test bodies passed to run() touch globals instead
 // of capturing locals (same visibility model as transpiled test blocks,
 // which are top-level procedures).
+//
+// 共享声明（记录全局 g_*、testing_module_failures 与 child 场景 helper）
+// 位于 src/test_support.jai（组织决议 0027）——Testing 自测所需的 helper 不
+// 驻 modules/Testing.jai 顶层（发布模块纪律），测试程序程序级共享。
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // In-process tests over the module state
 // ---------------------------------------------------------------------------
-
-g_reached := false;
-g_first_reached := false;
-g_second_reached := false;
-g_defer_ran := false;
-
-// The tests below drive Testing's run()/finish() directly, which resets the
-// global register. Each test drains leftover failures at its start into the
-// accumulator so the final latch test can still fail the suite — otherwise a
-// failure registered before a finish() call would be silently masked (in the
-// old per-executable harness each process was isolated). The scenario's own
-// counts are checked directly by the assertions instead.
-testing_module_failures: s64 = 0;
 
 test "expect and expect_eq pass and continue" {
     testing_module_failures += finish();
@@ -112,84 +96,10 @@ test "finish returns the failure count and resets state" {
 
 // ---------------------------------------------------------------------------
 // Child scenarios (juice test on the testing-child fixture packages, stdout
-// captured by the parent)
+// captured by the parent)。Child 场景 helper（testing_juice_exe、
+// testing_child_run、testing_expect_exit、testing_normalize_crlf、
+// testing_output_matches、testing_line_col）见 src/test_support.jai。
 // ---------------------------------------------------------------------------
-
-testing_juice_exe :: () -> string {
-    return tprint("%1/target/juice.exe", juice_root());
-}
-
-testing_child_run :: (scenario: string) -> Process_Result, string, string {
-    juice := testing_juice_exe();
-    fixture_abs := tprint("%1/tests/data/testing-child/%2", juice_root(), scenario);
-    result, output, errors, _ := run_command(juice, "test", working_directory = fixture_abs, capture_and_return_output = true);
-    return result, output, errors;
-}
-
-testing_expect_exit :: (name: string, result: Process_Result, want: s32) -> bool {
-    if result.type == .EXITED && result.exit_code == want return true;
-    print("[child %1] exit result %2/%3, want %4\n", name, result.type, result.exit_code, want);
-    return false;
-}
-
-// Normalize CRLF to LF so expected blocks compare regardless of the child
-// process's native line endings.
-testing_normalize_crlf :: (s: string) -> string {
-    has_cr := false;
-    for ch: s {
-        if ch == #char "\r" {
-            has_cr = true;
-            break;
-        }
-    }
-    if !has_cr return s;
-    builder: String_Builder;
-    cursor := 0;
-    i := 0;
-    while i < s.count {
-        if s[i] == #char "\r" {
-            print_to_builder(*builder, "%", slice(s, cursor, i - cursor));
-            print_to_builder(*builder, "\n");
-            if i + 1 < s.count && s[i+1] == #char "\n" i += 1;
-            cursor = i + 1;
-        }
-        i += 1;
-    }
-    if cursor < s.count print_to_builder(*builder, "%", slice(s, cursor, s.count - cursor));
-    return builder_to_string(*builder);
-}
-
-testing_output_matches :: (name: string, output: string, needles: [] string, want := true) -> bool {
-    normalized := testing_normalize_crlf(output);
-    for needle: needles {
-        found := find_index_from_left(normalized, needle) >= 0;
-        if found != want {
-            print("[child %1] output %2 '%3'\n", name, ifx found then "unexpectedly contains" else "missing", needle);
-            print("  output was:\n%\n", output);
-            return false;
-        }
-    }
-    return true;
-}
-
-// 1-based line and character column of the first occurrence of `needle` in
-// `file`; 0,0 if the source cannot be read or the needle is missing. Used to
-// build the expected failure lines without hardcoding line numbers.
-testing_line_col :: (file: string, needle: string) -> (line: s64, col: s64) {
-    source, ok := read_entire_file(file);
-    if !ok return 0, 0;
-    index := find_index_from_left(source, needle);
-    if index < 0 return 0, 0;
-    line := 1;
-    line_start := 0;
-    for i: 0..index-1 {
-        if source[i] == #char "\n" {
-            line += 1;
-            line_start = i + 1;
-        }
-    }
-    return line, index - line_start + 1;
-}
 
 test "child: pass scenario output and exit code" {
     result, output, _ := testing_child_run("pass");

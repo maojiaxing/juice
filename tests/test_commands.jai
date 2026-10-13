@@ -1,18 +1,12 @@
 #import "Basic";
 #import "File";
-#import "File_Utilities";
 #import "Process";
 #import "String";
 #import "Juice";
 #import "Testing";
 
-// The test program executes at compile time; jai's compile-time working
-// directory is the entry file's directory (<package root>/target/transpile,
-// the generated metaprogram first.jai), so the package root is two levels
-// up. All fixture and scratch paths derive from it, never from the cwd.
-juice_root :: () -> string {
-    return lexical_absolute_path(tprint("%1/../..", get_working_directory()));
-}
+// 共享声明（juice_root 等 helper、recording fake 与记录全局）位于
+// src/test_support.jai（组织决议 0027），测试程序程序级共享。
 
 test "Command-owned declarations in production registry" {
     expect(validate_registry(COMMAND_REGISTRY).success && COMMAND_REGISTRY.count == 6);
@@ -48,17 +42,7 @@ test "Command argument and preparation guards" {
     expect(!RUN_COMMAND.handler(*ctx, string.[]));
 }
 
-test_launch_count: s64;
-test_launched_plan: Artifact_Plan;
-test_launched_root: string;
-test_launch_success: bool;
-
-test_launch_artifact :: (plan: Artifact_Plan, package_root: string) -> bool {
-    test_launch_count += 1;
-    test_launched_plan = plan;
-    test_launched_root = package_root;
-    return test_launch_success;
-}
+// test_launch_artifact 与记录全局见 src/test_support.jai。
 
 test "Run launches the selected prepared artifact" {
     plans := Artifact_Plan.[
@@ -115,32 +99,7 @@ test "Run propagates launch failure" {
     expect(test_launch_count == 1);
 }
 
-test_clean_validated: [..] string;
-test_clean_deleted: [..] string;
-test_clean_invalid_path: string;
-test_clean_failed_delete: string;
-test_clean_expected_validations: s64;
-test_clean_deleted_too_early: bool;
-
-reset_clean_test :: (expected_validations: s64) {
-    array_reset(*test_clean_validated);
-    array_reset(*test_clean_deleted);
-    test_clean_invalid_path = "";
-    test_clean_failed_delete = "";
-    test_clean_expected_validations = expected_validations;
-    test_clean_deleted_too_early = false;
-}
-
-test_validate_clean_path :: (path: string) -> bool {
-    array_add(*test_clean_validated, path);
-    return path != test_clean_invalid_path;
-}
-
-test_delete_clean_path :: (path: string) -> bool {
-    if test_clean_validated.count != test_clean_expected_validations test_clean_deleted_too_early = true;
-    array_add(*test_clean_deleted, path);
-    return path != test_clean_failed_delete;
-}
+// test_clean_* 记录全局与 reset_clean_test 等 helper 见 src/test_support.jai。
 
 test "Clean validates workspace scope before deletion" {
     driver: Build_Driver;
@@ -190,94 +149,9 @@ test "Clean continues after a deletion fails" {
     expect(test_clean_deleted[0] == "root/target" && test_clean_deleted[1] == "root/member/target");
 }
 
-test_compile_count: s64;
-test_compiled_plan: Artifact_Plan;
-test_compiled_driver_root: string;
-test_compiled_entry: string;
-test_compile_success: bool;
+// test_compile_* 记录全局与 test_compile_artifact 见 src/test_support.jai。
 
-test_compile_artifact :: (driver: *Build_Driver, plan: Artifact_Plan, entry: string) -> bool {
-    test_compile_count += 1;
-    test_compiled_plan = plan;
-    test_compiled_driver_root = driver.root_dir;
-    test_compiled_entry = entry;
-    return test_compile_success;
-}
-
-// Fake build transpile step: records every call and returns a canned view
-// with a flat (collision-free by construction) key. The orchestration feeds
-// the key through the pure path function; the fake only fills in content.
-build_fake_key :: (rel: string) -> string {
-    result := copy_string(rel);
-    for i: 0..result.count-1 {
-        if result[i] == #char "/" result[i] = #char "_";
-    }
-    return tprint("build-key-%1", result);
-}
-
-test_build_transpile_calls: s64;
-test_build_transpiled_files: [..] string;
-test_build_transpiled_rewrites: [..] string;
-test_build_fake_diagnostic: string;
-
-fake_build_transpile :: (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output {
-    test_build_transpile_calls += 1;
-    array_add(*test_build_transpiled_files, file.rel_path);
-    for target: load_targets {
-        array_add(*test_build_transpiled_rewrites, tprint("%1 -> %2", target.from, target.to));
-    }
-    output: Build_File_Output;
-    output.view = tprint("// fake build view of %1\n", file.rel_path);
-    output.key = build_fake_key(file.rel_path);
-    if test_build_fake_diagnostic != "" {
-        array_add(*output.diagnostics, .{line = 2, column = 1, message = test_build_fake_diagnostic});
-    }
-    return output;
-}
-
-test_build_compile_calls: s64;
-test_build_compiled_entries: [..] string;
-test_build_compile_success: bool;
-
-fake_build_compile :: (driver: *Build_Driver, plan: Artifact_Plan, entry: string) -> bool {
-    test_build_compile_calls += 1;
-    array_add(*test_build_compiled_entries, entry);
-    return test_build_compile_success;
-}
-
-reset_build_seam :: () {
-    test_compile_count = 0;
-    test_compile_success = true;
-    test_build_transpile_calls = 0;
-    array_reset(*test_build_transpiled_files);
-    array_reset(*test_build_transpiled_rewrites);
-    test_build_fake_diagnostic = "";
-    test_build_compile_calls = 0;
-    array_reset(*test_build_compiled_entries);
-    test_build_compile_success = true;
-}
-
-// A prepared workspace over a real temp fixture root: the transpile front
-// probes real files even in seam tests (same posture as the revalidation
-// gate running over the real filesystem).
-build_seam_plan :: (root: string, main_file: string) -> Artifact_Plan {
-    plan: Artifact_Plan;
-    plan.target = .{name = "app", main_file = main_file, source_path = tprint("%1/%2", root, main_file)};
-    plan.target_dir = tprint("%1/target", root);
-    plan.artifact_path = tprint("%1/target/app.exe", root);
-    return plan;
-}
-
-build_seam_prepared :: (root: string, plan: Artifact_Plan) -> Prepared_Workspace {
-    prepared: Prepared_Workspace;
-    prepared.discovery.root_dir = root;
-    // The plan must live in a heap-backed array: a static literal here would
-    // leave the slice pointing at this frame's stack.
-    plans: [..] Artifact_Plan;
-    array_add(*plans, plan);
-    prepared.artifact_plans = plans;
-    return prepared;
-}
+// Fake build transpile step 与 build seam helper 见 src/test_support.jai。
 
 test "Build without targets compiles nothing" {
     driver: Build_Driver;
@@ -377,11 +251,7 @@ test "Build fails fast on a compile failure" {
 // runs once per closure file in dependency order otherwise.
 // ---------------------------------------------------------------------------
 
-build_seam_write :: (root: string, rel: string, content: string) -> bool {
-    path := tprint("%1/%2", root, rel);
-    if !make_directory_if_it_does_not_exist(path_strip_filename(path), recursive = true) return false;
-    return write_entire_file(path, content);
-}
+// build_seam_write 见 src/test_support.jai。
 
 // Test-free closure: the transpile step is never called, the compile seam
 // receives the original entry, and no transpile tree is created.
@@ -565,35 +435,10 @@ test "Build strip keeps unrewritable loads verbatim" {
 }
 
 // ---------------------------------------------------------------------------
-// E2E child scenarios: real juice.exe on fixture packages.
+// E2E child scenarios: real juice.exe on fixture packages. Child 场景 helper
+// （juice_exe、run_juice_child、expect_child_exit、child_output_contains）
+// 见 src/test_support.jai。
 // ---------------------------------------------------------------------------
-
-juice_exe :: () -> string {
-    return tprint("%1/target/juice.exe", juice_root());
-}
-
-run_juice_child :: (fixture: string, command: string, target := "") -> (Process_Result, string, string) {
-    juice := juice_exe();
-    fixture_abs := tprint("%1/tests/data/%2", juice_root(), fixture);
-    args: [..] string;
-    array_add(*args, juice);
-    array_add(*args, command);
-    if target != "" array_add(*args, target);
-    result, output, errors, _ := run_command(..args, working_directory = fixture_abs, capture_and_return_output = true);
-    return result, output, errors;
-}
-
-expect_child_exit :: (name: string, result: Process_Result, want: s32) -> bool {
-    if result.type == .EXITED && result.exit_code == want return true;
-    print("[build child %1] exit result %2/%3, want %4\n", name, result.type, result.exit_code, want);
-    return false;
-}
-
-child_output_contains :: (name: string, output: string, needle: string) -> bool {
-    if find_index_from_left(output, needle) >= 0 return true;
-    print("[build child %1] output missing '%2'\n  output was:\n%\n", name, needle, output);
-    return false;
-}
 
 // A BIN package with embedded tests builds through strip views: tests are
 // stripped, the in-package load is rewritten to the child's view, the views

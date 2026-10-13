@@ -5,46 +5,9 @@
 #import "Juice";
 #import "Testing";
 
-// Fixture and scratch paths derive from juice_root() (defined in
-// test_commands.jai): the test program executes at compile time, where the
-// working directory is the entry file's directory (target/transpile).
-
-test_discovery_attempts: s64 = 0;
-test_fake_discovery_ok: bool = false;
-test_fake_discovery: Workspace_Discovery;
-
-test_fake_discover :: (driver: *Build_Driver) -> Workspace_Discovery, bool {
-    test_discovery_attempts += 1;
-    return test_fake_discovery, test_fake_discovery_ok;
-}
-
-test_plan_resolution_success: bool = false;
-test_resolved_plans: [] Artifact_Plan;
-test_dependency_attempts: s64 = 0;
-test_dependency_ok: bool = false;
-test_dependency_snapshot: [] Package;
-
-test_fake_resolve :: (pkg: Package) -> Artifact_Plan_Result {
-    if !test_plan_resolution_success return .{success = false, error_message = copy_string("resolution failure")};
-    return .{success = true, plans = test_resolved_plans};
-}
-
-test_fake_prepare_dependencies :: (driver: *Build_Driver, member_packages: [] Package) -> bool {
-    test_dependency_attempts += 1;
-    test_dependency_snapshot = member_packages;
-    return test_dependency_ok;
-}
-
-reset_preparation_test :: () {
-    test_discovery_attempts = 0;
-    test_fake_discovery_ok = false;
-    test_fake_discovery = .{};
-    test_plan_resolution_success = false;
-    test_resolved_plans = Artifact_Plan.[];
-    test_dependency_attempts = 0;
-    test_dependency_ok = false;
-    test_dependency_snapshot = Package.[];
-}
+// 共享声明（discovery/resolution/dependency 记录 fake、记录全局与
+// shim_content_for helper）位于 src/test_support.jai（组织决议 0027），
+// 测试程序程序级共享。
 
 test "Discovery publishes workspace state once" {
     reset_preparation_test();
@@ -148,20 +111,7 @@ test "Preparation requires discovery" {
     expect(state.phase == .EMPTY && test_dependency_attempts == 0);
 }
 
-test_fetched_dependency_names: [..] string;
-test_fetch_result: bool = false;
-test_linked_member_names: [..] string;
-test_link_result: bool = false;
-
-test_fake_fetch :: (driver: *Build_Driver, dep: Dependency) -> bool {
-    array_add(*test_fetched_dependency_names, copy_string(dep.name));
-    return test_fetch_result;
-}
-
-test_fake_link_member :: (driver: *Build_Driver, member: Package) -> bool {
-    array_add(*test_linked_member_names, copy_string(member.name));
-    return test_link_result;
-}
+// test_fake_fetch/test_fake_link_member 与记录全局见 src/test_support.jai。
 
 test "Workspace member dependencies are linked not fetched" {
     array_reset(*test_fetched_dependency_names);
@@ -203,13 +153,8 @@ test "Dependency fetch failure propagates" {
 
 // Consumers resolve "#import <name>" through a generated shim in the
 // dependency directory; the shim loads the dependency's real entry by path,
-// so any source directory name and any of the three layouts work.
-shim_content_for :: (packages_dir: string, name: string) -> string, bool {
-    shim_path := tprint("%1/%2.jai", packages_dir, name);
-    if !file_exists(shim_path) return "", false;
-    content, ok := read_entire_file(shim_path);
-    return content, ok;
-}
+// so any source directory name and any of the three layouts work
+// （shim_content_for 见 src/test_support.jai）。
 
 test "Import shim generated for a src/module.jai entry" {
     packages_dir := tprint("%1/tests/data/shim-fixture/packages-src", juice_root());

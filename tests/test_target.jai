@@ -2,9 +2,8 @@
 #import "Juice";
 #import "Testing";
 
-// Fixture paths derive from juice_root() (defined in test_commands.jai): the
-// test program executes at compile time, where the working directory is the
-// entry file's directory (<package root>/target/transpile).
+// Fixture paths derive from juice_root()（src/test_support.jai，组织决议
+// 0027）：所有测试共享声明集中于此文件，测试程序程序级共享。
 
 // Regression tests for effective-target and artifact-plan resolution.
 // The unnamed-explicit-target cases lock the declaration shape that used to
@@ -51,15 +50,8 @@ test "Resolution builds a plan for a valid declaration" {
 }
 
 // A LIB package is an import source: it declares no executable targets and
-// resolves to zero plans once its module.jai import entry is verified.
-library_fixture_package :: () -> Package {
-    pkg: Package;
-    pkg.name    = "libdemo";
-    pkg.version = "1";
-    pkg.dir     = tprint("%1/tests/data/lib-module", juice_root());
-    pkg.type    = .LIB;
-    return pkg;
-}
+// resolves to zero plans once its module.jai import entry is verified
+// （library_fixture_package 见 src/test_support.jai）。
 
 test "Library package rejects executable targets" {
     pkg := library_fixture_package();

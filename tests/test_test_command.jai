@@ -2,7 +2,6 @@
 #import "File";
 #import "File_Utilities";
 #import "Process";
-#import "String";
 #import "Juice";
 #import "Testing";
 
@@ -18,102 +17,11 @@
 // and verify exit codes plus the exact output contract ([juice Test] phase
 // line, [test] start lines, mapped failure coordinates, N passed M failed
 // summary).
+//
+// 共享声明（test_command_juice_exe、seam 记录 fake 与记录全局、缓存树扫描
+// helper、E2E child 场景 helper）位于 src/test_support.jai（组织决议 0027），
+// 测试程序程序级共享。
 // ---------------------------------------------------------------------------
-
-// Absolute path of juice.exe in the repository's target directory. The package
-// root comes from juice_root() (defined in test_commands.jai): the test
-// program executes at compile time, where the working directory is the entry
-// file's directory (target/transpile), not the package root.
-test_command_juice_exe :: () -> string {
-    return tprint("%1/target/juice.exe", juice_root());
-}
-
-// ---------------------------------------------------------------------------
-// Recording fakes over the orchestration seam
-// ---------------------------------------------------------------------------
-
-test_transpiled_files: [..] Test_Source_File;
-test_transpiled_numbers: [..] s64;
-test_fake_tests_per_file: s64 = 1;
-test_fake_diagnostic: string = "";
-
-// Each file yields test_count tests named "<rel> test <n>" plus, optionally,
-// one canned diagnostic (for the rejection path). The key is canned too (flat
-// by construction): the orchestration only feeds it through the pure path
-// function.
-fake_key :: (rel: string) -> string {
-    result := copy_string(rel);
-    for i: 0..result.count-1 {
-        if result[i] == #char "/" result[i] = #char "_";
-    }
-    return tprint("key-%1", result);
-}
-
-fake_transpile :: (file: Test_Source_File, next_test_number: s64) -> Test_File_Output {
-    array_add(*test_transpiled_files, file);
-    array_add(*test_transpiled_numbers, next_test_number);
-    output: Test_File_Output;
-    output.view = tprint("// fake view of %1\n", file.rel_path);
-    output.key = fake_key(file.rel_path);
-    for i: 0..test_fake_tests_per_file-1 {
-        entry: Test_Entry;
-        entry.name = tprint("%1 test %2", file.rel_path, i);
-        entry.number = next_test_number + i;
-        array_add(*output.tests, entry);
-    }
-    if test_fake_diagnostic != "" {
-        array_add(*output.diagnostics, .{line = 3, column = 1, message = test_fake_diagnostic});
-    }
-    return output;
-}
-
-test_compile_calls: s64;
-test_compile_transpile_dir: string;
-test_compile_driver_path: string;
-test_compile_metaprogram_path: string;
-test_seam_compile_success: bool;
-
-fake_compile :: (driver: *Build_Driver, transpile_dir: string, driver_path: string, metaprogram_path: string) -> bool {
-    test_compile_calls += 1;
-    test_compile_transpile_dir = transpile_dir;
-    test_compile_driver_path = driver_path;
-    test_compile_metaprogram_path = metaprogram_path;
-    return test_seam_compile_success;
-}
-
-seam_files :: () -> [] Test_Source_File {
-    return Test_Source_File.[
-        .{rel_path = "src/a.jai", abs_path = "seam-root/src/a.jai"},
-        .{rel_path = "src/b.jai", abs_path = "seam-root/src/b.jai"},
-    ];
-}
-
-seam_prepared :: (root := "") -> Prepared_Workspace {
-    prepared: Prepared_Workspace;
-    seam_root := root;
-    if seam_root == "" seam_root = tprint("%1/target/seam-root", juice_root());
-    prepared.discovery.root_dir = seam_root;
-    return prepared;
-}
-
-reset_seam_test :: () {
-    delete_directory_full(tprint("%1/target/seam-root", juice_root()));
-    array_reset(*test_transpiled_files);
-    array_reset(*test_transpiled_numbers);
-    test_fake_tests_per_file = 1;
-    test_fake_diagnostic = "";
-    test_compile_calls = 0;
-    test_compile_transpile_dir = "";
-    test_compile_driver_path = "";
-    test_compile_metaprogram_path = "";
-    test_seam_compile_success = true;
-}
-
-file_contains :: (path: string, needle: string) -> bool {
-    content, ok := read_entire_file(path);
-    if !ok return false;
-    return find_index_from_left(content, needle) >= 0;
-}
 
 test "Seam: transpile step drives fake views into a compiled driver" {
     reset_seam_test();
@@ -306,25 +214,9 @@ test "Collection applies the exclusion set in scan order" {
     }
 }
 
-// Creates a directory/file link with mklink. Returns false when the machine
-// refuses link creation (needs developer mode or elevation).
-make_test_link :: (link: string, target: string, directory: bool, junction: bool) -> bool {
-    args: [..] string;
-    array_add(*args, "cmd");
-    array_add(*args, "/c");
-    array_add(*args, "mklink");
-    if junction {
-        array_add(*args, "/J");
-    } else if directory {
-        array_add(*args, "/D");
-    }
-    // Backslashes throughout: cmd's builtin mklink parses forward-slash
-    // path segments as option switches (same reason rmdir calls do).
-    array_add(*args, path_backslashes(link));
-    array_add(*args, path_backslashes(target));
-    result := run_command(..args);
-    return result.exit_code == 0;
-}
+// Creates a directory/file link with mklink（make_test_link 见
+// src/test_support.jai）。Returns false when the machine refuses link
+// creation (needs developer mode or elevation).
 
 // No link following (issue 0003): a symlinked directory, a junctioned
 // directory and a symlinked file all stay out of the scan, while the real
@@ -386,82 +278,10 @@ test "Test command argument and preparation guards" {
 }
 
 // ---------------------------------------------------------------------------
-// E2E child scenarios (real juice.exe on the fixture packages)
+// E2E child scenarios (real juice.exe on the fixture packages)。Child 场景
+// helper（run_juice_test、expect_exit、normalize_crlf、output_matches、
+// fixture_line_col）见 src/test_support.jai。
 // ---------------------------------------------------------------------------
-
-run_juice_test :: (fixture: string, pattern := "") -> Process_Result, string, string {
-    juice := test_command_juice_exe();
-    fixture_abs := tprint("%1/tests/data/%2", juice_root(), fixture);
-    args: [..] string;
-    array_add(*args, juice);
-    array_add(*args, "test");
-    if pattern != "" array_add(*args, pattern);
-    result, output, errors, _ := run_command(..args, working_directory = fixture_abs, capture_and_return_output = true);
-    return result, output, errors;
-}
-
-expect_exit :: (name: string, result: Process_Result, want: s32) -> bool {
-    if result.type == .EXITED && result.exit_code == want return true;
-    print("[child %1] exit result %2/%3, want %4\n", name, result.type, result.exit_code, want);
-    return false;
-}
-
-// Normalize CRLF to LF so expected blocks are compared line by line
-// regardless of the child process's native line endings.
-normalize_crlf :: (s: string) -> string {
-    has_cr := false;
-    for ch: s {
-        if ch == #char "\r" {
-            has_cr = true;
-            break;
-        }
-    }
-    if !has_cr return s;
-    builder: String_Builder;
-    cursor := 0;
-    i := 0;
-    while i < s.count {
-        if s[i] == #char "\r" {
-            print_to_builder(*builder, "%", slice(s, cursor, i - cursor));
-            print_to_builder(*builder, "\n");
-            if i + 1 < s.count && s[i+1] == #char "\n" i += 1;
-            cursor = i + 1;
-        }
-        i += 1;
-    }
-    if cursor < s.count print_to_builder(*builder, "%", slice(s, cursor, s.count - cursor));
-    return builder_to_string(*builder);
-}
-
-output_matches :: (name: string, output: string, needles: [] string, want := true) -> bool {
-    normalized := normalize_crlf(output);
-    for needle: needles {
-        found := find_index_from_left(normalized, needle) >= 0;
-        if found != want {
-            print("[child %1] output %2 '%3'\n", name, ifx found then "unexpectedly contains" else "missing", needle);
-            print("  output was:\n%\n", output);
-            return false;
-        }
-    }
-    return true;
-}
-
-// 1-based line/column of the first occurrence of `needle` in `file`.
-fixture_line_col :: (file: string, needle: string) -> (line: s64, col: s64) {
-    source, ok := read_entire_file(file);
-    if !ok return 0, 0;
-    index := find_index_from_left(source, needle);
-    if index < 0 return 0, 0;
-    line := 1;
-    line_start := 0;
-    for i: 0..index-1 {
-        if source[i] == #char "\n" {
-            line += 1;
-            line_start = i + 1;
-        }
-    }
-    return line, index - line_start + 1;
-}
 
 test "E2E: all-pass fixture package runs every test" {
     result, output, _ := run_juice_test("test-package");
@@ -570,32 +390,9 @@ test "E2E: repeated scans are byte-stable" {
 // ---------------------------------------------------------------------------
 
 // Direct children of the transpile tree: hash directories and the
-// regenerated driver.jai / first.jai products.
-Cache_Dir_Scan :: struct {
-    dirs:  [..] string;
-    files: [..] string;
-}
-
-cache_dir_scan_visitor :: (info: *File_Visit_Info, scan: *Cache_Dir_Scan) {
-    if info.is_directory {
-        array_add(*scan.dirs, copy_string(info.short_name));
-    } else {
-        array_add(*scan.files, copy_string(info.short_name));
-    }
-}
-
-sort_strings :: (items: [] string) {
-    for i: 1..items.count-1 {
-        if i >= items.count break;
-        key := items[i];
-        j := i - 1;
-        while j >= 0 && compare(items[j], key) > 0 {
-            items[j+1] = items[j];
-            j -= 1;
-        }
-        items[j+1] = key;
-    }
-}
+// regenerated driver.jai / first.jai products。Cache_Dir_Scan 结构、
+// cache_dir_scan_visitor、sort_strings、cache_dir_entries 见
+// src/test_support.jai。
 
 test "E2E: cached views match the pure contract and hit on repeats" {
     result, output, _ := run_juice_test("test-package");
@@ -663,11 +460,7 @@ test "E2E: cached views match the pure contract and hit on repeats" {
     }
 }
 
-cache_dir_entries :: (dir: string) -> (Cache_Dir_Scan, bool) {
-    scan: Cache_Dir_Scan;
-    visited := visit_files(dir, false, *scan, cache_dir_scan_visitor, visit_files = true, visit_directories = true);
-    return scan, visited;
-}
+// cache_dir_entries 见 src/test_support.jai。
 
 // Content addressing without active cleanup: changing a source creates a new
 // hash directory next to the old one, and both hold their views.
