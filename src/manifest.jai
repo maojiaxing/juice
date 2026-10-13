@@ -1,5 +1,6 @@
 #import "Basic";
 #import "File";
+#import "Hash";
 #import "Process";
 #import "String";
 #import "System";
@@ -61,9 +62,19 @@ build_eval_code :: (manifest_path: string, output_path: string) -> string {
     append(*builder, "        print_to_builder(*builder, \"DEP=%1|%2|%3|%4\\n\", dep.name, dep.version, dep.source, dep.package);\n");
     append(*builder, "    }\n\n");
 
-    append(*builder, "    write_entire_file(\"");
+    // 写失败必须让 child 以非零退出码失败（票 0035）：旧实现静默忽略写入
+    // 结果，child 退出码仍为 0，父进程会把陈旧/缺失数据当作成功——偶发
+    // workspace member 丢失或 "Failed to fetch dependency"。退出码 2 是
+    // 「manifest 数据写失败」专用信号，父进程据此重试；manifest 编译错误等
+    // 其他失败仍是退出码 1，不触发重试。
+    append(*builder, "    if !write_entire_file(\"");
     append(*builder, clean_output);
-    append(*builder, "\", builder_to_string(*builder));\n");
+    append(*builder, "\", builder_to_string(*builder)) {\n");
+    append(*builder, "        print(\"[manifest-eval ERROR] Could not write manifest data: ");
+    append(*builder, clean_output);
+    append(*builder, "\\n\");\n");
+    append(*builder, "        exit(2);\n");
+    append(*builder, "    }\n");
     append(*builder, "}\n");
 
     return builder_to_string(*builder);
@@ -186,6 +197,31 @@ parse_manifest_data :: (content: string) -> Package {
     return result.package;
 }
 
+// FNV-1a 64 位散列 → 16 位小写十六进制（本地复制：与 src/transpile_cache.jai
+// 的 hash_hex 同语义；#load 是文件作用域，声明跨文件不共享）。
+manifest_hash_hex :: (s: string) -> string {
+    hash := fnv1a_hash(s.data, s.count);
+    out: [16] u8;
+    for i: 0..15 {
+        nibble := cast(s64) ((hash >> cast(u64) (4 * (15 - i))) & 0xf);
+        out[i] = cast(u8) ifx nibble < 10 then #char "0" + nibble else #char "a" + (nibble - 10);
+    }
+    return copy_string(to_string(out.data, 16));
+}
+
+// 临时文件命名（票 0035）：manifest 求值器的临时文件曾共享固定名
+// （eval_manifest.jai / manifest_data.txt）——连序或并发的求值 child 进程
+// 互相覆盖：前一 child 写完的文件被瞬时锁定（AV），后一 child 写失败却静默
+// 读到陈旧 manifest 数据（偶发 workspace member 丢失）。现按被求值 manifest
+// 的绝对路径散列命名：不同 manifest 绝不同名，跨进程互不干扰；同一 manifest
+// 的并发求值内容相同，同名无害。
+manifest_temp_file_names :: (cache_dir: string, pkg_dir: string) -> (string, string) {
+    stem := manifest_hash_hex(pkg_dir);
+    eval_src := to_forward_slashes(tprint("%1/eval_manifest_%2.jai", cache_dir, stem));
+    eval_out := to_forward_slashes(tprint("%1/manifest_data_%2.txt", cache_dir, stem));
+    return eval_src, eval_out;
+}
+
 load_package_manifest :: (driver: *Build_Driver, pkg_dir: string) -> Package, bool {
     manifest_path := to_forward_slashes(tprint("%1/package.jai", pkg_dir));
     if !file_exists(manifest_path) return .{}, false;
@@ -194,8 +230,7 @@ load_package_manifest :: (driver: *Build_Driver, pkg_dir: string) -> Package, bo
         print("[juice ERROR] Could not create manifest cache directory: %\n", driver.cache_dir);
         return .{}, false;
     }
-    temp_eval_src := to_forward_slashes(tprint("%1/eval_manifest.jai", driver.cache_dir));
-    temp_eval_out := to_forward_slashes(tprint("%1/manifest_data.txt", driver.cache_dir));
+    temp_eval_src, temp_eval_out := manifest_temp_file_names(driver.cache_dir, pkg_dir);
 
     eval_code := build_eval_code(manifest_path, temp_eval_out);
     if !write_entire_file(temp_eval_src, eval_code) {
@@ -207,8 +242,18 @@ load_package_manifest :: (driver: *Build_Driver, pkg_dir: string) -> Package, bo
     bin_dir  := path_strip_filename(exe_path);
     global_modules_dir := to_forward_slashes(tprint("%1/../modules", bin_dir));
 
-    result := run_command("jai", temp_eval_src, "-import_dir", global_modules_dir, "-quiet");
-    if result.exit_code != 0 {
+    // 数据写失败（退出码 2）重试至多两次（票 0035）：瞬时文件锁（AV 等）随
+    // 重试消失；重试沿用同一临时文件对（同 manifest 同名，写入失败前文件
+    // 内容未变，重试直接覆盖）。其余非零退出码是真正的求值失败，立即报错。
+    attempts := 0;
+    while true {
+        result := run_command("jai", temp_eval_src, "-import_dir", global_modules_dir, "-quiet");
+        if result.exit_code == 0 break;
+        if result.exit_code == 2 && attempts < 2 {
+            attempts += 1;
+            print("[juice] Manifest evaluator failed to write its data (transient); retrying (%1/2)...\n", attempts);
+            continue;
+        }
         print("[juice ERROR] Failed to evaluate manifest at %\n", manifest_path);
         return .{}, false;
     }
