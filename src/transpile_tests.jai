@@ -1,10 +1,20 @@
-#import "Basic";
-#import "Juice";
-#import "Testing";
+// ---------------------------------------------------------------------------
+// 转译器测试（票 0034 迁移自 tests/test_transpiler.jai，45 块）。
+//
+// 关键约束（0031 已知风险落地）：src/transpile.jai 与 src/transpile_cache.jai
+// 是 build.jai 的 #load 目标 / 入口闭包成员——test block 随 metaprogram 编译
+// 期文本包含会非法，这两个文件必须保持 test-free。转译器测试块因此落独立
+// src 文件：本文件不被任何 #load 引用（不进入口闭包、不进发布产物），Test
+// discovery 全包扫描将其收录进测试程序（与 src/test_support.jai 同机制）。
+// 本文件仅含 test block；生产代码零耦合。
+// ---------------------------------------------------------------------------
 
 // 共享声明（GOLDEN_CASES/NEGATIVE_CASES 常量、golden/negative harness、
 // expand_ctx/strip_ctx 等 helper 与 compile-and-run matrix helper）位于
 // src/test_support.jai（组织决议 0027），测试程序程序级共享。
+
+#import "Basic";
+#import "Testing";
 
 // ---------------------------------------------------------------------------
 // Unit tests over the pure function
