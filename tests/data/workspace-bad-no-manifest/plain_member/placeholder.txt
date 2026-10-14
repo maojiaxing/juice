@@ -1,0 +1,1 @@
+Not a Juice package: this directory intentionally has no package.jai. It exists only so the fixture's workspace member path resolves to a real directory.

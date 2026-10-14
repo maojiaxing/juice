@@ -30,23 +30,9 @@ build_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     return true;
 }
 
-// Import directories every compile gets beyond jai's own defaults: the
-// juice module directory (adjacent to the running executable, holds
-// Testing.jai/Juice.jai) and the package's dependency shim directory
-// (packages_dir 由 dependency 模块派生，票 0038). juice_modules_dir is the
-// shared derivation (src/path_safety.jai, 票 0036).
-compiler_import_directories :: (packages_dir: string) -> [..] string {
-    dirs: [..] string;
-    dirs.allocator = temp;
-
-    global_modules_dir := juice_modules_dir();
-    if is_directory(global_modules_dir) array_add(*dirs, global_modules_dir);
-
-    if is_directory(packages_dir) {
-        array_add(*dirs, to_forward_slashes(packages_dir));
-    }
-    return dirs;
-}
+// compiler_import_directories（modules + packages import 路径）自票 0048
+// 起由 dependency 模块持有（packages_dir 的派生持有者，票 0038 内聚方向），
+// build 与 test 共用。
 
 // Revalidate the whole build input before compiling anything, so an unsafe
 // plan cannot produce a partial build. Plan structure and paths are owned by
@@ -135,7 +121,9 @@ compile_artifact_plan :: (root_dir: string, plan: Artifact_Plan, entry: string) 
 // containing test blocks is viewed wholesale — every closure file gets a
 // strip view and the entry becomes the entry file's view. Non-literal and
 // out-of-package #load targets are never viewed or rewritten; test blocks
-// there surface as plain jai compile errors.
+// there surface as plain jai compile errors. Dependency closures enter
+// through import shims and are viewed by the shared dependency strip front
+// (dependency.jai, 票 0049) before this probe runs.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -177,34 +165,12 @@ testing_module_strip_view_dir :: (package_root: string) -> string {
     return dir;
 }
 
-// One build source file: package-relative path ("/" separated) and absolute
-// path, mirroring the test command's Test_Source_File.
-Build_Source_File :: struct {
-    rel_path: string;
-    abs_path: string;
-}
-
-// One probed closure file: its resolved in-package literal #load targets in
-// statement order, and whether it contains test blocks.
-Build_Closure_File :: struct {
-    file:      Build_Source_File;
-    loads:     [..] string;
-    has_tests: bool;
-}
-
-// The transpile step's output for one file: the strip-mode view, the
-// content-addressed cache key, and transpile diagnostics (rejected with the
-// original file coordinates).
-Build_File_Output :: struct {
-    view:        string;
-    key:         string;
-    diagnostics: [..] Transpile_Diagnostic;
-}
-
-// The build transpile seam's production default: read the file, strip test
-// blocks, rewrite in-package #load targets to the given view paths, and
-// derive the content-addressed cache key (path + source + mode + version +
-// load targets). The load rewrite table embeds the target views' hash
+// The build transpile seam's production default (Build_Source_File /
+// Build_Closure_File / Build_File_Output live in dependency.jai, the strip
+// front's owner — 票 0049): read the file, strip test blocks, rewrite
+// in-package #load targets to the given view paths, and derive the
+// content-addressed cache key (path + source + mode + version + load
+// targets). The load rewrite table embeds the target views' hash
 // directories, so keys form a Merkle chain computable in dependency order.
 transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output {
     output: Build_File_Output;
@@ -224,146 +190,19 @@ transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target) 
     return output;
 }
 
-probe_visited :: (visited: [] string, rel_path: string) -> bool {
-    for seen: visited {
-        if seen == rel_path return true;
-    }
-    return false;
-}
-
-// Probe one target's closure: DFS from the entry over literal in-package
-// #load edges. Non-literal and out-of-package targets are not followed
-// (issue 0008 resolution 4). Files are listed in DFS preorder — the entry
-// first, then each load target's subtree in statement order.
+// Probe one target's closure: the entry's literal in-package #load closure
+// within the package root. Dependency closures enter through import shims
+// and are probed separately by the dependency strip front (dependency.jai).
 probe_build_closure :: (prepared: *Prepared_Workspace, plan: Artifact_Plan) -> [..] Build_Closure_File, bool {
-    package_root := prepared.discovery.root_dir;
-    entry: Build_Source_File;
-    entry.rel_path = path_slashes(plan.target.main_file);
-    entry.abs_path = to_forward_slashes(plan.target.source_path);
-
-    files: [..] Build_Closure_File;
-    visited: [..] string;
-    stack: [..] Build_Source_File;
-    array_add(*stack, entry);
-
-    while stack.count > 0 {
-        file := stack[stack.count - 1];
-        stack.count -= 1;
-        if probe_visited(visited, file.rel_path) continue;
-        array_add(*visited, copy_string(file.rel_path));
-
-        source, ok := read_entire_file(file.abs_path);
-        if !ok {
-            print("[juice ERROR] Could not read source file for build: %\n", file.abs_path);
-            return files, false;
-        }
-
-        cf: Build_Closure_File;
-        cf.file = file;
-        cf.has_tests = source_has_test_block(source);
-        cf.loads = source_load_targets(source, file.rel_path);
-        array_add(*files, cf);
-
-        // Push in reverse so targets pop in statement order.
-        i := cf.loads.count;
-        while i > 0 {
-            i -= 1;
-            target: Build_Source_File;
-            target.rel_path = cf.loads[i];
-            target.abs_path = to_forward_slashes(tprint("%1/%2", package_root, cf.loads[i]));
-            array_add(*stack, target);
-        }
-    }
-    return files, true;
-}
-
-// Shared state of one closure's view computation: per-file states (0 =
-// uncomputed, 1 = computing, 2 = done) and the resulting view paths.
-// "Computing" re-entry means the literal in-package #load graph has a
-// cycle and the path rewrites cannot be resolved (issue 0008 resolution 2).
-Build_View_State :: struct {
-    transpile_dir: string;
-    closure:       [] Build_Closure_File;
-    transpile:     #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output;
-    states:        [..] s64;
-    view_paths:    [..] string;
-    failed:        bool;
-}
-
-closure_index :: (state: *Build_View_State, rel_path: string) -> (s64, bool) {
-    for i: 0..state.closure.count-1 {
-        if state.closure[i].file.rel_path == rel_path return i, true;
-    }
-    return -1, false;
-}
-
-// Compute one closure file's strip view in dependency order (children
-// first, Merkle chain) and write it content-addressed into the transpile
-// tree. Returns the absolute view path.
-view_of_file :: (state: *Build_View_State, index: s64) -> string, bool {
-    if state.failed return "", false;
-    if state.states[index] == 2 return state.view_paths[index], true;
-    if state.states[index] == 1 {
-        print("[juice ERROR] %1: 循环加载无法重写路径\n", state.closure[index].file.rel_path);
-        state.failed = true;
-        return "", false;
-    }
-    state.states[index] = 1;
-
-    // Children first: every in-package load target is in the closure by
-    // construction, so its view path exists before the parent's key embeds
-    // it in a load rewrite.
-    load_targets: [..] Load_Target;
-    for resolved: state.closure[index].loads {
-        child_index, found := closure_index(state, resolved);
-        if !found {
-            print("[juice ERROR] %1: in-package #load 缺少视图目标\n", state.closure[index].file.rel_path);
-            state.failed = true;
-            return "", false;
-        }
-        child_path, ok := view_of_file(state, child_index);
-        if !ok return "", false;
-        target: Load_Target;
-        target.from = resolved;
-        target.to = child_path;
-        array_add(*load_targets, target);
-    }
-
-    output := state.transpile(state.closure[index].file, load_targets);
-    if output.diagnostics.count > 0 {
-        for diagnostic: output.diagnostics {
-            print("[juice ERROR] %1:%2,%3: %4\n", state.closure[index].file.rel_path, diagnostic.line, diagnostic.column, diagnostic.message);
-        }
-        state.failed = true;
-        return "", false;
-    }
-
-    view_path := transpile_view_path(state.transpile_dir, output.key, state.closure[index].file.rel_path);
-    // The parent must exist before the existence check: the inspection
-    // scans the parent directory, and a missing parent would make
-    // visit_files log a spurious "Unable to open directory" error.
-    if !make_directory_if_it_does_not_exist(path_strip_filename(view_path), recursive = true) {
-        print("[juice ERROR] Could not create view directory for %\n", state.closure[index].file.rel_path);
-        state.failed = true;
-        return "", false;
-    }
-    if !path_exists_as_regular_file(view_path) {
-        if !write_entire_file(view_path, output.view) {
-            print("[juice ERROR] Could not write view for %\n", state.closure[index].file.rel_path);
-            state.failed = true;
-            return "", false;
-        }
-    }
-
-    state.view_paths[index] = copy_string(view_path);
-    state.states[index] = 2;
-    return view_path, true;
+    files, ok := probe_package_closure(prepared.discovery.root_dir, path_slashes(plan.target.main_file));
+    return files, ok;
 }
 
 // Decide one plan's compile entry: probe the entry's closure; a test-free
 // closure compiles the original entry unchanged, a closure containing test
 // blocks is viewed all-or-nothing (issue 0008 resolution 1/2) and the entry
-// becomes the entry file's view.
+// becomes the entry file's view. (Build_View_State / closure_index /
+// view_of_file live in dependency.jai — 票 0049.)
 build_plan_entry :: (
     prepared: *Prepared_Workspace,
     plan: Artifact_Plan,
@@ -410,6 +249,12 @@ build_prepared_workspace :: (
     // create target/ and do not prepare dependencies for such a package.
     if prepared.artifact_plans.count == 0 return true;
     if !revalidate_build_plans(prepared) return false;
+
+    // Dependency strip front（票 0049）: dependency sources reachable through
+    // import shims are probed and, when they contain test blocks, viewed with
+    // the same all-or-nothing strip semantics; shims are rewritten to the
+    // entry views. Test-free dependencies stay untouched.
+    if !prepare_dependency_strip_views(prepared.discovery.root_dir, transpile) return false;
 
     // Transpile front: per plan, probe the entry's closure and choose
     // between the original entry and the entry file's strip view.

@@ -11,7 +11,7 @@ Juice 是一个面向 Jai  的命令行构建工具；本上下文统一描述�
 在目标 command 之前必须成功完成的另一个 command。前置关系表达命令之间的执行依赖，而不是把两个 command 合并为一个 command。当前唯一实例是 `run` 依赖 `build`。Workspace 准备不作为 command、不参与前置关系（见 Workspace preparation）。
 
 **Build**:
-根据当前 workspace 的 package 与 target 定义，产生可执行输出的 command。Build 从入口闭包探测 test block：闭包含之则以剥离视图编译，不含则原样直编。Testing 断言模块源码含 test block 时不可被 jai 直接编译，Build 以该模块的 STRIP 视图替代 `#import "Testing"` 解析，视图落 `target/testing-module/`（与 Test 的 EXPAND 编译视图同路径、与 Bootstrap build 的 STRIP 视图同语义，三路径对称的特例，各自运行前重写；模块 test-free 或不存在时无此行为）。Build 构建 root package 的全部 effective target，但不会在每次构建前自动清空 target directory。没有 effective target 时，Build 无需准备 dependencies，也不创建 target directory 或 artifact，但仍成功完成并明确说明没有可构建目标。对 LIB package，Build 仅验证导入入口，不调用编译器。
+根据当前 workspace 的 package 与 target 定义，产生可执行输出的 command。Build 从入口闭包探测 test block：闭包含之则以剥离视图编译，不含则原样直编。依赖（含 workspace member）源码经 import shim 被编译时，依赖剥离前端（票 0049）以同一全有全无语义处理其闭包：含 test block 的依赖闭包整闭包 STRIP 视图落 `target/transpile/deps/<依赖名>/...`，shim 改写指向入口视图；test-free 依赖零转译。Testing 断言模块源码含 test block 时不可被 jai 直接编译，Build 以该模块的 STRIP 视图替代 `#import "Testing"` 解析，视图落 `target/testing-module/`（与 Test 的 EXPAND 编译视图同路径、与 Bootstrap build 的 STRIP 视图同语义，三路径对称的特例，各自运行前重写；模块 test-free 或不存在时无此行为）。Build 构建 root package 的全部 effective target，但不会在每次构建前自动清空 target directory。没有 effective target 时，Build 无需准备 dependencies，也不创建 target directory 或 artifact，但仍成功完成并明确说明没有可构建目标。对 LIB package，Build 仅验证导入入口，不调用编译器。
 
 **Run**:
 选择一个 target，先通过 `build` 构建 root package 的全部 effective target，再启动所选 target 的 artifact。只有一个 effective target 时默认选择它；有多个时优先选择与 package 同名的 target，否则必须以大小写完全一致的名称明确指定 target。
@@ -35,7 +35,7 @@ _Avoid_: 发布视图树（预生成剥离源码树作为构建输入的方案�
 通过执行 root package manifest 来发现并验证位于 package root 内的 workspace member 的过程。Workspace discovery 产生独立的 discovery 结果，不解析、获取或更新 dependencies；因 manifest 本身是可执行的 Jai 声明，所以它不承诺没有 manifest 自身产生的副作用。Discovery 保留已评估的 member declaration；dependency preparation 消费同一快照，不重新执行 workspace manifest。没有 package declaration 时，当前目录仍可产生仅包含自身的最小 discovery，供 Clean 使用；已有但无效的 package declaration 不产生可清理的 workspace。
 
 **Workspace member**:
-由 root package 声明、位于 root package 目录之内的另一个 package。每个 member 路径必须唯一、可移植并解析到包含 package manifest 的目录；不同文本路径不得指向同一个 member。
+由 root package 声明、位于 root package 目录之内的另一个 package。每个 member 路径必须唯一、可移植并解析到包含 package manifest 的目录；不同文本路径不得指向同一个 member。Workspace 的成员集合只由 root package 的声明决定：member 自身 manifest 中再声明的 members 不产生 workspace member，嵌套声明被静默忽略（测试钉住的事实，[票 0043](issues/0043-discovery-validation-matrix.md)）。
 
 **Prepared workspace（已准备 workspace）**:
 由成功的 workspace discovery 继续完成 effective target 解析后交给 command 的完整状态，聚合 package declaration、已验证的 workspace member 和 root package 的 artifact plan。它要求存在有效 package declaration；消费它的 command 不再重新解释 target 缺省值或 workspace member。artifact plan 为空或未被消费不妨碍其成立——Test 消费 prepared workspace 但不消费 artifact plan，LIB package 无 effective target 时仍可测。
@@ -74,7 +74,7 @@ Package 的全部 Juice 管理生成物所在的固定约定目录 `target/`：a
 _Avoid_: result 目录（遗留不再管理）、bin 目录。
 
 **Transpile（转译）**:
-将含 test block 的源文件转换为合法 Jai 的 source-to-source 步骤，是 Juice 进程内的库。Build 从入口闭包探测：闭包含 test block 才转译（剥离模式），否则原样直编；Test 对发现的全部文件转译（展开模式）。Test block 的保证生效范围是 build 下入口经字面量 in-package `#load` 可达的文件、test 下全包发现的文件；非字面量与 out-of-package `#load` 的目标不转译，其含 test block 由编译错误暴露。转译产物按内容寻址缓存。
+将含 test block 的源文件转换为合法 Jai 的 source-to-source 步骤，是 Juice 进程内的库。Build 从入口闭包探测：闭包含 test block 才转译（剥离模式），否则原样直编；Test 对发现的全部文件转译（展开模式）。依赖剥离前端（票 0049）把同一剥离语义延至依赖闭包：Build 与 Test 都经 import shim 探测依赖入口闭包，含 test block 时整闭包剥离视图落 `target/transpile/deps/<依赖名>/...` 并改写 shim。Test block 的保证生效范围是 build 下入口经字面量 in-package `#load` 可达的文件与依赖 shim 可达的依赖闭包、test 下全包发现的文件；其余非字面量与 out-of-package `#load` 的目标不转译，其含 test block 由编译错误暴露。转译产物按内容寻址缓存。
 _Avoid_: 通用语法扩展框架（转译只为 test block 服务）。
 
 **View（视图）**:
@@ -82,7 +82,7 @@ _Avoid_: 通用语法扩展框架（转译只为 test block 服务）。
 _Avoid_: 把视图与一般「产物」混称（视图专指转译产物）。
 
 **Local dependency directory（本地依赖目录）**:
-Root workspace 中由 Juice 管理的 `target/packages/` 子目录。Juice 为每个依赖生成一个以依赖名命名的导入 shim，指向被依赖方的导入入口；消费者以 package 名 `#import` 引用。被依赖方不要求有 package manifest——任何符合导入入口约定的 Jai 模块都可作为依赖。本地依赖目录随 target directory 一并清理。
+Root workspace 中由 Juice 管理的 `target/packages/` 子目录。Juice 为每个依赖生成一个以依赖名命名的导入 shim，指向被依赖方的导入入口；消费者以 package 名 `#import` 引用。被依赖方不要求有 package manifest——任何符合导入入口约定的 Jai 模块都可作为依赖。依赖闭包含 test block 时，依赖剥离前端（票 0049）把 shim 的 `#load` 改写到入口的剥离视图。本地依赖目录随 target directory 一并清理。
 
 **Unspecified value（未指定值）**:
 Package declaration 中省略的可选值或显式提供的空值；两者具有相同含义。若某值没有可用约定，未指定该值就是无效声明。
@@ -136,6 +136,7 @@ _Avoid_: 各 command 自持 metaprogram 骨架（会复制消息循环与哨兵�
 - Command registry 描述可发现的 command；Dispatcher 负责执行顺序，但不拥有 build、run、clean、test 的业务行为。
 - `test` 与 `build` 经一次幂等的 workspace 准备调用消费 prepared workspace；`test` 不依赖 `build`，不消费 artifact plan，LIB package 无 effective target 时仍可测。
 - Test block 必须经 Transpile 转换为视图后才能编译；build 探测后剥离、test 展开，run 经 build 继承。
+- 依赖剥离前端为 Build 与 Test 共用（票 0049）：依赖闭包含 test block 时整闭包剥离视图落 `target/transpile/deps/<依赖名>/...`，shim 改写指向入口视图；依赖测试不发现、不执行。
 - Bootstrap build 与 Build command 共用同一转译器与视图契约；Test support 被 Test discovery 扫描收录、不进 Build 闭包与 Bootstrap build 输入。
 - Test discovery 消费 workspace discovery 快照但不并入；member 以自身为 root 测试，依赖不发现不执行。
 - 测试程序全部生成物位于 target directory 的转译子树（Testing 模块编译视图除外，落 `target/testing-module/`），不是 artifact。

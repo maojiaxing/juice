@@ -59,13 +59,25 @@ CONTEXT.md              # 领域术语定义
 IMPLEMENTATION.md       # 实现细节文档
 ```
 
+## monorepo（workspace member）测试覆盖（地图 0041）
+
+为 workspace member 体系补齐测试矩阵（`tests/data/workspace-*` fixture 家族，票 0042-0048；E2E 测试集中 `tests/test_monorepo.jai`，2026-10-14 用户修订）：
+
+- **discovery 校验矩阵**（票 0043）：全部可达失败分支经真实 `juice.exe` E2E 断言具体错误消息；路径有效性门槛进程内直测；junction 用例运行时制造。两个防御分支经声明路径不可达，记录不测。
+- **build E2E**（票 0044）：root 依赖两 member → shim link（非 fetch）指向两种布局的导入入口 → 构建 → artifact 运行调用两 member 函数；root 闭包 test-free 零转译。
+- **clean E2E**（票 0045）：root+member 的 `target/` 整目录递归删除、源文件保留、无 target 的 member 不失败。
+- **test E2E**（票 0046）：root 测试程序经 shim import member 并断言成员函数；member 自带测试不随 root 运行。
+- **缺陷修复**（票 0048）：测试暴露 test 编译缺 `target/packages` import 路径——root 测试程序此前无法 `#import` 任何依赖。`compiler_import_directories` 移入 `src/dependency.jai`，build 与 test 共用。
+- **边界行为钉住**：root 自列 `.` 为 member → duplicate 错误；member 再声明 members → 静默忽略（CONTEXT.md Workspace member 词条已补事实）。
+
 ## 验证结果
 
 ✅ 编译成功  
-✅ 所有单元测试通过  
+✅ 所有单元测试通过（158 passed, 0 failed）  
 ✅ `clean` 在没有 `package.jai` 的目录中正常工作  
 ✅ 未知命令在准备前被正确拒绝  
 ✅ 用法消息从注册表自动生成  
+✅ monorepo 矩阵全绿（discovery 校验、build/clean/test E2E）  
 
 ## Jai 特定约束
 

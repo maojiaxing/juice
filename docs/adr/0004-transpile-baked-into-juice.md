@@ -16,3 +16,5 @@ test block 不是合法 Jai：含内嵌 test 的源文件直接交 jai 必报错
 **Consequences**: 合法 test 语法从此依赖转译存在，删掉转译器即删掉语言特性；产物诊断指向缓存视图路径，位置映射归 0009 号票；视图排版规范与 golden 基线归 0011 号票。
 
 **修订**（2026-10-13，[ADR 0005](0005-view-line-fidelity.md)）：决定 1 的「删 test block」物理形态细化为等行数注释占位——test block 语义删除（不再进入编译）不变，剥离视图与测试视图共享行号保真（1:1）不变量。
+
+**修订**（2026-10-14，[票 0049](../issues/0049-dependency-strip-views.md)）：决定 4 的「边界」扩大——依赖（含 workspace member）源码经 import shim 被消费者编译时，依赖剥离前端以同一探测语义进入依赖入口闭包：含 test block 的依赖闭包整闭包视图化，视图落消费者 `target/transpile/deps/<依赖名>/...`，shim 的 `#load` 改写到入口视图；Build 与 Test 两路径共用（依赖测试不发现、不执行）。test-free 依赖仍零转译。非 shim 可达的 out-of-package `#load` 目标保持决定 4 原语义（不转译、由编译错误暴露）。

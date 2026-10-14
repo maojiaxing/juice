@@ -77,6 +77,15 @@ transpile_view_path :: (transpile_dir: string, key: string, rel_path: string) ->
     return tprint("%1/%2/%3", cache_slashes(transpile_dir), key, rel_path);
 }
 
+// Dependency strip view path（票 0049）: <transpile_dir>/deps/<name>/<hash>/<rel_path>.
+// Dependency closures are viewed into the consumer's transpile tree under a
+// per-dependency subtree, so distinct dependencies can never collide by name
+// (two deps both holding "src/context.jai" share a key only when their views
+// are byte-identical; the subtree keeps their paths distinct either way).
+transpile_dependency_view_path :: (transpile_dir: string, key: string, name: string, rel_path: string) -> string {
+    return tprint("%1/deps/%2/%3/%4", cache_slashes(transpile_dir), name, key, rel_path);
+}
+
 // The transpile subtree root: <package root>/target/transpile/. Views, the
 // test driver and the test metaprogram products all live under it (Target
 // directory, CONTEXT.md). Build and Test derive it from the same package

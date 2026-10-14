@@ -96,7 +96,8 @@ test_prepared_workspace :: (
     pattern: string,
     files: [] Test_Source_File,
     transpile: #type (file: Test_Source_File, next_test_number: s64) -> Test_File_Output = transpile_test_file,
-    compile: #type (transpile_dir: string, driver_path: string, metaprogram_path: string) -> bool = compile_test_program
+    compile: #type (transpile_dir: string, driver_path: string, metaprogram_path: string) -> bool = compile_test_program,
+    dep_transpile: #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output = transpile_build_file
 ) -> bool {
     // 1. Transpile every file in list order, numbering tests globally.
     //    Diagnostics are rejected with the original file coordinates.
@@ -230,13 +231,23 @@ test_prepared_workspace :: (
     metaprogram.workspace_name    = "Juice Test Program";
     metaprogram.no_output         = true;
     metaprogram.intermediate_path = tprint("%1/target", prepared.discovery.root_dir);
-    metaprogram.import_dirs       = string.[juice_modules_dir()];
+    // 票 0048：与 build 共用 compiler_import_directories——依赖 shim 所在
+    // 的 target/packages 必须在搜索路径，root 测试程序才能 #import 依赖
+    // （含 workspace member）。此前只注入 modules 目录，解析必败。
+    metaprogram.import_dirs       = compiler_import_directories(packages_dir(prepared.discovery.root_dir));
     metaprogram.build_file        = driver_path;
     metaprogram.testing_view_dir  = testing_module_dir;
     if !write_entire_file(metaprogram_path, generate_compiler_metaprogram(metaprogram)) {
         print("[juice ERROR] Could not write test metaprogram.\n");
         return false;
     }
+
+    // 8. Dependency strip front（票 0049）: the test program compiles
+    //    dependency sources through import shims; closures containing test
+    //    blocks are stripped exactly like build's. Dependency tests are
+    //    neither discovered nor executed — the discovery scan never enters
+    //    dependency packages — this step only makes them compilable.
+    if !prepare_dependency_strip_views(prepared.discovery.root_dir, dep_transpile) return false;
     return compile(transpile_dir, driver_path, metaprogram_path);
 }
 

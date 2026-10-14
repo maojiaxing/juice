@@ -429,3 +429,25 @@ test "Import shim skipped without any layout" {
     _, shim_written := shim_content_for(packages_dir, "empty-pkg");
     expect(!shim_written);
 }
+
+// ---------------------------------------------------------------------------
+// 校验矩阵（票 0043）：member 路径有效性门槛在进程内可测——空、绝对
+// （含卷标）与 ".." 逃逸组件拒绝，"." 组件与普通相对路径放行
+// （"." 放行使 workspace-bad-duplicate 的 "member_lib/." 拼写能走到
+// duplicate 分支）。discovery 的其余失败分支经真实 juice.exe 的 E2E
+// 消息断言（见 tests/test_monorepo.jai，2026-10-14 用户修订迁移）——
+// load_package_manifest 的模块目录从运行中可执行文件推导，测试程序内
+// 指向 jai 编译器，直测无法加载真实 manifest。
+// ---------------------------------------------------------------------------
+
+test "Workspace member path validity gate" {
+    expect(!workspace_relative_path_is_valid(""));
+    expect(!workspace_relative_path_is_valid("/abs"));
+    expect(!workspace_relative_path_is_valid("C:/abs"));
+    expect(!workspace_relative_path_is_valid("../escape"));
+    expect(!workspace_relative_path_is_valid("a/../b"));
+    expect(workspace_relative_path_is_valid("."));
+    expect(workspace_relative_path_is_valid("member_lib"));
+    expect(workspace_relative_path_is_valid("member_lib/."));
+    expect(workspace_relative_path_is_valid("a/b"));
+}
