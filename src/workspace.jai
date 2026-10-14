@@ -136,12 +136,16 @@ ensure_workspace_discovered :: (
 
 // Publish a prepared result only after every required step succeeds. A failed
 // attempt leaves discovery reusable and exposes no partial prepared workspace.
+// force_dependencies（票 0049 缺陷修正）: Test 即使无 effective target（LIB）
+// 也要准备 dependencies——测试程序经 import shim 引用依赖需要；Build/Clean
+// 语义不变（0 plans 仍不准备）。
 prepare_workspace :: (
     root_dir: string,
     cache_dir: string,
     state: *Workspace_State,
     resolve: #type (pkg: Package) -> Artifact_Plan_Result = resolve_artifact_plans,
-    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Package) -> (bool) = resolve_and_fetch_dependencies
+    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Package) -> (bool) = resolve_and_fetch_dependencies,
+    force_dependencies := false
 ) -> bool {
     if state.phase == .PREPARED return true;
     if state.phase != .DISCOVERED || !state.discovery.has_package {
@@ -157,7 +161,7 @@ prepare_workspace :: (
     prepared.discovery = state.discovery;
     prepared.artifact_plans = plans_result.plans;
     prepared.package_type = plans_result.package_type;
-    if prepared.artifact_plans.count > 0 {
+    if prepared.artifact_plans.count > 0 || force_dependencies {
         print("[juice] Preparing workspace dependencies...\n");
         if !prepare_dependencies(root_dir, cache_dir, state.discovery.member_packages) {
             print("[juice ERROR] Dependency resolution failed.\n");
@@ -191,11 +195,12 @@ ensure_workspace_prepared :: (
     state: *Workspace_State,
     discover: #type (root_dir: string, cache_dir: string) -> (Workspace_Discovery, bool) = discover_workspace,
     resolve: #type (pkg: Package) -> Artifact_Plan_Result = resolve_artifact_plans,
-    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Package) -> (bool) = resolve_and_fetch_dependencies
+    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Package) -> (bool) = resolve_and_fetch_dependencies,
+    force_dependencies := false
 ) -> *Prepared_Workspace {
     if state.phase == .PREPARED return *state.prepared;
     if !ensure_workspace_discovered(root_dir, cache_dir, state, discover) return null;
-    if !prepare_workspace(root_dir, cache_dir, state, resolve, prepare_dependencies) return null;
+    if !prepare_workspace(root_dir, cache_dir, state, resolve, prepare_dependencies, force_dependencies) return null;
     return *state.prepared;
 }
 
@@ -260,6 +265,28 @@ test "Preparation with targets prepares dependencies" {
     expect(test_dependency_snapshot.count == 2 && test_dependency_snapshot[1].name == "member");
     prepared := get_prepared_workspace(*state);
     expect(prepared != null && prepared.dependencies_prepared);
+}
+
+// 票 0049 缺陷修正：force_dependencies 让 0-plans（LIB）包也准备
+// dependencies——Test 的测试程序经 import shim 引用依赖需要；默认（false）
+// 语义不变（上方「Preparation without targets skips dependencies」钉住）。
+test "Preparation without targets forces dependencies on request" {
+    reset_preparation_test();
+    test_fake_discovery_ok = true;
+    test_fake_discovery.has_package = true;
+    test_fake_discovery.root_package.name = "demo";
+    test_fake_discovery.root_package.version = "1";
+    test_fake_discovery.member_packages = Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
+    test_plan_resolution_success = true;
+    test_resolved_plans = Artifact_Plan.[];
+    test_dependency_ok = true;
+    state: Workspace_State;
+    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
+    expect(prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies, true));
+    expect(state.phase == .PREPARED && test_dependency_attempts == 1);
+    prepared := get_prepared_workspace(*state);
+    expect(prepared != null && prepared.dependencies_prepared);
+    expect(prepared.artifact_plans.count == 0);
 }
 
 test "Resolution failure publishes no prepared workspace" {

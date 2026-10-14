@@ -28,7 +28,9 @@ test_arguments_are_valid :: (arguments: [] string) -> bool {
 
 test_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     if !command_arguments_are_valid(TEST_COMMAND, arguments) return false;
-    prepared := ensure_workspace_prepared(ctx.root_dir, ctx.cache_dir, *ctx.workspace);
+    // 票 0049 缺陷修正：force_dependencies——LIB 无 effective target 时
+    // 测试程序仍经 import shim 引用依赖，Test 必须准备 dependencies。
+    prepared := ensure_workspace_prepared(ctx.root_dir, ctx.cache_dir, *ctx.workspace, force_dependencies = true);
     if prepared == null return false;
     pattern := ifx arguments.count == 1 then arguments[0] else "";
     files, ok := collect_test_files(prepared);

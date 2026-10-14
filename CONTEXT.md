@@ -20,7 +20,7 @@ Juice 是一个面向 Jai  的命令行构建工具；本上下文统一描述�
 递归删除 root package 与 workspace member 的 target directory 整目录（含依赖 shim 与转译产物）。Clean 通过 workspace discovery 确定 member，但不解析、获取或更新 dependencies。所有清理路径先完成验证；单个删除失败不阻止其他已验证路径的清理，但会使 Clean 整体失败。
 
 **Test**:
-执行当前 package 单元测试的 command。Test 经一次幂等的 workspace 准备调用消费 prepared workspace，不依赖 build；不消费 artifact plan——LIB package 没有 effective target 时依然可测。Test 接受至多一个 pattern 参数，对最终报告名做大小写敏感子串匹配。没有发现任何 test block 或 pattern 零命中时，Test 成功完成并明确说明，不进入测试构建；测试失败使 command 失败，与编译失败共用非零退出码。
+执行当前 package 单元测试的 command。Test 经一次幂等的 workspace 准备调用消费 prepared workspace，不依赖 build；不消费 artifact plan——LIB package 没有 effective target 时依然可测，且以 force_dependencies 照常准备 dependencies（票 0049 缺陷修正：测试程序经 import shim 引用依赖需要；Build 的「0 plans 不准备」语义不变）。Test 接受至多一个 pattern 参数，对最终报告名做大小写敏感子串匹配。没有发现任何 test block 或 pattern 零命中时，Test 成功完成并明确说明，不进入测试构建；测试失败使 command 失败，与编译失败共用非零退出码。
 
 **Bootstrap build（自举构建）**:
 仓库根 `build.jai` metaprogram 直接构建 juice 自身的路径，独立于 Build command。src 原文件内联 test block 后，Bootstrap build 的构建输入是剥离视图——与 Build command 共用同一转译器与视图契约（[ADR 0006](docs/adr/0006-bootstrap-build-strips-inline-test-blocks.md)）；行号与诊断经视图映射对应原文件。Test support 文件不在其构建输入内。

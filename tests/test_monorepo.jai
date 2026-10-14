@@ -233,3 +233,17 @@ test "E2E: member with inline tests runs them as its own root" {
     expect(output_matches("member-own", output, string.[
         "[test] member extra inline test\n[test] member inline test\n[test] member test must not run in root\n3 passed, 0 failed\n"]));
 }
+
+// 票 0049 缺陷修正：LIB member（0 effective target）自为 root 跑测试时，
+// Test 以 force_dependencies 照常准备依赖——测试程序经 shim 引用另一
+// member（member_extra → member_lib），此前「0 plans 不生成 shim」的
+// 门控使 import 解析必败。
+test "E2E: lib member tests import a dependency without targets" {
+    fixture_root := tprint("%1/tests/data/workspace-ok", juice_root());
+    defer delete_directory_full(tprint("%1/member_extra/target", fixture_root));
+
+    result, output, _ := run_juice_test("workspace-ok/member_extra");
+    expect(expect_exit("lib-member-dep", result, 0));
+    expect(output_matches("lib-member-dep", output, string.["[juice Test] Found 1 tests; compiling test program..."]));
+    expect(output_matches("lib-member-dep", output, string.["[test] lib member test imports its dependency\n1 passed, 0 failed\n"]));
+}

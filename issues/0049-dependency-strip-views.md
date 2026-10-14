@@ -45,3 +45,5 @@ ADR 0004 的剥离保证 = 入口同包字面量 `#load` 闭包；依赖（含 w
 4. **验证**：`jai build.jai` 零回归；`./target/juice.exe test` **175 passed / 0 failed**（含 6 块新单测 + 新 member-own E2E；Testing 模块自测 drain 语义不变）。真实验证在 packrat 侧随 C1 内联迁移复验（juice run / member test 路径）。
 
 **Jai 事实**：`return probe_package_closure(...)` 不自动展开多返回值——包装器须显式 `files, ok := ...; return files, ok;`（bootstrap 首编译暴露）。
+
+**缺陷修正（packrat 集成验证暴露，同票闭环）**：LIB package（0 effective target）自为 root 跑 `juice test` 时，依赖准备被 `artifact_plans.count > 0` 门控跳过——无 shim，测试程序的 `#import <依赖名>` 解析必败（packrat json member 实测）。修正：`prepare_workspace` / `ensure_workspace_prepared` 增 `force_dependencies` 参数，Test 以 true 调用（Build 语义不变）；fixture 增 member_extra → member_lib 的 LIB-依赖场景（member_extra/tests/extra_test.jai），新 E2E「lib member tests import a dependency without targets」钉住；workspace.jai 增 force 单测；CONTEXT.md Test 词条同步。最终 `jai build.jai` + `juice test` **177 passed / 0 failed**。
