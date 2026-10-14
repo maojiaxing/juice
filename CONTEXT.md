@@ -11,7 +11,7 @@ Juice 是一个面向 Jai  的命令行构建工具；本上下文统一描述�
 在目标 command 之前必须成功完成的另一个 command。前置关系表达命令之间的执行依赖，而不是把两个 command 合并为一个 command。当前唯一实例是 `run` 依赖 `build`。Workspace 准备不作为 command、不参与前置关系（见 Workspace preparation）。
 
 **Build**:
-根据当前 workspace 的 package 与 target 定义，产生可执行输出的 command。Build 从入口闭包探测 test block：闭包含之则以剥离视图编译，不含则原样直编。依赖（含 workspace member）源码经 import shim 被编译时，依赖剥离前端（票 0049）以同一全有全无语义处理其闭包：含 test block 的依赖闭包整闭包 STRIP 视图落 `target/transpile/deps/<依赖名>/...`，shim 改写指向入口视图；test-free 依赖零转译。Testing 断言模块源码含 test block 时不可被 jai 直接编译，Build 以该模块的 STRIP 视图替代 `#import "Testing"` 解析，视图落 `target/testing-module/`（与 Test 的 EXPAND 编译视图同路径、与 Bootstrap build 的 STRIP 视图同语义，三路径对称的特例，各自运行前重写；模块 test-free 或不存在时无此行为）。Build 构建 root package 的全部 effective target，但不会在每次构建前自动清空 target directory。没有 effective target 时，Build 无需准备 dependencies，也不创建 target directory 或 artifact，但仍成功完成并明确说明没有可构建目标。对 LIB package，Build 仅验证导入入口，不调用编译器。
+根据当前 workspace 的 package 与 target 定义，产生可执行输出的 command。Build 从入口闭包探测 test block：闭包含之则以剥离视图编译，不含则原样直编。依赖（含 workspace member）源码经 import shim 被编译时，依赖剥离前端（票 0049）以同一全有全无语义处理其闭包：含 test block 的依赖闭包整闭包 STRIP 视图落 `target/transpile/deps/<依赖名>/...`，shim 改写指向入口视图；test-free 依赖零转译。Testing 断言模块源码含 test block 时不可被 jai 直接编译，Build 以该模块的 STRIP 视图替代 `#import "Testing"` 解析，视图落 `target/testing-module/`（与 Test 的 EXPAND 编译视图同路径、与 Bootstrap build 的 STRIP 视图同语义，三路径的特例，各自运行前重写；STRIP 侧自票 0051 起驻 Strip front 共享模块，bootstrap 与 Build command 共用一份；模块 test-free 或不存在时无此行为）。Build 构建 root package 的全部 effective target，但不会在每次构建前自动清空 target directory。没有 effective target 时，Build 无需准备 dependencies，也不创建 target directory 或 artifact，但仍成功完成并明确说明没有可构建目标。对 LIB package，Build 仅验证导入入口，不调用编译器。
 
 **Run**:
 选择一个 target，先通过 `build` 构建 root package 的全部 effective target，再启动所选 target 的 artifact。只有一个 effective target 时默认选择它；有多个时优先选择与 package 同名的 target，否则必须以大小写完全一致的名称明确指定 target。
@@ -23,7 +23,7 @@ Juice 是一个面向 Jai  的命令行构建工具；本上下文统一描述�
 执行当前 package 单元测试的 command。Test 经一次幂等的 workspace 准备调用消费 prepared workspace，不依赖 build；不消费 artifact plan——LIB package 没有 effective target 时依然可测，且以 force_dependencies 照常准备 dependencies（票 0049 缺陷修正：测试程序经 import shim 引用依赖需要；Build 的「0 plans 不准备」语义不变）。Test 接受至多一个 pattern 参数，对最终报告名做大小写敏感子串匹配。没有发现任何 test block 或 pattern 零命中时，Test 成功完成并明确说明，不进入测试构建；测试失败使 command 失败，与编译失败共用非零退出码。
 
 **Bootstrap build（自举构建）**:
-仓库根 `build.jai` metaprogram 直接构建 juice 自身的路径，独立于 Build command。src 原文件内联 test block 后，Bootstrap build 的构建输入是剥离视图——与 Build command 共用同一转译器与视图契约（[ADR 0006](docs/adr/0006-bootstrap-build-strips-inline-test-blocks.md)）；行号与诊断经视图映射对应原文件。Test support 文件不在其构建输入内。
+仓库根 `build.jai` metaprogram 直接构建 juice 自身的路径，独立于 Build command。src 原文件内联 test block 后，Bootstrap build 的构建输入是剥离视图——与 Build command 共用同一转译器与视图契约（[ADR 0006](docs/adr/0006-bootstrap-build-strips-inline-test-blocks.md)）；行号与诊断经视图映射对应原文件。闭包探测与视图计算机器自票 0050 起驻共享剥离前端（Strip front，见下）——bootstrap 以 `#load` 复用、PLAIN 布局：含入口的全闭包视图恒写 `target/transpile/bootstrap/`。票 0052 起 bootstrap 与 Build command 同形状：经共享 Metaprogram generator 生成编译 metaprogram（`target/bootstrap-meta.jai`）后 spawn 子进程 jai，入口视图经 `add_build_file` 编译、诊断精确文件+行号（`add_build_string` 的 +5 偏移已退役）；release 验证路径经生成器的 very_optimized 字段保留。Test support 文件不在其构建输入内。
 _Avoid_: 发布视图树（预生成剥离源码树作为构建输入的方案，已被 ADR 0006 排除）。
 
 ## Workspace language
@@ -70,12 +70,16 @@ BIN package 没有显式 target、但 package 中存在默认入口文件 `src/m
 Effective target 构建后得到的可执行输出，具有确定的名称与位置；Build 产生 artifact，Run 启动同一个 artifact。Artifact 的默认名称等于 effective target 名称。测试生成物不是 artifact。
 
 **Target directory（目标目录）**:
-Package 的全部 Juice 管理生成物所在的固定约定目录 `target/`：artifact 与编译中间物（obj、构建 metaprogram 等）落其根，依赖导入 shim 落 `target/packages/`，转译产物落 `target/transpile/`，Testing 模块编译视图落 `target/testing-module/`（票 0033 特例：Test 写 EXPAND 视图、Build 与 Bootstrap build 写 STRIP 视图，各自运行前重写）。同一 package 的不同 artifact 以各自名称共存于其根。Target directory 必须是位于 package root 内的普通目录，不能是符号链接或其他路径重定向；artifact 也不能以符号链接占据计划路径。Clean 递归删除 root package 与 workspace member 的 target directory 整目录。与 Target declaration 同名异义（生成物目录 vs 构建目标声明），接受撞词。
+Package 的全部 Juice 管理生成物所在的固定约定目录 `target/`：artifact 与编译中间物（obj、构建 metaprogram 等）落其根，依赖导入 shim 落 `target/packages/`，转译产物落 `target/transpile/`，Testing 模块编译视图落 `target/testing-module/`（票 0033 特例：Test 写 EXPAND 视图——驻 test 命令，票 0039；Build 与 Bootstrap build 写 STRIP 视图——驻 Strip front 共享模块，票 0051；各自运行前重写）。同一 package 的不同 artifact 以各自名称共存于其根。Target directory 必须是位于 package root 内的普通目录，不能是符号链接或其他路径重定向；artifact 也不能以符号链接占据计划路径。Clean 递归删除 root package 与 workspace member 的 target directory 整目录。与 Target declaration 同名异义（生成物目录 vs 构建目标声明），接受撞词。
 _Avoid_: result 目录（遗留不再管理）、bin 目录。
 
 **Transpile（转译）**:
 将含 test block 的源文件转换为合法 Jai 的 source-to-source 步骤，是 Juice 进程内的库。Build 从入口闭包探测：闭包含 test block 才转译（剥离模式），否则原样直编；Test 对发现的全部文件转译（展开模式）。依赖剥离前端（票 0049）把同一剥离语义延至依赖闭包：Build 与 Test 都经 import shim 探测依赖入口闭包，含 test block 时整闭包剥离视图落 `target/transpile/deps/<依赖名>/...` 并改写 shim。Test block 的保证生效范围是 build 下入口经字面量 in-package `#load` 可达的文件与依赖 shim 可达的依赖闭包、test 下全包发现的文件；其余非字面量与 out-of-package `#load` 的目标不转译，其含 test block 由编译错误暴露。转译产物按内容寻址缓存。
 _Avoid_: 通用语法扩展框架（转译只为 test block 服务）。
+
+**Strip front（剥离前端）**:
+共享的闭包探测与视图计算机器（src/transpile_front.jai，票 0050 自 dependency.jai 与 commands/build.jai 收敛）：闭包探测、视图计算、生产 transpile 步骤与 Testing 模块 STRIP 特例（票 0051）。必须 test-free——bootstrap 以 `#load` 复用、test block 随 metaprogram 编译期文本包含会非法；其测试驻 tests/transpile_front_tests.jai（测试组织规则：test-free 模块的单元测试与集成测试同驻 tests/，票 0053）。视图落点与缓存语义按 Strip_View_Layout 参数化——CONTENT_ADDRESSED（runtime：内容寻址 + 缓存命中跳过写入）与 PLAIN（bootstrap：`<base>/<rel>` 恒写、含入口的全闭包落盘，票 0052）。三个消费方：bootstrap build.jai（#load）、Build command（build_plan_entry）、依赖剥离前端（票 0049）。
+_Avoid_: 探测与视图计算在 bootstrap 与 runtime 各持一份（票 0050 已消除的复制）。
 
 **View（视图）**:
 一个源文件经 Transpile 生成、与其一一对应的合法 Jai 产物，镜像 package 相对目录结构。剥离视图删除 test block 并将 in-package `#load` 重写为指向目标视图；测试视图将 test block 转换为带注记的普通过程并剥离 in-package `#load`，符号经程序级可见性共享。视图与原文件行号一一对应，产物中的行列坐标可直接对照原文件；原文件路径的还原由测试驱动携带的映射承担。唯一例外是 Testing 模块编译视图（票 0033 特例）：EXPAND 视图尾部追加自测支撑段，行号不保真，其失败坐标经 path_mapping 映射回 `modules/Testing.jai` 原文坐标。
@@ -116,7 +120,7 @@ Juice 当前可执行 command 的目录。它让 command 的名称、说明、�
 根据用户输入在 command registry 中选择 command，按其前置关系执行所需 command，并把最终成功/失败结果交给 CLI 进程。Dispatcher 在执行任何 prerequisite 之前用目标 command 自身的参数规则验证用户参数；参数无效时任何 command 都不执行。
 
 **Metaprogram generator（metaprogram 生成器）**:
-Juice 进程内生成编译 metaprogram 源文本的模块（src/metaprogram.jai）：Build 与 Test 共用同一生成器，产出驱动 jai 编译器的一次性 workspace、拦截与消息循环骨架；两个 command 各自组装 options（workspace 名、输出形状、import 目录、入口文件）后调用，Testing 模块编译视图的 "" 哨兵约定在生成器内单点成立。Bootstrap build 不 #load 运行时源码，保留 ADR 0006 对称复制（build.jai 内嵌同骨架）。
+Juice 进程内生成编译 metaprogram 源文本的模块（src/metaprogram.jai）：Build、Test 与 bootstrap（票 0052）共用同一生成器，产出驱动 jai 编译器的一次性 workspace、拦截与消息循环骨架；各消费方各自组装 options（workspace 名、输出形状、import 目录、入口文件）后调用，Testing 模块编译视图的 "" 哨兵约定在生成器内单点成立。bootstrap 生成后 spawn 子进程 jai 编译（与 Build command 同形状）；release 验证路径经 very_optimized 字段发射 set_optimization（默认零发射，既有消费方输出逐字节不变）。
 _Avoid_: 各 command 自持 metaprogram 骨架（会复制消息循环与哨兵约定）。
 
 ## Relationships
@@ -143,4 +147,5 @@ _Avoid_: 各 command 自持 metaprogram 骨架（会复制消息循环与哨兵�
 - Testing 经生成的 metaprogram 注入测试程序，收口断言与失败汇总。
 - 视图与原文件行号一一对应；失败报告与转译期诊断引用原文件坐标。
 - Clean 递归删除 root 与 member 的 target directory 整目录。
-- Build 与 Test 共用同一 Metaprogram generator 生成编译 metaprogram；Bootstrap build 保留内嵌对称复制（ADR 0006）。
+- Build、Test 与 Bootstrap build（票 0052）共用同一 Metaprogram generator 生成编译 metaprogram；bootstrap 生成后 spawn 子进程 jai、与 Build command 同形状。
+- 闭包探测与视图计算三消费方共用 Strip front（票 0050）：bootstrap 经 #load、Build command 与依赖剥离前端经程序级 #load。

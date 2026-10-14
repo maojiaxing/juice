@@ -49,11 +49,14 @@ src/
 │   ├── clean.jai        # 清理输出（无 manifest 依赖）
 │   └── test.jai         # 测试命令（test block 发现、转译与测试程序生成）
 ├── dispatcher.jai       # 注册表验证、查找和图遍历
-├── transpile_tests.jai  # 转译器测试（核心转译文件 test-free 约束）
 └── main.jai            # 简化为驱动器初始化和调度调用
 
 tests/
-└── data/               # fixture 包与 golden 基线（测试块已内联 src 实现旁）
+├── data/               # fixture 包与 golden 基线（测试块已内联 src 实现旁）
+├── test_monorepo.jai   # monorepo E2E（2026-10-14 用户修订）
+├── transpile_tests.jai / transpile_front_tests.jai / metaprogram_tests.jai
+│                       # test-free 模块的单元测试（测试组织规则，票 0053）
+└── test_support.jai    # 测试共享声明（组织决议 0027）
 
 CONTEXT.md              # 领域术语定义
 IMPLEMENTATION.md       # 实现细节文档

@@ -145,11 +145,12 @@ ensure_import_shim :: (packages_dir: string, name: string, source_dir: string) -
 // #load 依赖的导入入口（ADR 0004 剥离保证 = 入口同包闭包，依赖源此前裸传
 // jai）。依赖源码内联 test block 后不可被 jai 直接编译，本前端对每个 shim：
 // 解析入口路径 → 以依赖包为根探测入口的字面量 in-package #load 闭包
-// （probe_package_closure）→ 闭包含 test block 时整闭包生成 STRIP 视图
-// （ADR 0004 全有全无语义），落 target/transpile/deps/<依赖名>/...，并把
-// shim 的 #load 改写到入口视图。test-free 依赖零转译、shim 原样不动。
-// Build 与 Test 共用本前端；依赖中的 test block 不被发现、不执行（Test
-// discovery 不扫依赖包），两路径只做剥离编译。
+// （probe_package_closure，票 0050 起驻 src/transpile_front.jai）→ 闭包含
+// test block 时整闭包生成 STRIP 视图（ADR 0004 全有全无语义），落
+// target/transpile/deps/<依赖名>/...，并把 shim 的 #load 改写到入口视图。
+// test-free 依赖零转译、shim 原样不动。Build 与 Test 共用本前端；依赖中的
+// test block 不被发现、不执行（Test discovery 不扫依赖包），两路径只做剥
+// 离编译。
 // ---------------------------------------------------------------------------
 
 // The #load target literal of a generated import shim: the dependency entry's
@@ -214,174 +215,12 @@ collect_shim_names :: (packages_dir: string) -> [..] string, bool {
     return ctx.names, true;
 }
 
-// One build source file: package-relative path ("/" separated) and absolute
-// path, mirroring the test command's Test_Source_File. A dependency closure
-// file's rel_path is relative to the dependency package root (views land
-// under deps/<name>/..., the path itself stays dependency-relative).
-Build_Source_File :: struct {
-    rel_path: string;
-    abs_path: string;
-}
-
-// One probed closure file: its resolved in-package literal #load targets in
-// statement order, and whether it contains test blocks.
-Build_Closure_File :: struct {
-    file:      Build_Source_File;
-    loads:     [..] string;
-    has_tests: bool;
-}
-
-// The transpile step's output for one file: the strip-mode view, the
-// content-addressed cache key, and transpile diagnostics (rejected with the
-// original file coordinates).
-Build_File_Output :: struct {
-    view:        string;
-    key:         string;
-    diagnostics: [..] Transpile_Diagnostic;
-}
-
-probe_visited :: (visited: [] string, rel_path: string) -> bool {
-    for seen: visited {
-        if seen == rel_path return true;
-    }
-    return false;
-}
-
-// Probe one package's closure: DFS from the entry over literal in-package
-// #load edges, with `package_root` as the resolution boundary. Non-literal
-// and out-of-package targets are not followed (issue 0008 resolution 4).
-// Files are listed in DFS preorder — the entry first, then each load
-// target's subtree in statement order. The consumer package's build closure
-// (build.jai's probe_build_closure) and dependency closures (the strip front
-// below) share this probe.
-probe_package_closure :: (package_root: string, entry_rel: string) -> [..] Build_Closure_File, bool {
-    entry: Build_Source_File;
-    entry.rel_path = entry_rel;
-    entry.abs_path = to_forward_slashes(tprint("%1/%2", package_root, entry_rel));
-
-    files: [..] Build_Closure_File;
-    visited: [..] string;
-    stack: [..] Build_Source_File;
-    array_add(*stack, entry);
-
-    while stack.count > 0 {
-        file := stack[stack.count - 1];
-        stack.count -= 1;
-        if probe_visited(visited, file.rel_path) continue;
-        array_add(*visited, copy_string(file.rel_path));
-
-        source, ok := read_entire_file(file.abs_path);
-        if !ok {
-            print("[juice ERROR] Could not read source file for build: %\n", file.abs_path);
-            return files, false;
-        }
-
-        cf: Build_Closure_File;
-        cf.file = file;
-        cf.has_tests = source_has_test_block(source);
-        cf.loads = source_load_targets(source, file.rel_path);
-        array_add(*files, cf);
-
-        // Push in reverse so targets pop in statement order.
-        i := cf.loads.count;
-        while i > 0 {
-            i -= 1;
-            target: Build_Source_File;
-            target.rel_path = cf.loads[i];
-            target.abs_path = to_forward_slashes(tprint("%1/%2", package_root, cf.loads[i]));
-            array_add(*stack, target);
-        }
-    }
-    return files, true;
-}
-
-// Shared state of one closure's view computation: per-file states (0 =
-// uncomputed, 1 = computing, 2 = done) and the resulting view paths.
-// "Computing" re-entry means the literal in-package #load graph has a
-// cycle and the path rewrites cannot be resolved (issue 0008 resolution 2).
-// dep_name non-empty marks a dependency closure: views land under
-// deps/<dep_name>/ instead of the tree root (票 0049).
-Build_View_State :: struct {
-    transpile_dir: string;
-    dep_name:      string;
-    closure:       [] Build_Closure_File;
-    transpile:     #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output;
-    states:        [..] s64;
-    view_paths:    [..] string;
-    failed:        bool;
-}
-
-closure_index :: (state: *Build_View_State, rel_path: string) -> (s64, bool) {
-    for i: 0..state.closure.count-1 {
-        if state.closure[i].file.rel_path == rel_path return i, true;
-    }
-    return -1, false;
-}
-
-// Compute one closure file's strip view in dependency order (children
-// first, Merkle chain) and write it content-addressed into the transpile
-// tree. Returns the absolute view path.
-view_of_file :: (state: *Build_View_State, index: s64) -> string, bool {
-    if state.failed return "", false;
-    if state.states[index] == 2 return state.view_paths[index], true;
-    if state.states[index] == 1 {
-        print("[juice ERROR] %1: 循环加载无法重写路径\n", state.closure[index].file.rel_path);
-        state.failed = true;
-        return "", false;
-    }
-    state.states[index] = 1;
-
-    // Children first: every in-package load target is in the closure by
-    // construction, so its view path exists before the parent's key embeds
-    // it in a load rewrite.
-    load_targets: [..] Load_Target;
-    for resolved: state.closure[index].loads {
-        child_index, found := closure_index(state, resolved);
-        if !found {
-            print("[juice ERROR] %1: in-package #load 缺少视图目标\n", state.closure[index].file.rel_path);
-            state.failed = true;
-            return "", false;
-        }
-        child_path, ok := view_of_file(state, child_index);
-        if !ok return "", false;
-        target: Load_Target;
-        target.from = resolved;
-        target.to = child_path;
-        array_add(*load_targets, target);
-    }
-
-    output := state.transpile(state.closure[index].file, load_targets);
-    if output.diagnostics.count > 0 {
-        for diagnostic: output.diagnostics {
-            print("[juice ERROR] %1:%2,%3: %4\n", state.closure[index].file.rel_path, diagnostic.line, diagnostic.column, diagnostic.message);
-        }
-        state.failed = true;
-        return "", false;
-    }
-
-    view_path := ifx state.dep_name == ""
-        then transpile_view_path(state.transpile_dir, output.key, state.closure[index].file.rel_path)
-        else transpile_dependency_view_path(state.transpile_dir, output.key, state.dep_name, state.closure[index].file.rel_path);
-    // The parent must exist before the existence check: the inspection
-    // scans the parent directory, and a missing parent would make
-    // visit_files log a spurious "Unable to open directory" error.
-    if !make_directory_if_it_does_not_exist(path_strip_filename(view_path), recursive = true) {
-        print("[juice ERROR] Could not create view directory for %\n", state.closure[index].file.rel_path);
-        state.failed = true;
-        return "", false;
-    }
-    if !path_exists_as_regular_file(view_path) {
-        if !write_entire_file(view_path, output.view) {
-            print("[juice ERROR] Could not write view for %\n", state.closure[index].file.rel_path);
-            state.failed = true;
-            return "", false;
-        }
-    }
-
-    state.view_paths[index] = copy_string(view_path);
-    state.states[index] = 2;
-    return view_path, true;
-}
+// 闭包探测与视图计算机器（Build_Source_File / Build_Closure_File /
+// Build_File_Output / probe_package_closure / Strip_View_State /
+// closure_index / view_of_file / transpile_build_file）自票 0050 起驻
+// src/transpile_front.jai——test-free 共享剥离前端（bootstrap build.jai 以
+// #load 复用，故必须 test-free；其测试驻 tests/transpile_front_tests.jai，
+// 票 0053）。本文件的依赖剥离前端（下文）消费同一机器。
 
 // The dependency strip front shared by build and test: for every import shim
 // in the dependency directory, probe the dependency entry's closure; a
@@ -410,18 +249,12 @@ prepare_dependency_strip_views :: (
 
         closure, probe_ok := probe_package_closure(get_directory_path(entry_abs), get_filename(entry_abs));
         if !probe_ok return false;
-        has_tests := false;
-        for file: closure {
-            if file.has_tests {
-                has_tests = true;
-                break;
-            }
-        }
-        if !has_tests continue;
+        if !closure_has_tests(closure) continue;
 
-        state: Build_View_State;
+        state: Strip_View_State;
         state.transpile_dir = transpile_tree_dir(root_dir);
         state.dep_name = name;
+        state.layout = .CONTENT_ADDRESSED;
         state.closure = closure;
         state.transpile = transpile;
         for _: closure {

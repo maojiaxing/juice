@@ -1,12 +1,13 @@
 // ---------------------------------------------------------------------------
-// 转译器测试（票 0034 自旧 tests/ 迁移，45 块）。
+// 转译器测试（票 0034 自旧 tests/ 迁移，45 块；2026-10-14 测试组织规则后回
+// 驻 tests/——票 0053）。
 //
 // 关键约束（0031 已知风险落地）：src/transpile.jai 与 src/transpile_cache.jai
 // 是 build.jai 的 #load 目标 / 入口闭包成员——test block 随 metaprogram 编译
-// 期文本包含会非法，这两个文件必须保持 test-free。转译器测试块因此落独立
-// src 文件：本文件不被任何 #load 引用（不进入口闭包、不进发布产物），Test
-// discovery 全包扫描将其收录进测试程序（与 tests/test_support.jai 同机制）。
-// 本文件仅含 test block；生产代码零耦合。
+// 期文本包含会非法，这两个文件必须保持 test-free。转译器测试块因此不能内
+// 联，按测试组织规则驻 tests/ 本文件：不被任何 #load 引用（不进入口闭包、
+// 不进发布产物），Test discovery 全包扫描将其收录进测试程序（与
+// tests/test_support.jai 同机制）。本文件仅含 test block；生产代码零耦合。
 // ---------------------------------------------------------------------------
 
 // 共享声明（GOLDEN_CASES/NEGATIVE_CASES 常量、golden/negative harness、

@@ -11,6 +11,7 @@
 #load "dependency.jai";
 #load "transpile.jai";
 #load "transpile_cache.jai";
+#load "transpile_front.jai";
 #load "metaprogram.jai";
 #load "commands/command.jai";
 #load "commands/build.jai";

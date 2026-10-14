@@ -82,7 +82,7 @@ compile_artifact_plan :: (root_dir: string, plan: Artifact_Plan, entry: string) 
     // (.obj, .lib, .added_strings_*) land there instead of a .build
     // directory next to the entry, and Clean removes them with target/.
     metaprogram_path := to_forward_slashes(tprint("%1/build-%2.jai", plan.target_dir, plan.target.name));
-    testing_dir := testing_module_strip_view_dir(root_dir);
+    testing_dir := testing_module_strip_view_dir(root_dir, tprint("%1/Testing.jai", juice_modules_dir()));
     metaprogram: Compiler_Metaprogram_Options;
     metaprogram.workspace_name    = "Juice Build";
     metaprogram.executable_name   = plan.target.name;
@@ -126,69 +126,15 @@ compile_artifact_plan :: (root_dir: string, plan: Artifact_Plan, entry: string) 
 // (dependency.jai, 票 0049) before this probe runs.
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Testing 断言模块构建特例（票 0033）：模块源文件内联 test block 后不可被
-// jai 直接编译，任何 `#import "Testing"` 的构建都必须解析到 test-free 的
-// STRIP 视图。本函数在每次编译前重写 <package>/target/testing-module/
-// Testing.jai（session product，与 test 命令的编译视图同路径——test 写
-// EXPAND、build 写 STRIP，各自运行前重写）。模块 test-free 或不存在时
-// 返回 ""：metaprogram 输出与特例前字节一致，零变化。
-// ---------------------------------------------------------------------------
-testing_module_strip_view_dir :: (package_root: string) -> string {
-    module_abs := to_forward_slashes(tprint("%1/Testing.jai", juice_modules_dir()));
-    if !path_exists_as_regular_file(module_abs) return "";
-    source, ok := read_entire_file(module_abs);
-    if !ok return "";
-    if !source_has_test_block(source) return "";
+// Testing 断言模块构建特例（票 0033）：`#import "Testing"` 的构建必须解析
+// 到 test-free 的 STRIP 视图。testing_module_strip_view_dir 自票 0051 起驻
+// src/transpile_front.jai（与 bootstrap 共用一份，模块来源由消费方给定）；
+// Test 的 EXPAND 变体驻 test.jai（票 0039）。
 
-    ctx: Transpile_Context;
-    ctx.mode = .STRIP;
-    ctx.path = "modules/Testing.jai";
-    result := transpile_source(source, ctx);
-    if result.diagnostics.count > 0 {
-        for diagnostic: result.diagnostics {
-            print("[juice ERROR] %1:%2,%3: %4\n", ctx.path, diagnostic.line, diagnostic.column, diagnostic.message);
-        }
-        return "";
-    }
-
-    dir := to_forward_slashes(tprint("%1/target/testing-module", package_root));
-    if !make_directory_if_it_does_not_exist(dir, recursive = true) {
-        print("[juice ERROR] Could not create Testing module view directory: %\n", dir);
-        return "";
-    }
-    view := to_forward_slashes(tprint("%1/Testing.jai", dir));
-    if !write_entire_file(view, result.view) {
-        print("[juice ERROR] Could not write Testing module view.\n");
-        return "";
-    }
-    return dir;
-}
-
-// The build transpile seam's production default (Build_Source_File /
-// Build_Closure_File / Build_File_Output live in dependency.jai, the strip
-// front's owner — 票 0049): read the file, strip test blocks, rewrite
-// in-package #load targets to the given view paths, and derive the
-// content-addressed cache key (path + source + mode + version + load
-// targets). The load rewrite table embeds the target views' hash
-// directories, so keys form a Merkle chain computable in dependency order.
-transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output {
-    output: Build_File_Output;
-    source, ok := read_entire_file(file.abs_path);
-    if !ok {
-        array_add(*output.diagnostics, .{line = 0, column = 0, message = tprint("无法读取源文件: %1", file.abs_path)});
-        return output;
-    }
-    ctx: Transpile_Context;
-    ctx.mode = .STRIP;
-    ctx.path = file.rel_path;
-    ctx.load_targets = load_targets;
-    result := transpile_source(source, ctx);
-    output.view = result.view;
-    output.key = transpile_view_key(file.rel_path, source, .STRIP, load_targets, JUICE_VERSION);
-    output.diagnostics = result.diagnostics;
-    return output;
-}
+// The build transpile seam's production default（transpile_build_file）与
+// Build_Source_File / Build_Closure_File / Build_File_Output 自票 0050 起驻
+// src/transpile_front.jai（test-free 共享剥离前端——bootstrap 以 #load 复
+// 用同一生产步骤）。
 
 // Probe one target's closure: the entry's literal in-package #load closure
 // within the package root. Dependency closures enter through import shims
@@ -201,8 +147,8 @@ probe_build_closure :: (prepared: *Prepared_Workspace, plan: Artifact_Plan) -> [
 // Decide one plan's compile entry: probe the entry's closure; a test-free
 // closure compiles the original entry unchanged, a closure containing test
 // blocks is viewed all-or-nothing (issue 0008 resolution 1/2) and the entry
-// becomes the entry file's view. (Build_View_State / closure_index /
-// view_of_file live in dependency.jai — 票 0049.)
+// becomes the entry file's view. (Strip_View_State / closure_index /
+// view_of_file 自票 0050 起驻 src/transpile_front.jai.)
 build_plan_entry :: (
     prepared: *Prepared_Workspace,
     plan: Artifact_Plan,
@@ -210,18 +156,11 @@ build_plan_entry :: (
 ) -> (string, bool) {
     closure, ok := probe_build_closure(prepared, plan);
     if !ok return "", false;
+    if !closure_has_tests(closure) return to_forward_slashes(plan.target.source_path), true;
 
-    has_tests := false;
-    for file: closure {
-        if file.has_tests {
-            has_tests = true;
-            break;
-        }
-    }
-    if !has_tests return to_forward_slashes(plan.target.source_path), true;
-
-    state: Build_View_State;
+    state: Strip_View_State;
     state.transpile_dir = transpile_tree_dir(prepared.discovery.root_dir);
+    state.layout = .CONTENT_ADDRESSED;
     state.closure = closure;
     state.transpile = transpile;
     for _: closure {
@@ -330,6 +269,12 @@ test "Build forwards each prepared plan to compilation" {
     test_compile_count = 0;
     test_compile_success = true;
     test_build_transpile_calls = 0;
+    // 本测试读 test_build_transpiled_* 数组断言计数：与标量同样显式清零
+    // （此前依赖「前一个 fake 使用者恰好清空」的隐式不变量——票 0050 曾
+    // 因发现序被打破；票 0053 测试文件移驻 tests/ 后顺序复原，显式清零保
+    // 留：簿记不依赖发现序）。
+    array_reset(*test_build_transpiled_files);
+    array_reset(*test_build_transpiled_rewrites);
     expect(build_prepared_workspace(*prepared, fake_build_transpile, test_compile_artifact));
     expect(test_compile_count == 2);
     expect(test_compiled_driver_root == juice_root());
@@ -524,40 +469,9 @@ test "Build probe: test blocks are detected, pass-through shapes are not" {
     expect(ok3 && closure3.count == 1 && !closure3[0].has_tests);
 }
 
-// The real per-file step strips fixture test blocks and derives the
-// content-addressed key from the pure function.
-test "Real build transpile step strips fixture tests" {
-    target: Load_Target;
-    target.from = "src/math.jai";
-    target.to = "C:/virtual/target/transpile/hash0001/src/math.jai";
-    output := transpile_build_file(.{rel_path = "src/main.jai", abs_path = tprint("%1/tests/data/test-package/src/main.jai", juice_root())}, Load_Target.[target]);
-    expect(output.diagnostics.count == 0);
-    expect(find_index_from_left(output.view, "// juice: test stripped: test \"greeting\" {") >= 0);
-    expect(find_index_from_left(output.view, "juice_test_") < 0);
-    expect(find_index_from_left(output.view, "C:/virtual/target/transpile/hash0001/src/math.jai") >= 0);
-    source, ok := read_entire_file(tprint("%1/tests/data/test-package/src/main.jai", juice_root()));
-    expect(ok);
-    expect(output.key == transpile_view_key("src/main.jai", source, .STRIP, Load_Target.[target], JUICE_VERSION));
-}
-
-// Only literal in-package #load targets are rewritten: non-literal and
-// out-of-package statements stay verbatim (issue 0008 resolution 4).
-test "Build strip keeps unrewritable loads verbatim" {
-    root := tprint("%1/target/build-strip-verbatim", juice_root());
-    delete_directory_full(root);
-    defer delete_directory_full(root);
-    source := "#load \"helper.jai\";\n#load CONST_NAME;\n#load \"../../outside.jai\";\n#load \"other\" + \".jai\";\n";
-    expect(build_seam_write(root, "src/main.jai", source));
-    target: Load_Target;
-    target.from = "src/helper.jai";
-    target.to = "X:/virtual/views/helper.jai";
-    output := transpile_build_file(.{rel_path = "src/main.jai", abs_path = tprint("%1/src/main.jai", root)}, Load_Target.[target]);
-    expect(output.diagnostics.count == 0);
-    expect(find_index_from_left(output.view, "#load \"X:/virtual/views/helper.jai\";") >= 0);
-    expect(find_index_from_left(output.view, "#load CONST_NAME;") >= 0);
-    expect(find_index_from_left(output.view, "#load \"../../outside.jai\";") >= 0);
-    expect(find_index_from_left(output.view, "#load \"other\" + \".jai\";") >= 0);
-}
+// transpile_build_file 的直测（真实剥离步骤与 #load 改写 verbatim 语义）
+// 自票 0050 起随生产步骤驻 tests/transpile_front_tests.jai（票 0053 测试组
+// 织规则）。
 
 // ---------------------------------------------------------------------------
 // E2E child scenarios: real juice.exe on fixture packages（juice_exe、

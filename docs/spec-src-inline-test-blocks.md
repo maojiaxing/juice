@@ -8,7 +8,7 @@ src 原文件允许内联 test block（Zig 风格，贴近实现）；两条构�
 
 ## 2. 决策摘要
 
-- **自举剥离机制**（[0028 研究](../issues/0028-research-jai-metaprogram-view-feeding.md)、[ADR 0006](adr/0006-bootstrap-build-strips-inline-test-blocks.md)）：`build.jai` metaprogram 内嵌转译器纯函数；入口视图 `add_build_string`（行号偏移恒 +5、列号精确）；闭包其余视图落盘、`#load` 重写为视图绝对路径；插入点 set_build_options 之后、compiler_begin_intercept 之前；与 Build command 共用同一视图契约。
+- **自举剥离机制**（[0028 研究](../issues/0028-research-jai-metaprogram-view-feeding.md)、[ADR 0006](adr/0006-bootstrap-build-strips-inline-test-blocks.md)）：`build.jai` metaprogram 内嵌转译器纯函数；闭包视图（含入口）全部落盘、`#load` 重写为视图绝对路径；经共享 Metaprogram generator 生成编译 metaprogram 后 spawn 子进程 jai，入口视图以 `add_build_file` 编译（票 0052 修订形态，诊断精确文件+行号）；与 Build command 共用同一视图契约。
 - **测试共享代码**（[0027 决议](../issues/0027-test-helper-organization-and-strip-boundary.md)）：约 40 个共享声明集中 `tests/test_support.jai` 单文件（2026-10 用户修订：纯测试支撑代码不驻 src/，位置由 `src/test_support.jai` 改为 `tests/test_support.jai`；机制不变）——不被入口 `#load` 引用、不进 Build 闭包、不参与发布构建；Test discovery 全包扫描将其收录进测试程序，程序级共享。STRIP 语义不扩展。
 - **Testing 自测归属**（[0030 决议](../issues/0030-implementation-plan.md)）：10 个自测块内联进 `modules/Testing.jai`；**Test discovery 排除集不变**（modules/ 仍排除）；测试程序生成器特例——若 package 存在 `modules/Testing.jai`，收录其 EXPAND 视图**替代** `#import "Testing"` 作为断言模块来源（同一模块只加载一份，全局计数不分裂）。用户 package 语义零变更。模块含 test block 后不可被 jai 直接编译，因此除测试程序生成器（EXPAND 视图）外，**Build command 与自举构建同样收录该模块的 STRIP 视图替代 `#import "Testing"`**（三路径对称特例，0033 决议）：Build command 在每次编译前重写 `<package>/target/testing-module/Testing.jai` 并前置其目录进 import path；自举 build.jai 对仓库根 `modules/Testing.jai` 做同一特例（同路径同语义）。模块 test-free 或不存在时零变化。
 - **词条与文档**（[0029 决议](../issues/0029-adr-and-context-update.md)）：CONTEXT.md 新增 **Bootstrap build（自举构建）** 与 **Test support（测试支撑代码）** 两词条（已落地）；spec 即本文档。
@@ -24,7 +24,7 @@ src 原文件允许内联 test block（Zig 风格，贴近实现）；两条构�
 | test_target.jai（11） | `src/target.jai` |
 | test_test_command.jai（27） | `src/commands/test.jai` |
 | test_testing.jai（10） | `modules/Testing.jai` |
-| test_transpiler.jai（45） | 实际落地 `src/transpile_tests.jai`（规划期为 `src/transpile.jai`/`src/transpile_cache.jai`，落地改为独立文件——两者是 build.jai 的 `#load` 目标/入口闭包成员，必须保持 test-free，见 0034 关键约束） |
+| test_transpiler.jai（45） | 实际落地 `src/transpile_tests.jai`（规划期为 `src/transpile.jai`/`src/transpile_cache.jai`，落地改为独立文件——两者是 build.jai 的 `#load` 目标/入口闭包成员，必须保持 test-free，见 0034 关键约束；2026-10-14 修订：测试组织规则——test-free 模块的单元测试与集成测试同驻 tests/，票 0053 移 `tests/transpile_tests.jai`） |
 | test_workspace.jai（14） | `src/workspace.jai` |
 
 **纪律**：
@@ -36,7 +36,7 @@ src 原文件允许内联 test block（Zig 风格，贴近实现）；两条构�
 
 ## 4. 自举剥离改造
 
-按 ADR 0006：`build.jai` 以 `#load` 复用 `src/transpile.jai` 纯函数（被 load 代码编译进 metaprogram 执行环境、不进入被构建程序）；入口文件的 STRIP 视图经 `add_build_string` 喂入（虚拟路径，诊断行号减常量 +5 还原）；闭包其余视图落盘、in-package `#load` 重写为视图绝对路径；test-free 闭包仍原样直编。改造必须**先行**（在 src 仍 test-free 时验证 test-free 直通零回归），随后测试块迁移才有安全落地。
+按 ADR 0006（票 0052 修订后形态）：`build.jai` 以 `#load` 复用 `src/transpile.jai` 纯函数与 test-free 共享剥离前端（被 load 代码编译进 metaprogram 执行环境、不进入被构建程序）；闭包含 test block 时含入口的全部闭包视图落盘，bootstrap 经共享 Metaprogram generator 生成编译 metaprogram 后 spawn 子进程 jai 编译，入口视图经 `add_build_file` 编译（诊断精确文件+行号，原 `add_build_string` +5 偏移形态已退役）；in-package `#load` 重写为视图绝对路径；test-free 闭包仍原样直编。改造必须**先行**（在 src 仍 test-free 时验证 test-free 直通零回归），随后测试块迁移才有安全落地。
 
 ## 5. 验收标准
 
