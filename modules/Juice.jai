@@ -44,6 +44,16 @@ Workspace_Config :: struct {
     exclude: [] string;
 }
 
+// Optional jaix pre-step marker. config is the package-relative path to the
+// jaix configuration; an empty config means the pre-step is not enabled.
+// exe overrides the jaix executable; an empty exe means a PATH lookup of
+// "jaix". Both default to empty, so packages that never declare the marker
+// are unaffected.
+Jaix_Prestep :: struct {
+    config: string;
+    exe:    string = "";
+}
+
 Package :: struct {
     name:         string;
     version:      string;
@@ -55,6 +65,9 @@ Package :: struct {
     dependencies: [] Dependency;
     workspace:    Workspace_Config;
     build_script: string = "";
+
+    // jaix pre-step marker; an empty config disables the pre-step.
+    jaix:         Jaix_Prestep;
 
     // Set by the manifest loader; it is not declared in package.jai.
     dir:          string = "";

@@ -89,24 +89,67 @@ compile_test_program :: (transpile_dir: string, driver_path: string, metaprogram
     return true;
 }
 
-// The orchestration seam (spec 0013 Testing Decisions): the production
-// handler uses the default transpile and compile operations; tests inject
-// recording fakes, exactly like the build compile seam. 票 0038：Test 不再
-// 接收任何路径——货载透传清零，编译 seam 只收生成产物路径。
+// The orchestration seam: the production handler uses the default transpile,
+// compile and pre-step operations; tests inject recording fakes, exactly
+// like the build compile seam. Test receives no paths itself — the compile
+// seam gets only the generated product paths. The jaix pre-step joins the
+// same injectable family (the build prestep seam's shape): the production
+// handler runs the shared jaix front; tests cross the interface with a
+// recording fake.
 test_prepared_workspace :: (
     prepared: *Prepared_Workspace,
     pattern: string,
     files: [] Test_Source_File,
     transpile: #type (file: Test_Source_File, next_test_number: s64) -> Test_File_Output = transpile_test_file,
     compile: #type (transpile_dir: string, driver_path: string, metaprogram_path: string) -> bool = compile_test_program,
-    dep_transpile: #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output = transpile_build_file
+    dep_transpile: #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output = transpile_build_file,
+    prestep: #type (prepared: *Prepared_Workspace, transpile: #type (exe: string, input: string, output: string, config: string) -> (exit_code: s64, stderr: string) = spawn_jaix_transpile) -> bool = run_jaix_prestep
 ) -> bool {
+    // 0. jaix pre-step (spec 055 decision 8): the root package's jaix marker
+    //    reroutes the test program's compile inputs — the pre-step mirrors
+    //    the package into target/jaix/ BEFORE the transpile loop (mirrored
+    //    files' transpile step reads their mirror views, so the mirror must
+    //    exist first). The routing set comes from the same scan the pre-step
+    //    mirrors (test discovery family exclusion rules plus the juice test
+    //    block skip): mirrored files compile from their mirror views (the
+    //    try/catch lowering reaches the test program), juice test block
+    //    files keep their EXPAND views of the originals, and the marker's
+    //    config file drops out of the test program — it is jaix's
+    //    compile-time input, not a test source, and its #import chain cannot
+    //    resolve inside the test program (the same exclusion the mirror scan
+    //    applies). Discovery, test entries, report names and path_mapping
+    //    semantics stay unchanged: the transpile loop still derives the test
+    //    list from the original sources (mirrored files are test-free by the
+    //    scan contract), and path_mapping still maps every view back to the
+    //    package-relative original path. A marker-absent package never
+    //    reaches this block (zero behavior change).
+    compile_files: [..] Test_Source_File;
+    marker := prepared.discovery.root_package.jaix;
+    if marker.config != "" {
+        if !prestep(prepared) return false;
+        mirrored, ok := collect_jaix_files(prepared);
+        if !ok return false;
+        for file: files {
+            if paths_equal(file.rel_path, path_slashes(marker.config)) continue;
+            routed := file;
+            for mirror_file: mirrored {
+                if paths_equal(mirror_file.rel_path, file.rel_path) {
+                    routed.abs_path = jaix_mirror_view_path(prepared.discovery.root_dir, file.rel_path);
+                    break;
+                }
+            }
+            array_add(*compile_files, routed);
+        }
+    } else {
+        for file: files array_add(*compile_files, file);
+    }
+
     // 1. Transpile every file in list order, numbering tests globally.
     //    Diagnostics are rejected with the original file coordinates.
     outputs: [..] Test_File_Output;
     matches: [..] Test_Entry;
     next_number: s64 = 1;
-    for file: files {
+    for file: compile_files {
         output := transpile(file, next_number);
         if output.diagnostics.count > 0 {
             for diagnostic: output.diagnostics {
@@ -142,18 +185,22 @@ test_prepared_workspace :: (
     //    refers to the test support view by rel_path.
     transpile_dir := transpile_tree_dir(prepared.discovery.root_dir);
     view_paths: [..] string;
-    for file, index: files {
+    for file, index: compile_files {
         array_add(*view_paths, transpile_view_path(transpile_dir, outputs[index].key, file.rel_path));
     }
 
-    // 4. Testing 断言模块特例（票 0033，视图计算内聚于 testing_module_view，
-    //    票 0039）：模块源文件内联 test block 后不可被 jai 直接编译，生成器
-    //    把 `#import "Testing"` 的解析目标换成生成的编译视图（metaprogram
-    //    的 import_path 前置其目录，同一模块只加载一份，全局计数不分裂）。
-    //    此处只做支撑段视图查找、自测块的 pattern 过滤与全局编号续接；写盘
-    //    仍在 zero-match 检查之后的既有位置（步骤 6）。
+    // 4. The Testing module special case (the view computation lives in
+    //    testing_module_view): the module source file cannot be compiled by
+    //    jai directly once test blocks are inlined, so the generator points
+    //    every `#import "Testing"` at the generated compile view (its
+    //    directory is prepended to the metaprogram's import path, and the
+    //    module loads exactly once so the global counts never split). This
+    //    step only locates the support block view, pattern-filters the
+    //    self-test blocks and continues the global numbering; the view is
+    //    still written at its established place after the zero-match check
+    //    (step 6).
     support_view_text := "";
-    for f, index: files {
+    for f, index: compile_files {
         if f.rel_path == "tests/test_support.jai" support_view_text = outputs[index].view;
     }
     module_view_result, module_ok := testing_module_view(prepared.discovery.root_dir, support_view_text, next_number);
@@ -179,18 +226,24 @@ test_prepared_workspace :: (
         print("[juice ERROR] Could not create the transpile cache directory: %\n", transpile_dir);
         return false;
     }
+    // The error labels index compile_files, not files: view_paths and
+    // outputs are 1:1 with the routed set, and the marker's config file
+    // drops out of it (059 deviation 1) — from the config's position onward
+    // the discovery indices are off by one. Marker-absent, the two arrays
+    // coincide (zero behavior change); the E2E child scenario locks the
+    // routed label.
     for index: 0..view_paths.count-1 {
         view_path := view_paths[index];
         // The parent must exist before the existence check: the inspection
         // scans the parent directory, and a missing parent would make
         // visit_files log a spurious "Unable to open directory" error.
         if !make_directory_if_it_does_not_exist(path_strip_filename(view_path), recursive = true) {
-            print("[juice ERROR] Could not create view directory for %\n", files[index].rel_path);
+            print("[juice ERROR] Could not create view directory for %\n", compile_files[index].rel_path);
             return false;
         }
         if path_exists_as_regular_file(view_path) continue;
         if !write_entire_file(view_path, outputs[index].view) {
-            print("[juice ERROR] Could not write view for %\n", files[index].rel_path);
+            print("[juice ERROR] Could not write view for %\n", compile_files[index].rel_path);
             return false;
         }
     }
@@ -226,7 +279,7 @@ test_prepared_workspace :: (
     //    they are regenerated and written on every run, never cached.
     driver_path := tprint("%1/driver.jai", transpile_dir);
     metaprogram_path := tprint("%1/first.jai", transpile_dir);
-    if !write_entire_file(driver_path, generate_test_driver(files, view_paths, matches, testing_module_view_path)) {
+    if !write_entire_file(driver_path, generate_test_driver(compile_files, view_paths, matches, testing_module_view_path)) {
         print("[juice ERROR] Could not write test driver.\n");
         return false;
     }
@@ -742,6 +795,144 @@ test "Seam: compile failure propagates" {
 }
 
 // ---------------------------------------------------------------------------
+// jaix pre-step wiring (spec 055 decision 8): the marker routes the test
+// program's compile inputs — the pre-step runs before the transpile loop,
+// mirrored files compile from their target/jaix/ views (the try/catch
+// lowering reaches the test program), juice test block files keep their
+// EXPAND views of the originals, and the marker's config drops out of the
+// test program. The recording fake (fake_jaix_prestep) lives in
+// tests/test_support.jai.
+// ---------------------------------------------------------------------------
+
+test "Test front: the jaix marker routes mirrored files through their mirror views" {
+    root := tprint("%1/target/test-seam-jaix", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "jaix.config.jai", "// config\n"));
+    expect(build_seam_write(root, "src/main.jai", "// main\n"));
+    expect(build_seam_write(root, "src/calc.jai", "// calc\n"));
+    expect(build_seam_write(root, "src/calc_tests.jai", "test \"demo\" { }\n"));
+
+    prepared: Prepared_Workspace;
+    prepared.discovery.root_dir = root;
+    prepared.discovery.root_package = .{name = "demo", version = "1", jaix = .{config = "jaix.config.jai"}};
+    files := Test_Source_File.[
+        .{rel_path = "jaix.config.jai", abs_path = tprint("%1/jaix.config.jai", root)},
+        .{rel_path = "src/calc.jai", abs_path = tprint("%1/src/calc.jai", root)},
+        .{rel_path = "src/calc_tests.jai", abs_path = tprint("%1/src/calc_tests.jai", root)},
+        .{rel_path = "src/main.jai", abs_path = tprint("%1/src/main.jai", root)},
+    ];
+    reset_seam_test();
+    test_jaix_prestep_calls = 0;
+    test_jaix_prestep_success = true;
+    expect(test_prepared_workspace(*prepared, "", files, fake_transpile, fake_compile, transpile_build_file, fake_jaix_prestep));
+    // The pre-step ran once; the config dropped out of the test program;
+    // mirrored files route through their mirror views; the juice test block
+    // file keeps its original path.
+    expect(test_jaix_prestep_calls == 1);
+    expect(test_transpiled_files.count == 3);
+    expect(test_transpiled_files[0].rel_path == "src/calc.jai");
+    expect(test_transpiled_files[0].abs_path == to_forward_slashes(tprint("%1/target/jaix/src/calc.jai", root)));
+    expect(test_transpiled_files[1].rel_path == "src/calc_tests.jai");
+    expect(test_transpiled_files[1].abs_path == tprint("%1/src/calc_tests.jai", root));
+    expect(test_transpiled_files[2].rel_path == "src/main.jai");
+    expect(test_transpiled_files[2].abs_path == to_forward_slashes(tprint("%1/target/jaix/src/main.jai", root)));
+    expect(test_compile_calls == 1);
+
+    // The driver never references the config file.
+    driver_path := tprint("%1/driver.jai", transpile_tree_dir(root));
+    expect(!file_contains(driver_path, "jaix.config.jai"));
+}
+
+test "Test front: a failed jaix pre-step blocks the test pipeline" {
+    root := tprint("%1/target/test-seam-jaix-fail", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "jaix.config.jai", "// config\n"));
+    expect(build_seam_write(root, "src/main.jai", "// main\n"));
+
+    prepared: Prepared_Workspace;
+    prepared.discovery.root_dir = root;
+    prepared.discovery.root_package = .{name = "demo", version = "1", jaix = .{config = "jaix.config.jai"}};
+    files := Test_Source_File.[
+        .{rel_path = "jaix.config.jai", abs_path = tprint("%1/jaix.config.jai", root)},
+        .{rel_path = "src/main.jai", abs_path = tprint("%1/src/main.jai", root)},
+    ];
+    reset_seam_test();
+    test_jaix_prestep_calls = 0;
+    test_jaix_prestep_success = false;
+    expect(!test_prepared_workspace(*prepared, "", files, fake_transpile, fake_compile, transpile_build_file, fake_jaix_prestep));
+    expect(test_jaix_prestep_calls == 1);
+    expect(test_transpiled_files.count == 0 && test_compile_calls == 0);
+}
+
+// The real transpile step reads the mirror views (the fake pre-step writes
+// nothing — the test lays the mirror down itself): the written calc.jai view
+// carries the try lowering, the entry's mirror view gets its in-package
+// #load stripped by the EXPAND pass, and the config produces no view at all.
+test "Test front: the real transpile step expands the mirror views" {
+    root := tprint("%1/target/test-seam-jaix-real", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "jaix.config.jai", "// config\n"));
+    expect(build_seam_write(root, "src/main.jai", "#load \"calc.jai\";\n\nmain :: () {}\n"));
+    expect(build_seam_write(root, "src/calc.jai", "double :: (n: int) -> Error, int {\n    x := try half(n);\n    return .NONE, x * 4;\n}\n"));
+    expect(build_seam_write(root, "src/calc_tests.jai", "test \"demo\" { }\n"));
+    // The mirror: the lowered calc.jai; main.jai round-trips byte-identically.
+    expect(build_seam_write(root, "target/jaix/src/calc.jai", "double :: (n: int) -> Error, int {\n    try_0_err, try_0_v := half(n);\n    return .NONE, try_0_v * 4;\n}\n"));
+    expect(build_seam_write(root, "target/jaix/src/main.jai", "#load \"calc.jai\";\n\nmain :: () {}\n"));
+
+    prepared: Prepared_Workspace;
+    prepared.discovery.root_dir = root;
+    prepared.discovery.root_package = .{name = "demo", version = "1", jaix = .{config = "jaix.config.jai"}};
+    files := Test_Source_File.[
+        .{rel_path = "jaix.config.jai", abs_path = tprint("%1/jaix.config.jai", root)},
+        .{rel_path = "src/calc.jai", abs_path = tprint("%1/src/calc.jai", root)},
+        .{rel_path = "src/calc_tests.jai", abs_path = tprint("%1/src/calc_tests.jai", root)},
+        .{rel_path = "src/main.jai", abs_path = tprint("%1/src/main.jai", root)},
+    ];
+    reset_seam_test();
+    test_jaix_prestep_calls = 0;
+    test_jaix_prestep_success = true;
+    expect(test_prepared_workspace(*prepared, "", files, transpile_test_file, fake_compile, transpile_build_file, fake_jaix_prestep));
+    expect(test_jaix_prestep_calls == 1);
+    expect(test_compile_calls == 1);
+
+    // The lowered mirror text is the transpile input: the written view
+    // carries the try lowering, not the original try syntax.
+    transpile_dir := transpile_tree_dir(root);
+    mirror_calc, ok := read_entire_file(tprint("%1/target/jaix/src/calc.jai", root));
+    expect(ok);
+    calc_key := transpile_view_key("src/calc.jai", mirror_calc, .EXPAND, Load_Target.[], JUICE_VERSION);
+    calc_view := transpile_view_path(transpile_dir, calc_key, "src/calc.jai");
+    expect(file_contains(calc_view, "try_0_err, try_0_v := half(n);"));
+    expect(!file_contains(calc_view, "x := try half(n);"));
+
+    // The entry's mirror view is also the transpile input: its in-package
+    // #load is stripped by the EXPAND pass (the test program #loads every
+    // view into one scope, so the mirror's #load chain must not load the
+    // same file twice).
+    mirror_main, ok2 := read_entire_file(tprint("%1/target/jaix/src/main.jai", root));
+    expect(ok2);
+    main_key := transpile_view_key("src/main.jai", mirror_main, .EXPAND, Load_Target.[], JUICE_VERSION);
+    main_view := transpile_view_path(transpile_dir, main_key, "src/main.jai");
+    // The strip edit embeds the original statement text inside the comment
+    // ("// juice: load stripped: #load ..."), so the active statement is
+    // pinned by the exact comment shape.
+    expect(file_contains(main_view, "// juice: load stripped: #load \"calc.jai\";"));
+
+    // The config is not a test source: no view, no driver reference, and
+    // the test list still comes from the original test block file.
+    config_source, ok3 := read_entire_file(tprint("%1/jaix.config.jai", root));
+    expect(ok3);
+    config_key := transpile_view_key("jaix.config.jai", config_source, .EXPAND, Load_Target.[], JUICE_VERSION);
+    expect(!file_exists(transpile_view_path(transpile_dir, config_key, "jaix.config.jai")));
+    driver_path := tprint("%1/driver.jai", transpile_dir);
+    expect(!file_contains(driver_path, "jaix.config.jai"));
+    expect(file_contains(driver_path, "run(\"demo\", juice_test_1);"));
+}
+
+// ---------------------------------------------------------------------------
 // Testing module view computation: direct unit tests for the source lookup,
 // the sentinel-disable path, EXPAND+support block and the global STRIP. The
 // write-and-orchestrate path is covered by E2E (the Testing self-tests and
@@ -1170,4 +1361,78 @@ test "E2E: clean removes the transpile cache with the target directory" {
     // inspection which logs "Unable to open directory" for them.
     expect(!file_exists(transpile_dir));
     expect(!file_exists(tprint("%1/tests/data/test-package/target", juice_root())));
+}
+
+// ---------------------------------------------------------------------------
+// jaix pre-step E2E (real juice.exe on the demo fixture; prepend_jaix_to_path
+// and clean_jaix_driver_files live in tests/test_support.jai)
+// ---------------------------------------------------------------------------
+
+// The wired test: the jaix marker runs the pre-step, the test program
+// compiles the mirror's lowered calc.jai (the double() tests execute the
+// try/catch error propagation for real — success and error paths), the
+// juice test block file reports normally through its EXPAND view, and the
+// config stays out of the test program entirely.
+test "E2E: jaix pre-step test compiles the mirror and runs the mixed package" {
+    fixture_root := tprint("%1/tests/data/jaix-demo", juice_root());
+    defer delete_directory_full(tprint("%1/target", fixture_root));
+    defer clean_jaix_driver_files(fixture_root);
+    prepend_jaix_to_path();
+
+    result, output, _ := run_juice_child("jaix-demo", "test");
+    expect(expect_exit("jaix-demo test", result, 0, "test child"));
+    expect(child_output_contains("jaix-demo test", output, "[juice] Running jaix pre-step (2 files) -> target/jaix/..."));
+    expect(child_output_contains("jaix-demo test", output, "[juice Test] Found 3 tests; compiling test program..."));
+    expect(output_matches("jaix-demo test", output, string.["[test] demo addition", "[test] demo double success", "[test] demo double negative", "3 passed, 0 failed"], tag = "test child"));
+
+    // The calc.jai view carries the try lowering (the mirror view was the
+    // transpile input); the config never produced a view.
+    transpile_dir := tprint("%1/target/transpile", fixture_root);
+    mirror_calc, ok := read_entire_file(tprint("%1/target/jaix/src/calc.jai", fixture_root));
+    expect(ok);
+    calc_key := transpile_view_key("src/calc.jai", mirror_calc, .EXPAND, Load_Target.[], JUICE_VERSION);
+    calc_view := transpile_view_path(transpile_dir, calc_key, "src/calc.jai");
+    expect(path_exists_as_regular_file(calc_view));
+    expect(file_contains(calc_view, "try_0_err, try_0_v := half(n);"));
+
+    config_source, ok2 := read_entire_file(tprint("%1/jaix.config.jai", fixture_root));
+    expect(ok2);
+    config_key := transpile_view_key("jaix.config.jai", config_source, .EXPAND, Load_Target.[], JUICE_VERSION);
+    expect(!file_exists(transpile_view_path(transpile_dir, config_key, "jaix.config.jai")));
+}
+
+// A view write failure reports the routed file's label: view_paths and
+// outputs are 1:1 with compile_files (the marker's config file dropped out
+// of the routed set — 059 deviation 1), so the error must name that file —
+// not the config, which sits before it in the discovery order. A directory
+// planted at the view path makes the write fail.
+test "E2E: a jaix view write failure names the routed source file" {
+    root := tprint("%1/target/jaix-e2e-viewlabel", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    defer clean_jaix_driver_files(root);
+    prepend_jaix_to_path();
+    expect(build_seam_write(root, "package.jai",
+        "PACKAGE :: Package.{\n    name    = \"jaix-viewlabel\",\n    version = \"1\",\n    type    = .BIN,\n    jaix    = .{ config = \"jaix.config.jai\" },\n};\n"));
+    expect(build_seam_write(root, "jaix.config.jai",
+        "#import \"jaix\";\nJaix_Plugin_Try_Catch :: #import \"Jaix_Plugin_Try_Catch\";\n\nget_config :: () -> Jaix_Config {\n    p := Jaix_Plugin_Try_Catch.get_plugin();\n    return .{ plugins = plugins_of(as_plugin(p)) };\n}\n"));
+    expect(build_seam_write(root, "src/a.jai", "helper :: () -> s32 { return 1; }\n"));
+    expect(build_seam_write(root, "src/t.jai", "test \"demo\" { }\n"));
+
+    // The routed test-free file mirrors byte-identically (the round-trip
+    // identity), so its EXPAND key derives from the original text.
+    a_source, ok := read_entire_file(tprint("%1/src/a.jai", root));
+    expect(ok);
+    a_key := transpile_view_key("src/a.jai", a_source, .EXPAND, Load_Target.[], JUICE_VERSION);
+    a_view := transpile_view_path(transpile_tree_dir(root), a_key, "src/a.jai");
+    expect(make_directory_if_it_does_not_exist(a_view, recursive = true));
+
+    juice := juice_exe();
+    result, output, _, _ := run_command(juice, "test", working_directory = lexical_absolute_path(root), capture_and_return_output = true);
+    expect(expect_exit("jaix-viewlabel", result, 1, "test child"));
+    // The label names the routed file (compile_files[0] = src/a.jai); the
+    // discovery list's first entry is the config, so an index into files
+    // would mislabel it jaix.config.jai.
+    expect(child_output_contains("jaix-viewlabel", output, "[juice ERROR] Could not write view for src/a.jai"));
+    expect(output_matches("jaix-viewlabel", output, string.["Could not write view for jaix.config.jai"], want = false, tag = "test child"));
 }

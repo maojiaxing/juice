@@ -5,6 +5,7 @@
 #import "String";
 #import "System";
 #import "Juice";
+#import "Testing";
 
 Manifest_Parse_Result :: struct {
     success:      bool;
@@ -44,7 +45,9 @@ build_eval_code :: (manifest_path: string, output_path: string) -> string {
     append(*builder, "    print_to_builder(*builder, \"VERSION=%\\n\", PACKAGE.version);\n");
     append(*builder, "    print_to_builder(*builder, \"TYPE=%\\n\", cast(s64) PACKAGE.type);\n");
     append(*builder, "    print_to_builder(*builder, \"DESCRIPTION=%\\n\", PACKAGE.description);\n");
-    append(*builder, "    print_to_builder(*builder, \"BUILD_SCRIPT=%\\n\", PACKAGE.build_script);\n\n");
+    append(*builder, "    print_to_builder(*builder, \"BUILD_SCRIPT=%\\n\", PACKAGE.build_script);\n");
+    append(*builder, "    print_to_builder(*builder, \"JAIX_CONFIG=%\\n\", PACKAGE.jaix.config);\n");
+    append(*builder, "    print_to_builder(*builder, \"JAIX_EXE=%\\n\", PACKAGE.jaix.exe);\n\n");
 
     append(*builder, "    for target: PACKAGE.targets {\n");
     append(*builder, "        print_to_builder(*builder, \"TARGET=%1|%2\\n\", target.name, target.main_file);\n");
@@ -90,6 +93,8 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
     seen_type := false;
     seen_description := false;
     seen_build_script := false;
+    seen_jaix_config := false;
+    seen_jaix_exe := false;
 
     targets: [..] Target;
     members: [..] string;
@@ -149,6 +154,16 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
                 seen_build_script = true;
                 result.package.build_script = copy_string(value);
 
+            case "JAIX_CONFIG";
+                if seen_jaix_config return manifest_parse_failure(line_index + 1, "Duplicate JAIX_CONFIG record.");
+                seen_jaix_config = true;
+                result.package.jaix.config = copy_string(value);
+
+            case "JAIX_EXE";
+                if seen_jaix_exe return manifest_parse_failure(line_index + 1, "Duplicate JAIX_EXE record.");
+                seen_jaix_exe = true;
+                result.package.jaix.exe = copy_string(value);
+
             case "TARGET";
                 parts := split(value, "|");
                 if parts.count != 2 return manifest_parse_failure(line_index + 1, "TARGET record must contain name|main_file.");
@@ -197,6 +212,18 @@ manifest_parse_failure :: (line_number: int, message: string) -> Manifest_Parse_
 parse_manifest_data :: (content: string) -> Package {
     result := parse_manifest_data_strict(content);
     return result.package;
+}
+
+// Marker cross-record validation: an exe override without a config is a
+// declaration error — without a config the pre-step has nothing to run. The
+// gate is standalone so the load path's check is testable in-process
+// (load_package_manifest itself needs a real jai child; see workspace.jai's
+// validation matrix note for the same split).
+validate_jaix_marker :: (pkg: Package) -> (bool, string) {
+    if pkg.jaix.exe != "" && pkg.jaix.config == "" {
+        return false, "JAIX_EXE set without JAIX_CONFIG.";
+    }
+    return true, "";
 }
 
 // FNV-1a 64-bit hash rendered as 16 lowercase hex characters (a local copy:
@@ -282,6 +309,61 @@ load_package_manifest :: (cache_dir: string, pkg_dir: string) -> Package, bool {
         print("[juice ERROR] Invalid manifest protocol at % (line %): %\n", manifest_path, parsed.line_number, parsed.error_message);
         return .{}, false;
     }
+    jaix_ok, jaix_error := validate_jaix_marker(parsed.package);
+    if !jaix_ok {
+        print("[juice ERROR] Invalid jaix marker at %: %\n", manifest_path, jaix_error);
+        return .{}, false;
+    }
     parsed.package.dir = copy_string(pkg_dir);
     return parsed.package, true;
+}
+
+// ---------------------------------------------------------------------------
+// Inline tests: the jaix marker validation matrix. The parse faces are pure
+// protocol; the marker cross-record check lives in validate_jaix_marker (the
+// load path's testable seam — load_package_manifest needs a real jai child,
+// so its branches stay covered by E2E message assertions elsewhere).
+// ---------------------------------------------------------------------------
+
+test "Jaix marker parses a config and exe pair" {
+    parsed := parse_manifest_data_strict("NAME=demo\nVERSION=1\nJAIX_CONFIG=jaix.config.jai\nJAIX_EXE=jaix.exe\n");
+    expect(parsed.success);
+    expect(parsed.package.jaix.config == "jaix.config.jai");
+    expect(parsed.package.jaix.exe == "jaix.exe");
+}
+
+test "Jaix marker records default to empty when absent" {
+    parsed := parse_manifest_data_strict("NAME=demo\nVERSION=1\n");
+    expect(parsed.success);
+    expect(parsed.package.jaix.config == "");
+    expect(parsed.package.jaix.exe == "");
+}
+
+test "Jaix marker rejects a duplicate JAIX_CONFIG record" {
+    parsed := parse_manifest_data_strict("NAME=demo\nVERSION=1\nJAIX_CONFIG=a\nJAIX_CONFIG=b\n");
+    expect(!parsed.success);
+    expect(parsed.line_number == 4);
+    expect(parsed.error_message == "Duplicate JAIX_CONFIG record.");
+}
+
+test "Jaix marker rejects a duplicate JAIX_EXE record" {
+    parsed := parse_manifest_data_strict("NAME=demo\nVERSION=1\nJAIX_EXE=a\nJAIX_EXE=b\n");
+    expect(!parsed.success);
+    expect(parsed.line_number == 4);
+    expect(parsed.error_message == "Duplicate JAIX_EXE record.");
+}
+
+test "Jaix marker rejects an exe without a config" {
+    ok, message := validate_jaix_marker(.{name = "demo", version = "1", jaix = .{config = "", exe = "jaix.exe"}});
+    expect(!ok);
+    expect(message == "JAIX_EXE set without JAIX_CONFIG.");
+}
+
+test "Jaix marker accepts a config with or without an exe override" {
+    ok, _ := validate_jaix_marker(.{name = "demo", version = "1", jaix = .{config = "jaix.config.jai"}});
+    expect(ok);
+    ok, _ = validate_jaix_marker(.{name = "demo", version = "1", jaix = .{config = "jaix.config.jai", exe = "jaix.exe"}});
+    expect(ok);
+    ok, _ = validate_jaix_marker(.{name = "demo", version = "1"});
+    expect(ok);
 }

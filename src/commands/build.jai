@@ -61,7 +61,9 @@ revalidate_build_plans :: (prepared: *Prepared_Workspace) -> bool {
 
 compile_artifact_plan :: (root_dir: string, plan: Artifact_Plan, entry: string) -> bool {
     // The compile entry is chosen by the transpile front: the original
-    // entry file (test-free closure, zero transpile) or its strip view.
+    // entry file (test-free closure, zero transpile), its strip view, or —
+    // with the jaix marker — the entry's mirror view under target/jaix/
+    // (spec 055 decision 8: selected directly, no probe, no strip).
     source_file := to_forward_slashes(entry);
     if !path_exists_as_regular_file(source_file) {
         print("[juice ERROR] Target source file not found: %\n", source_file);
@@ -150,11 +152,22 @@ probe_build_closure :: (prepared: *Prepared_Workspace, plan: Artifact_Plan) -> [
 // blocks is viewed all-or-nothing and the entry becomes the entry file's
 // view. (Strip_View_State / closure_index / view_of_file live in
 // src/transpile_front.jai.)
+//
+// The jaix pre-step marker selects the mirror entry view instead: the whole
+// package was jaix-transpiled into target/jaix/ (package-relative
+// structure), so the entry's literal #load chain resolves inside the mirror
+// without rewrites — no probe, no strip views. The compile seam
+// (compile_artifact_plan) is untouched; its own entry-file existence check
+// reports a missing mirror view.
 build_plan_entry :: (
     prepared: *Prepared_Workspace,
     plan: Artifact_Plan,
     transpile: #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output
 ) -> (string, bool) {
+    if prepared.discovery.root_package.jaix.config != "" {
+        return jaix_mirror_view_path(prepared.discovery.root_dir, path_slashes(plan.target.main_file)), true;
+    }
+
     closure, ok := probe_build_closure(prepared, plan);
     if !ok return "", false;
     if !closure_has_tests(closure) return to_forward_slashes(plan.target.source_path), true;
@@ -180,11 +193,14 @@ build_plan_entry :: (
 // the same interfaces with recording adapters instead of the real compiler.
 // Build receives no paths itself — the root comes from prepared (the compile
 // seam takes only root_dir; packages_dir and the Testing view directory
-// derive from it).
+// derive from it). The prestep seam (run_jaix_prestep, src/jaix_front.jai)
+// joins the same injectable family: the production handler runs the jaix
+// pre-step; tests cross the interface with a recording fake.
 build_prepared_workspace :: (
     prepared: *Prepared_Workspace,
     transpile: #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output = transpile_build_file,
-    compile: #type (root_dir: string, plan: Artifact_Plan, entry: string) -> bool = compile_artifact_plan
+    compile: #type (root_dir: string, plan: Artifact_Plan, entry: string) -> bool = compile_artifact_plan,
+    prestep: #type (prepared: *Prepared_Workspace, transpile: #type (exe: string, input: string, output: string, config: string) -> (exit_code: s64, stderr: string) = spawn_jaix_transpile) -> bool = run_jaix_prestep
 ) -> bool {
     // Empty target sets are an intentional no-op. In particular, do not
     // create target/ and do not prepare dependencies for such a package.
@@ -194,8 +210,20 @@ build_prepared_workspace :: (
     // Dependency strip front: dependency sources reachable through
     // import shims are probed and, when they contain test blocks, viewed with
     // the same all-or-nothing strip semantics; shims are rewritten to the
-    // entry views. Test-free dependencies stay untouched.
+    // entry views. Test-free dependencies stay untouched. The jaix marker's
+    // scope is the root package only (spec 055 decision 9), so dependencies
+    // keep this path unchanged.
     if !prepare_dependency_strip_views(prepared.discovery.root_dir, transpile) return false;
+
+    // jaix pre-step (spec 055 decision 8): the root package's jaix marker
+    // enables the shared front — the whole package is scanned and
+    // jaix-transpiled into the target/jaix/ mirror. The pre-step runs
+    // before the entry loop so build_plan_entry can pick the mirror entry
+    // view; a marker-absent package never reaches the front (zero behavior
+    // change).
+    if prepared.discovery.root_package.jaix.config != "" {
+        if !prestep(prepared) return false;
+    }
 
     // Transpile front: per plan, probe the entry's closure and choose
     // between the original entry and the entry file's strip view.
@@ -424,6 +452,62 @@ test "Build front: a load cycle cannot be rewritten" {
 }
 
 // ---------------------------------------------------------------------------
+// jaix pre-step wiring (spec 055 decision 8): the marker routes the build
+// through the shared front — the pre-step runs once before the entry loop,
+// the strip front is skipped (the mirror entry view is selected directly,
+// the #load chain resolves inside the mirror), and compile_artifact_plan
+// stays untouched. The recording fake (fake_jaix_prestep) lives in
+// tests/test_support.jai.
+// ---------------------------------------------------------------------------
+
+test "Build front: the jaix marker routes the entry through the mirror view" {
+    root := tprint("%1/target/build-seam-jaix", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "src/main.jai", "#load \"helper.jai\";\n\nmain :: () {}\n"));
+    expect(build_seam_write(root, "src/helper.jai", "helper :: () -> s32 { return 1; }\n"));
+
+    plan := build_seam_plan(root, "src/main.jai");
+    prepared := build_seam_prepared(root, plan);
+    prepared.discovery.root_package = .{name = "demo", version = "1", jaix = .{config = "jaix.config.jai"}};
+    reset_build_seam();
+    test_jaix_prestep_calls = 0;
+    expect(build_prepared_workspace(*prepared, fake_build_transpile, fake_build_compile, fake_jaix_prestep));
+    expect(test_jaix_prestep_calls == 1);
+    // The marker skips the strip front entirely: no probe, no strip views.
+    expect(test_build_transpile_calls == 0);
+    expect(test_build_compile_calls == 1);
+    expect(test_build_compiled_entries[0] == to_forward_slashes(tprint("%1/target/jaix/src/main.jai", root)));
+}
+
+test "Build front: a failed jaix pre-step blocks every compilation" {
+    root := tprint("%1/target/build-seam-jaix-fail", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "src/main.jai", "main :: () {}\n"));
+
+    plan := build_seam_plan(root, "src/main.jai");
+    prepared := build_seam_prepared(root, plan);
+    prepared.discovery.root_package = .{name = "demo", version = "1", jaix = .{config = "jaix.config.jai"}};
+    reset_build_seam();
+    test_jaix_prestep_calls = 0;
+    test_jaix_prestep_success = false;
+    expect(!build_prepared_workspace(*prepared, fake_build_transpile, fake_build_compile, fake_jaix_prestep));
+    expect(test_jaix_prestep_calls == 1 && test_build_transpile_calls == 0 && test_build_compile_calls == 0);
+}
+
+test "Build entry: the jaix marker selects the mirror view without probing" {
+    plan := build_seam_plan("mirror-root", "src/main.jai");
+    prepared: Prepared_Workspace;
+    prepared.discovery.root_dir = "mirror-root";
+    prepared.discovery.root_package = .{name = "demo", version = "1", jaix = .{config = "jaix.config.jai"}};
+    test_build_transpile_calls = 0;
+    entry, ok := build_plan_entry(*prepared, plan, fake_build_transpile);
+    expect(ok && entry == to_forward_slashes("mirror-root/target/jaix/src/main.jai"));
+    expect(test_build_transpile_calls == 0);
+}
+
+// ---------------------------------------------------------------------------
 // Production probe: closure shape over real fixture files (no fakes).
 // ---------------------------------------------------------------------------
 
@@ -538,4 +622,169 @@ test "E2E: test-free package builds with zero transpile" {
     expect(expect_exit("build-empty", result, 0, "build child"));
     expect(file_exists(tprint("%1/target/build-empty.exe", fixture_root)));
     expect(!file_exists(tprint("%1/target/transpile", fixture_root)));
+}
+
+// ---------------------------------------------------------------------------
+// jaix pre-step E2E (real juice.exe on the demo fixture; prepend_jaix_to_path,
+// jaix_exe and clean_jaix_driver_files live in tests/test_support.jai)
+// ---------------------------------------------------------------------------
+
+// The wired build: the jaix marker runs the pre-step, the mirror entry
+// compiles, the artifact executes the lowered try/catch code (both the
+// success and the error-propagation path), untouched mirror views are
+// byte-identical to the originals, the cross-file #load chain resolves
+// inside the mirror, the juice test block file stays out and the sidecar
+// map landed.
+test "E2E: jaix pre-step build compiles the mirror and the lowering runs" {
+    fixture_root := tprint("%1/tests/data/jaix-demo", juice_root());
+    defer delete_directory_full(tprint("%1/target", fixture_root));
+    defer clean_jaix_driver_files(fixture_root);
+    prepend_jaix_to_path();
+
+    result, output, _ := run_juice_child("jaix-demo", "build");
+    expect(expect_exit("jaix-demo", result, 0, "build child"));
+    expect(child_output_contains("jaix-demo", output, "[juice] Running jaix pre-step (2 files) -> target/jaix/..."));
+    expect(child_output_contains("jaix-demo", output, "[juice Build] Compiling Target 'jaix-demo' (src/main.jai) -> target/..."));
+
+    // The artifact runs the lowered code: the try error propagation actually
+    // executed (success and error paths).
+    artifact := tprint("%1/target/jaix-demo.exe", fixture_root);
+    expect(file_exists(artifact));
+    run_result, run_output, _, _ := run_command(artifact, capture_and_return_output = true);
+    expect(expect_exit("jaix-demo artifact", run_result, 0, "build child"));
+    expect(child_output_contains("jaix-demo artifact", run_output, "double(20): NONE 40"));
+    expect(child_output_contains("jaix-demo artifact", run_output, "double(-6): NEGATIVE 0"));
+
+    // The mirror: untouched files are byte-identical to the originals (the
+    // round-trip identity), the try file is lowered, the juice test block
+    // file and the config stay out of the mirror, and the sidecar map
+    // landed.
+    mirror := tprint("%1/target/jaix", fixture_root);
+    main_original, ok := read_entire_file(tprint("%1/src/main.jai", fixture_root));
+    expect(ok);
+    main_view, ok2 := read_entire_file(tprint("%1/src/main.jai", mirror));
+    expect(ok2 && main_view == main_original);
+    expect(find_index_from_left(main_view, "#load \"calc.jai\";") >= 0);
+
+    calc_view, ok5 := read_entire_file(tprint("%1/src/calc.jai", mirror));
+    expect(ok5);
+    expect(find_index_from_left(calc_view, "try_0_err, try_0_v := half(n);") >= 0);
+    expect(!file_exists(tprint("%1/src/calc_tests.jai", mirror)));
+    expect(!file_exists(tprint("%1/jaix.config.jai", mirror)));
+    expect(file_exists(tprint("%1/src/calc.jai.map", mirror)));
+}
+
+// A jaix transpile failure fails the build: the child's diagnostics pass
+// through on stderr, the exit code is nonzero and no artifact exists.
+test "E2E: a jaix transpile failure propagates diagnostics and produces no artifact" {
+    root := tprint("%1/target/jaix-e2e-fail", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    prepend_jaix_to_path();
+    expect(build_seam_write(root, "package.jai",
+        "TARGETS :: Target.[\n    .{ name = \"jaix-fail\", main_file = \"src/main.jai\" },\n];\n\nPACKAGE :: Package.{\n    name    = \"jaix-fail\",\n    version = \"1\",\n    targets = TARGETS,\n    jaix    = .{ config = \"jaix.config.jai\" },\n};\n"));
+    expect(build_seam_write(root, "jaix.config.jai",
+        "#import \"jaix\";\nJaix_Plugin_Try_Catch :: #import \"Jaix_Plugin_Try_Catch\";\n\nget_config :: () -> Jaix_Config {\n    p := Jaix_Plugin_Try_Catch.get_plugin();\n    return .{ plugins = plugins_of(as_plugin(p)) };\n}\n"));
+    expect(build_seam_write(root, "src/main.jai", "main :: () {\n    try half(1) catch;\n}\n"));
+
+    juice := juice_exe();
+    result, output, errors, _ := run_command(juice, "build", working_directory = lexical_absolute_path(root), capture_and_return_output = true);
+    expect(expect_exit("jaix-fail", result, 1, "build child"));
+    // The jaix child's diagnostics pass through on stderr; juice's own
+    // failure line lands on stdout (the plain [juice ERROR] convention).
+    expect(output_matches("jaix-fail", errors, string.["Error: Semicolon expected after expression."]));
+    expect(output_matches("jaix-fail", errors, string.["src/main.jai"]));
+    expect(output_matches("jaix-fail", output, string.["[juice ERROR] jaix pre-step failed for src/main.jai"]));
+    expect(!file_exists(tprint("%1/target/jaix-fail.exe", root)));
+}
+
+// A declared exe that does not exist fails the pre-step with the clear
+// error before any spawn: no artifact, no mirror directory.
+test "E2E: a missing jaix executable fails the pre-step with a clear error" {
+    root := tprint("%1/target/jaix-e2e-noexe", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "package.jai",
+        "TARGETS :: Target.[\n    .{ name = \"jaix-noexe\", main_file = \"src/main.jai\" },\n];\n\nPACKAGE :: Package.{\n    name    = \"jaix-noexe\",\n    version = \"1\",\n    targets = TARGETS,\n    jaix    = .{ config = \"jaix.config.jai\", exe = \"no-such-jaix.exe\" },\n};\n"));
+    expect(build_seam_write(root, "src/main.jai", "main :: () {}\n"));
+
+    juice := juice_exe();
+    result, output, _, _ := run_command(juice, "build", working_directory = lexical_absolute_path(root), capture_and_return_output = true);
+    expect(expect_exit("jaix-noexe", result, 1, "build child"));
+    expect(output_matches("jaix-noexe", output, string.["[juice ERROR] jaix executable not found: "]));
+    expect(!file_exists(tprint("%1/target/jaix-noexe.exe", root)));
+    expect(!file_exists(tprint("%1/target/jaix", root)));
+}
+
+// The dual-path E2E (spec 055 decision 12): the manual two-step script and
+// the wired one-step build are the same build. The script's step 1 alone
+// produces the mirror; the wired build then re-runs the pre-step over it and
+// must yield the byte-identical mirror (the idempotency face). The full
+// script (step 1 + juice build + juice run) and the wired path both produce
+// the artifact and the same run output.
+test "E2E: the two-step script and the wired build are the same build (dual path)" {
+    fixture_root := tprint("%1/tests/data/jaix-demo", juice_root());
+    delete_directory_full(tprint("%1/target", fixture_root));
+    defer delete_directory_full(tprint("%1/target", fixture_root));
+    defer clean_jaix_driver_files(fixture_root);
+    prepend_jaix_to_path();
+    script := tprint("%1/two-step.bat", fixture_root);
+    mirror := tprint("%1/target/jaix", fixture_root);
+
+    // The manual step 1 alone: the mirror is the script's own product —
+    // untouched files byte-identical to the originals, the try file lowered,
+    // the sidecar map landed.
+    args: [..] string;
+    array_add(*args, "cmd");
+    array_add(*args, "/c");
+    array_add(*args, script);
+    array_add(*args, "transpile-only");
+    result, output, _ := run_command(..args, working_directory = fixture_root, capture_and_return_output = true);
+    expect(expect_exit("two-step transpile-only", result, 0, "build child"));
+    main_view, ok1 := read_entire_file(tprint("%1/src/main.jai", mirror));
+    expect(ok1);
+    main_original, ok2 := read_entire_file(tprint("%1/src/main.jai", fixture_root));
+    expect(ok2 && main_view == main_original);
+    calc_view, ok3 := read_entire_file(tprint("%1/src/calc.jai", mirror));
+    expect(ok3 && find_index_from_left(calc_view, "try_0_err, try_0_v := half(n);") >= 0);
+    expect(file_exists(tprint("%1/src/calc.jai.map", mirror)));
+    calc_map_step1, ok_map := read_entire_file(tprint("%1/src/calc.jai.map", mirror));
+    expect(ok_map);
+
+    // The wired build re-runs the pre-step over the script's mirror: the
+    // mirror after the wired pre-step equals the manual step 1's mirror,
+    // byte for byte (the idempotency face).
+    result, output, _ = run_juice_child("jaix-demo", "build");
+    expect(expect_exit("jaix-demo wired", result, 0, "build child"));
+    expect(child_output_contains("jaix-demo wired", output, "[juice] Running jaix pre-step (2 files) -> target/jaix/..."));
+    main_rewritten, ok4 := read_entire_file(tprint("%1/src/main.jai", mirror));
+    calc_rewritten, ok5 := read_entire_file(tprint("%1/src/calc.jai", mirror));
+    expect(ok4 && ok5 && main_rewritten == main_view && calc_rewritten == calc_view);
+    // The sidecar joins the idempotency face: decision 12's byte-identity
+    // claim covers the whole mirror, .map files included.
+    calc_map_rewritten, ok_map2 := read_entire_file(tprint("%1/src/calc.jai.map", mirror));
+    expect(ok_map2 && calc_map_rewritten == calc_map_step1);
+
+    // The wired path's artifact runs the lowered code (success and error
+    // paths).
+    artifact := tprint("%1/target/jaix-demo.exe", fixture_root);
+    expect(file_exists(artifact));
+    run_result, run_output, _, _ := run_command(artifact, capture_and_return_output = true);
+    expect(expect_exit("jaix-demo artifact", run_result, 0, "build child"));
+    expect(child_output_contains("jaix-demo artifact", run_output, "double(20): NONE 40"));
+    expect(child_output_contains("jaix-demo artifact", run_output, "double(-6): NEGATIVE 0"));
+
+    // The full script path: step 1 again, then juice build (the wired
+    // pre-step re-runs inside it) and juice run — the same artifact and the
+    // same run output as the wired path.
+    args2: [..] string;
+    array_add(*args2, "cmd");
+    array_add(*args2, "/c");
+    array_add(*args2, script);
+    result, output, _ = run_command(..args2, working_directory = fixture_root, capture_and_return_output = true);
+    expect(expect_exit("two-step script", result, 0, "build child"));
+    expect(child_output_contains("two-step script", output, "[juice] Running jaix pre-step (2 files) -> target/jaix/..."));
+    expect(child_output_contains("two-step script", output, "double(20): NONE 40"));
+    expect(child_output_contains("two-step script", output, "double(-6): NEGATIVE 0"));
+    expect(file_exists(artifact));
 }

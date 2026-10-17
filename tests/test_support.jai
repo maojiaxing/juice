@@ -987,3 +987,88 @@ run_negative_cases :: (update: bool) -> bool {
     }
     return all_ok;
 }
+
+// ===========================================================================
+// jaix pre-step test support: the sibling jaix-cli product path (juice_exe
+// same family), the PATH injection for the production "jaix" lookup, the
+// driver-file cleanup for the child scenarios and the recording seam fakes
+// ===========================================================================
+
+// Absolute path of the jaix CLI executable in the sibling jaix-cli
+// repository's target directory (juice_exe same family): the dev-layout
+// product the pre-step E2E scenarios resolve through the production PATH
+// lookup (the demo fixture's marker exe stays empty).
+jaix_exe :: () -> string {
+    return tprint("%1/../jaix-cli/target/jaix.exe", juice_root());
+}
+
+#if OS == .WINDOWS {
+    kernel32_env :: #system_library "kernel32";
+    SetEnvironmentVariableA :: (lpName: *u8, lpValue: *u8) -> s32 #foreign kernel32_env;
+}
+
+// Ensure the jaix CLI's directory sits at the front of the test program's
+// PATH so juice child processes resolve the pre-step's "jaix" through the
+// production PATH lookup — the injection mechanism is the process
+// environment, zero production deviation. Idempotent: repeated calls keep
+// one prefix entry. Windows-only; on other platforms the pre-step E2E
+// scenarios need a PATH-provided jaix.
+prepend_jaix_to_path :: () {
+    #if OS == .WINDOWS {
+        dir := path_strip_filename(jaix_exe());
+        while dir.count > 0 && (dir[dir.count - 1] == #char "/" || dir[dir.count - 1] == #char "\\") dir.count -= 1;
+        current := get_env("PATH");
+        prefix := tprint("%1;", dir);
+        if !starts_with(current, prefix) {
+            SetEnvironmentVariableA(temp_c_string("PATH"), temp_c_string(tprint("%1%2", prefix, current)));
+        }
+    }
+}
+
+// jaix's CLI driver files land in the child process's working directory
+// (hash-named, one per transpile call — 049 decision 12), so an in-place
+// child scenario leaves them at the fixture root. Deletes every root-level
+// .jai file that is not one of the fixture's two manifests (the fixture
+// keeps its sources in src/).
+clean_jaix_driver_files :: (fixture_root: string) {
+    scan, visited := dir_scan_entries(fixture_root);
+    if !visited return;
+    for name: scan.files {
+        if !ends_with(name, ".jai") continue;
+        if name == "package.jai" || name == "jaix.config.jai" continue;
+        file_delete(tprint("%1/%2", fixture_root, name));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The jaix pre-step seam's recording fakes (the jaix front seam tests and
+// the build wiring tests share them): the spawn fake records each per-file
+// call as one "exe|input|output|config" string and returns the canned exit
+// code and stderr; the prestep fake records the build orchestration's call.
+// ---------------------------------------------------------------------------
+
+test_jaix_spawn_calls: s64;
+test_jaix_spawned: [..] string;
+test_jaix_spawn_exit: s64 = 0;
+test_jaix_spawn_stderr: string = "";
+
+fake_jaix_spawn :: (exe: string, input: string, output: string, config: string) -> (exit_code: s64, stderr: string) {
+    test_jaix_spawn_calls += 1;
+    array_add(*test_jaix_spawned, tprint("%1|%2|%3|%4", exe, input, output, config));
+    return test_jaix_spawn_exit, test_jaix_spawn_stderr;
+}
+
+reset_jaix_spawn :: () {
+    test_jaix_spawn_calls = 0;
+    array_reset(*test_jaix_spawned);
+    test_jaix_spawn_exit = 0;
+    test_jaix_spawn_stderr = "";
+}
+
+test_jaix_prestep_calls: s64;
+test_jaix_prestep_success: bool = true;
+
+fake_jaix_prestep :: (prepared: *Prepared_Workspace, transpile: #type (exe: string, input: string, output: string, config: string) -> (exit_code: s64, stderr: string)) -> bool {
+    test_jaix_prestep_calls += 1;
+    return test_jaix_prestep_success;
+}
