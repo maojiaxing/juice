@@ -30,7 +30,7 @@ blocked-by: []
 
 1. **落点根治（058 偏差 ④）**：`src/metaprogram.jai` 新增纯函数 `bootstrap_compiler_metaprogram_options(root, entry, testing_view_dir, is_release) -> Compiler_Metaprogram_Options`——output_path 与 intermediate_path 以 `front_slashes(root) + "/target"` 派生为绝对路径（与 Build command 的 `plan.target_dir` 绝对先例同构），根治子进程 jai `#run` 期工作目录切到 metaprogram 所在目录（target/）导致的相对路径再解析一层（target/target/）。`front_slashes` 保证分隔符形状不依赖调用方风格（测试面以反斜杠 root 锁住）。其余字段与既有组装逐值同构（workspace_name "Juice Build"、executable_name "juice"、import_dirs = root/src, root/modules, root、build_file = entry、testing_view_dir 与 very_optimized 透传）。
 2. **bootstrap 改为组装调用点**：`build.jai` 第 5 步的 options 逐字段组装替换为 `meta := bootstrap_compiler_metaprogram_options(root, entry, testing_view_dir, is_release);`——`make_directory`、meta_path、spawn 与成功消息文本（"Binary -> target/juice.exe"）全部不变（修复后消息名副其实）；头部注释与第 5 步注释同步。src/metaprogram.jai 仍为 bootstrap `#load` 目标、test-free。
-3. **可测缝单测（tests/metaprogram_tests.jai 新 3 块）**：临时 root 下断言 output_path/intermediate_path 为 root 派生的绝对 target/ 形状（纯函数零文件系统访问，root 为路径字符串）；反斜杠 root 归一为前斜杠；release 标志与 testing_view_dir 透传、哨兵默认 "" 保持。测试计数 210 → 213。
+3. **可测缝单测（tests/metaprogram_tests.jai 新 3 块）**：临时 root 下断言 output_path/intermediate_path 为 root 派生的绝对 target/ 形状（纯函数零文件系统访问，root 为路径字符串）；反斜杠 root 归一为前斜杠；release 标志与 testing_view_dir 透传、哨兵默认 "" 保持。测试计数 210 → 213（Found 计数口径——含 10 个 Testing 模块自测块；与 0057 的 suite 汇总 passed 数口径在链上并存）。
 4. **文档保真**：CONTEXT.md Metaprogram generator 词条补组装纯函数一句；IMPLEMENTATION.md 开发环段落的 intermediate_path 描述由「target/」改为「target directory（bootstrap 为 root 派生绝对路径，票 0055）」。
 
 ### 验证结果

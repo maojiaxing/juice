@@ -88,7 +88,7 @@ _Avoid_: 把 pre-step 与 juice 自身 Transpile 混称（一个是外部工具�
 前置转译的产物目录 `target/jaix/`（ADR 0003 统一 target 目录惯例）：jaix 转译视图以包相对结构镜像其内，sidecar `<file>.map` 随落（v1 不消费）。未触碰文件视图 = 原文逐字节（往返恒等）；in-package #load 链在镜像内自然解析（零路径改写）。编译输入面：build 入口 = 镜像内入口视图；test 的镜像文件（test-free）EXPAND 于镜像视图（二级视图）。随 target directory 清理、每构建全覆写（v1 无缓存）。
 
 **Scan walk（扫描走查）**:
-共享的整包扫描骨架（src/scan_walk.jai，spec 054 决定 7 / 票 0057——0050 收敛方向）：walk 编排（visit_files 递归、目录/文件排除回调——proc 参数形态，pre-step seam 同款先例）、确定性 DFS 枚举（逐目录文件先、字典序）、包相对路径助手、扫描失败错误通道、共享记录 `Scan_File {rel_path, abs_path}`。两个消费者收敛为薄包装——test 发现（`collect_test_files`）与 jaix 前置扫描（`collect_jaix_files`）各自只持有排除集谓词与错误文案（"test sources" vs "jaix sources"）；jaix driver 垃圾判定谓词（`is_jaix_driver_litter`——文件头 1024 字节窗口内列 0 行 `// jaix transpile driver` 前缀匹配；内容标记而非名字标记、无条件适用）在模块内实现一次、两消费者的文件排除谓词引用之。经 main.jai 装载（非 bootstrap 闭包）→ 测试可内联。
+共享的整包扫描骨架（src/scan_walk.jai，spec 054 决定 7 / 票 0057——0050 收敛方向）：walk 编排（visit_files 递归、目录/文件排除回调——proc 参数形态，pre-step seam 同款先例）、确定性 DFS 枚举（逐目录文件先、字典序）、包相对路径助手、扫描失败错误通道、共享记录 `Scan_File {rel_path, abs_path}`。两个消费者收敛为薄包装——test 发现（`collect_test_files`）与 jaix 前置扫描（`collect_jaix_files`）各自只持有排除集谓词与错误文案（"test sources" vs "jaix sources"）；jaix driver 垃圾判定谓词（`is_jaix_driver_litter`——文件头 1024 字节窗口内列 0 行 `// jaix transpile driver` 前缀匹配；内容标记而非名字标记、无条件适用）在模块内实现一次、两消费者的文件排除谓词引用之。经 main.jai 装载（非 bootstrap #load 目标——不在 build.jai metaprogram 的 #load 树上；#load 目标性而非闭包性）→ 测试可内联。
 _Avoid_: 每条新排除规则写两份（票 0057 已消除的复制）。
 
 **Strip front（剥离前端）**:
@@ -112,7 +112,7 @@ Package declaration 中省略的可选值或显式提供的空值；两者具有
 _Avoid_: 测试函数、容器式测试。
 
 **Test discovery**:
-为 Test 确定测试源的过程：从 package root 全量递归扫描小写扩展名的 `.jai` 文件，不跟随符号链接；排除点开头条目、package root 的 target directory、tests/data/（fixture 目录）与 modules/（模块目录）以及各 package 的 manifest。Test discovery 消费 workspace discovery 快照（member 边界）但不并入 workspace discovery。root 扫描不进 member 子树，member 以自身为 root 测试；依赖中的 test block 不发现、不执行。遍历顺序确定（字典序），测试枚举、调用与报告顺序由它派生。走查骨架驻共享扫描模块（Scan walk——见该词条）。
+为 Test 确定测试源的过程：从 package root 全量递归扫描小写扩展名的 `.jai` 文件，不跟随符号链接；排除点开头条目、package root 的 target directory、tests/data/（fixture 目录）与 modules/（模块目录）以及各 package 的 manifest + jaix driver 垃圾（内容标记判定——见 Scan walk 词条）。Test discovery 消费 workspace discovery 快照（member 边界）但不并入 workspace discovery。root 扫描不进 member 子树，member 以自身为 root 测试；依赖中的 test block 不发现、不执行。遍历顺序确定（字典序），测试枚举、调用与报告顺序由它派生。走查骨架驻共享扫描模块（Scan walk——见该词条）。
 
 **Testing**:
 Juice 的一级断言模块，测试程序中的用户代码以 `#import "Testing"` 引用。提供最小断言集 expect、expect_eq、fail：断言失败即登记并中止当前测试，套件继续；失败即时逐条输出，结束时汇总计数，失败数非零使测试构建失败。失败报告以 `路径:行,列` 语法指向原文件坐标。Testing 仅依赖 Basic，对执行模型中立。

@@ -794,9 +794,11 @@ test "E2E: the two-step script and the wired build are the same build (dual path
 // stays on disk — the real jaix subprocess product, dot-prefixed
 // (.jaix-<hash>.jai) and content-marked — and the second build succeeds
 // unchanged, producing the same artifact behavior and the byte-identical
-// mirror (the idempotency face held through the litter). Red before
-// 0056/0058: the second build's whole-package scan parsed the legacy
-// hash-named litter as source and failed (060 deviation 3).
+// mirror (round-trip against the originals, plus the direct seam-3
+// assertion: the second pre-step's mirror views — the calc lowered view
+// and the .map sidecar included — byte-for-byte equal to the first
+// pre-step's). Red before 0056/0058: the second build's whole-package scan
+// parsed the legacy hash-named litter as source and failed (060 deviation 3).
 test "E2E: two consecutive wired builds are the same build despite driver litter" {
     fixture_root := tprint("%1/tests/data/jaix-demo", juice_root());
     delete_directory_full(tprint("%1/target", fixture_root));
@@ -835,6 +837,17 @@ test "E2E: two consecutive wired builds are the same build despite driver litter
     expect(child_output_contains("jaix-demo artifact first", first_run_output, "double(20): NONE 40"));
     expect(child_output_contains("jaix-demo artifact first", first_run_output, "double(-6): NEGATIVE 0"));
 
+    // The first build's mirror views are the determinism baseline: seam 3
+    // wants the second pre-step's mirror byte-identical to the first
+    // pre-step's — read now and compared directly against the second
+    // build's reads below (not only via the round-trip proxy against the
+    // originals).
+    mirror := tprint("%1/target/jaix", fixture_root);
+    main_view_first, ok_main_first := read_entire_file(tprint("%1/src/main.jai", mirror));
+    calc_view_first, ok_calc_first := read_entire_file(tprint("%1/src/calc.jai", mirror));
+    calc_map_first, ok_map_first := read_entire_file(tprint("%1/src/calc.jai.map", mirror));
+    expect(ok_main_first && ok_calc_first && ok_map_first);
+
     // The second wired build over the litter: the scans exclude the
     // driver files (dot-prefix entries at any depth plus the content
     // marker), the pre-step still scans exactly the two sources and the
@@ -844,19 +857,31 @@ test "E2E: two consecutive wired builds are the same build despite driver litter
     expect(child_output_contains("jaix-demo second", output, "[juice] Running jaix pre-step (2 files) -> target/jaix/..."));
 
     // The idempotency faces the double build holds: the artifact behaves
-    // byte-identically at run time and the mirror is byte-identical to
-    // the originals after the second pre-step. (The exe itself is not
-    // bit-reproducible — jai debug builds embed per-build data in the PE
-    // timestamp and the debug info, so two identical compiles differ
-    // byte-wise; 0059 deviation 1. The run output and the mirror are the
-    // deterministic faces.)
+    // byte-identically at run time and the second pre-step's mirror is
+    // byte-identical to the first pre-step's — asserted directly below,
+    // and the mirror is byte-identical to the originals after the second
+    // pre-step. (The exe itself is not bit-reproducible — jai debug builds
+    // embed per-build data in the PE timestamp and the debug info, so two
+    // identical compiles differ byte-wise; 0059 deviation 1. The run
+    // output and the mirror are the deterministic faces.)
     second_run, second_run_output, _, _ := run_command(artifact, capture_and_return_output = true);
     expect(expect_exit("jaix-demo artifact second", second_run, 0, "build child"));
     expect(second_run_output == first_run_output);
-    mirror := tprint("%1/target/jaix", fixture_root);
-    main_view, ok2 := read_entire_file(tprint("%1/src/main.jai", mirror));
+    // The second build's mirror reads, compared byte for byte against the
+    // first build's (the direct seam-3 assertion). The main view equals
+    // the original both times, so its direct comparison is equivalent to
+    // the round-trip check below; the calc lowered view and the .map
+    // sidecar are not compared against originals elsewhere, so their
+    // direct comparison is the real gain — it locks the two pre-steps'
+    // product determinism.
+    main_view_second, ok_main_second := read_entire_file(tprint("%1/src/main.jai", mirror));
+    calc_view_second, ok_calc_second := read_entire_file(tprint("%1/src/calc.jai", mirror));
+    calc_map_second, ok_map_second := read_entire_file(tprint("%1/src/calc.jai.map", mirror));
+    expect(ok_main_second && ok_calc_second && ok_map_second);
+    expect(main_view_second == main_view_first);
+    expect(calc_view_second == calc_view_first);
+    expect(calc_map_second == calc_map_first);
     main_original, ok3 := read_entire_file(tprint("%1/src/main.jai", fixture_root));
-    expect(ok2 && ok3 && main_view == main_original);
-    calc_view, ok4 := read_entire_file(tprint("%1/src/calc.jai", mirror));
-    expect(ok4 && find_index_from_left(calc_view, "try_0_err, try_0_v := half(n);") >= 0);
+    expect(ok3 && main_view_second == main_original);
+    expect(find_index_from_left(calc_view_second, "try_0_err, try_0_v := half(n);") >= 0);
 }
