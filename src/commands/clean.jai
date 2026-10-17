@@ -70,9 +70,9 @@ clean_discovered_workspace :: (
 }
 
 // ---------------------------------------------------------------------------
-// 内联测试（票 0034 自旧 tests/ 迁移）：Clean 的范围校验与
-// 先验证后删除的编排。共享 helper（test_clean_* 记录全局与
-// reset_clean_test）见 tests/test_support.jai。
+// Inline tests: Clean's scope validation and
+// validate-before-delete orchestration. Shared helpers (the test_clean_*
+// record globals and reset_clean_test) live in tests/test_support.jai.
 // ---------------------------------------------------------------------------
 
 test "Clean validates workspace scope before deletion" {

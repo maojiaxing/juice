@@ -24,7 +24,8 @@ workspace_path_already_seen :: (paths: [] string, candidate: string) -> bool {
 
 // Discovery loads only manifests and validates member roots. It deliberately
 // does not fetch dependencies; preparation is a separate command prerequisite.
-// 票 0038：Build_Driver 拆解后，discovery 只收自己持有的两个路径。
+// After the Build_Driver teardown, discovery takes only the two paths it
+// owns.
 discover_workspace :: (root_dir: string, cache_dir: string) -> Workspace_Discovery, bool {
     discovery: Workspace_Discovery;
     root_spelling_entry := inspect_path_entry(root_dir);
@@ -136,9 +137,10 @@ ensure_workspace_discovered :: (
 
 // Publish a prepared result only after every required step succeeds. A failed
 // attempt leaves discovery reusable and exposes no partial prepared workspace.
-// force_dependencies（票 0049 缺陷修正）: Test 即使无 effective target（LIB）
-// 也要准备 dependencies——测试程序经 import shim 引用依赖需要；Build/Clean
-// 语义不变（0 plans 仍不准备）。
+// force_dependencies: Test must prepare dependencies even with no effective
+// target (LIB) — its test program references dependencies through import
+// shims; Build/Clean semantics are unchanged (0 plans still skip
+// preparation).
 prepare_workspace :: (
     root_dir: string,
     cache_dir: string,
@@ -179,15 +181,15 @@ get_prepared_workspace :: (state: *Workspace_State) -> *Prepared_Workspace {
     return *state.prepared;
 }
 
-// Command-side preparation entry (票 0040): one idempotent call chains the
+// Command-side preparation entry: one idempotent call chains the
 // two phases — discovery then preparation — and hands back the prepared
 // workspace (null = failure, already reported by the phase that failed).
 // The phase machine makes repeats free: an already prepared state is
 // returned untouched, so run's handler can call this after build's
 // prerequisite run has prepared the state. The two phases stay injectable
 // as internal seams for this module's own tests, mirroring
-// prepare_workspace's production defaults. The command-specific guard
-// (票 0037) is absorbed: the failure message now names the concrete
+// prepare_workspace's production defaults. The command-specific guard is
+// absorbed: the failure message now names the concrete
 // discovery/preparation error instead of a generic requirement.
 ensure_workspace_prepared :: (
     root_dir: string,
@@ -205,9 +207,10 @@ ensure_workspace_prepared :: (
 }
 
 // ---------------------------------------------------------------------------
-// 内联测试（票 0034 自旧 tests/ 迁移）：workspace 状态机、
-// 依赖快照消费与 import shim。共享 helper（discovery/resolution/dependency
-// 记录 fake 与记录全局、shim_content_for）见 tests/test_support.jai。
+// Inline tests: the workspace state machine,
+// dependency snapshot consumption and import shims. Shared helpers (the
+// discovery/resolution/dependency recording fakes and record globals,
+// shim_content_for) live in tests/test_support.jai.
 // ---------------------------------------------------------------------------
 
 test "Discovery publishes workspace state once" {
@@ -267,9 +270,10 @@ test "Preparation with targets prepares dependencies" {
     expect(prepared != null && prepared.dependencies_prepared);
 }
 
-// 票 0049 缺陷修正：force_dependencies 让 0-plans（LIB）包也准备
-// dependencies——Test 的测试程序经 import shim 引用依赖需要；默认（false）
-// 语义不变（上方「Preparation without targets skips dependencies」钉住）。
+// force_dependencies makes a 0-plans (LIB) package prepare dependencies too
+// — Test's test program references dependencies through import shims; the
+// default (false) semantics are unchanged (pinned by "Preparation without
+// targets skips dependencies" above).
 test "Preparation without targets forces dependencies on request" {
     reset_preparation_test();
     test_fake_discovery_ok = true;
@@ -327,10 +331,11 @@ test "Preparation requires discovery" {
     expect(state.phase == .EMPTY && test_dependency_attempts == 0);
 }
 
-// Command-side preparation entry（票 0040）：一次幂等调用链两步并直接交出
-// prepared 结果，null = 失败已打印。守卫（票 0037）职责被本入口吸收——
-// 失败时打印的是具体错误（如「No package.jai found」），而非笼统的
-// 「requires workspace preparation」。
+// The command-side preparation entry: one idempotent call chains the two
+// phases and hands back the prepared result directly, null = failure already
+// printed. The guard duty is absorbed by this entry — failures print the
+// concrete error (e.g. "No package.jai found"), not a generic "requires
+// workspace preparation".
 test "Prepared workspace ensure fails on an empty state" {
     reset_preparation_test();
     test_fake_discovery_ok = true;
@@ -369,7 +374,7 @@ test "Prepared workspace ensure is idempotent" {
     expect(second == first && test_discovery_attempts == 1);
 }
 
-// test_fake_fetch/test_fake_link_member 与记录全局见 tests/test_support.jai。
+// test_fake_fetch/test_fake_link_member and the record globals live in tests/test_support.jai.
 
 test "Workspace member dependencies are linked not fetched" {
     array_reset(*test_fetched_dependency_names);
@@ -412,7 +417,7 @@ test "Dependency fetch failure propagates" {
 // Consumers resolve "#import <name>" through a generated shim in the
 // dependency directory; the shim loads the dependency's real entry by path,
 // so any source directory name and any of the three layouts work
-// （shim_content_for 见 tests/test_support.jai）。
+// (shim_content_for lives in tests/test_support.jai).
 
 test "Import shim generated for a src/module.jai entry" {
     packages_dir := tprint("%1/tests/data/shim-fixture/packages-src", juice_root());
@@ -458,13 +463,16 @@ test "Import shim skipped without any layout" {
 }
 
 // ---------------------------------------------------------------------------
-// 校验矩阵（票 0043）：member 路径有效性门槛在进程内可测——空、绝对
-// （含卷标）与 ".." 逃逸组件拒绝，"." 组件与普通相对路径放行
-// （"." 放行使 workspace-bad-duplicate 的 "member_lib/." 拼写能走到
-// duplicate 分支）。discovery 的其余失败分支经真实 juice.exe 的 E2E
-// 消息断言（见 tests/test_monorepo.jai，2026-10-14 用户修订迁移）——
-// load_package_manifest 的模块目录从运行中可执行文件推导，测试程序内
-// 指向 jai 编译器，直测无法加载真实 manifest。
+// Validation matrix: the member path validity gate is testable in-process —
+// empty, absolute (including volume designators) and ".."-escaping
+// components are rejected, "." components and plain relative paths pass
+// (passing "." lets workspace-bad-duplicate's "member_lib/." spelling reach
+// the duplicate branch). Discovery's other failure branches are covered by
+// E2E message assertions through the real juice.exe (see
+// tests/test_monorepo.jai; moved there by user revision on 2026-10-14) —
+// load_package_manifest's module directory derives from the running
+// executable, which points at the jai compiler inside the test program, so a
+// direct test cannot load a real manifest.
 // ---------------------------------------------------------------------------
 
 test "Workspace member path validity gate" {

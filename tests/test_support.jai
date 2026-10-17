@@ -1,25 +1,35 @@
 // ---------------------------------------------------------------------------
-// Test support（测试支撑代码，组织决议 0027、规格 0032；2026-10 用户修订：
-// 纯测试支撑代码不驻 src/，由 src/test_support.jai 移至 tests/test_support.jai）
-// ——测试程序共享声明的唯一允许位置。收录旧 tests/ 测试文件顶层迁移而来的
-// 全部共享声明——helper、recording fake 与记录全局、GOLDEN_CASES 等测试
-// 常量，供 src 内联 test block（票 0034）与 Testing 自测共同引用（Test
-// discovery 全包扫描收录本文件进测试程序，声明程序级共享）。
+// Test support: the one allowed home for test-program shared declarations.
+// Pure test support code lives here in tests/, not src/ (moved from
+// src/test_support.jai by user revision, 2026-10). It collects every shared
+// declaration migrated from the old tests/ test files' top level — helpers,
+// recording fakes and record globals, GOLDEN_CASES and the other test
+// constants — referenced by both the src inline test blocks and the Testing
+// self-tests (Test discovery's full-package scan includes this file in the
+// test program, so its declarations are program-level shared).
 //
-// 纪律：测试共享声明只允许位于本文件；其他文件（尤其 src/）顶层不放测试
-// 专用声明（src 文件的顶层声明经 STRIP 会保留进发布产物）；modules/
-// Testing.jai 顶层不驻测试 helper。
+// Discipline: test shared declarations are allowed only in this file; other
+// files (src/ especially) keep no test-only declarations at top level
+// (top-level declarations in src files would survive STRIP into the release
+// product); modules/Testing.jai keeps no test helpers at top level.
 //
-// 本文件不被 src/main.jai #load → 不在 Build 入口闭包 → 不转译、不编译、
-// 不进发布产物。测试程序路径下本文件 test-free，EXPAND 视图恒等输出。
-// 扫描排除集（root 级 target/、tests/data/、modules/）不含 tests/ 本身，
-// 本文件被全包扫描正常收录。
+// This file is not #loaded by src/main.jai -> outside the Build entry
+// closure -> never transpiled, never compiled, never in the release product.
+// On the test program path this file is test-free, so its EXPAND view is
+// identical output. The scan exclusion set (root-level target/, tests/data/,
+// modules/) does not include tests/ itself, so the full-package scan
+// includes this file normally.
 //
-// 本文件含 Testing 模块自测支撑段，以机器标记注释行框定（标记名见下段
-// 首尾，开头带 `//` 前缀；注意：本处与任何其他注释不得含该标记行的完整
-// 文本——生成器按子串定位标记，误命中会切错段）。src/commands/test.jai 的
-// testing_module_support_block 按标记整段切取进模块编译视图。标记是切段的
-// 稳定锚点：改段内注释不再破坏切段；移动段内声明时同步移动标记。
+// This file contains the Testing module self-test support segment, framed by
+// machine marker comment lines (the marker names appear at the segment's
+// start and end below, each prefixed with `//`; note: this spot and every
+// other comment must not contain the full text of a marker line — the
+// generator locates markers by substring, and a false hit would cut the
+// wrong segment). src/commands/test.jai's testing_module_support_block cuts
+// the whole segment into the module compile view by these markers. The
+// markers are the cut's stable anchors: renaming comments inside the segment
+// never breaks the cut; move the markers along when moving declarations
+// inside the segment.
 // ---------------------------------------------------------------------------
 
 #import "Basic";
@@ -31,39 +41,49 @@
 #import "Juice";
 
 // ===========================================================================
-// Testing 模块自测支撑段（票 0033）：模块编译视图以本段 + 生成器前置的
-// #scope_file 与文件级 import 构成。模块是密封作用域（how_to 151），自测块
-// 引用的声明必须驻模块自身作用域；本段内的全部声明（记录全局、child 场景
-// helper、自足 juice_root）必须位于两个机器标记之间，缺标记或声明移出段外
-// 会使模块自测编译失败。child 场景 helper 亦供本文件之外的测试块共用
-// （test support 程序级共享）。
+// The Testing module self-test support segment: the module compile view is
+// this segment plus the generator's leading #scope_file and file-level
+// imports. The module is a sealed scope (how_to 151), so declarations the
+// self-test blocks reference must live in the module's own scope; every
+// declaration in this segment (record globals, child scenario helpers,
+// self-contained juice_root) must sit between the two machine markers — a
+// missing marker or a declaration moved outside the segment breaks the
+// module self-test compile. The child scenario helpers are also shared by
+// test blocks outside this file (test support program-level sharing).
 // ===========================================================================
 
 // __testing_module_support_begin__
 
 // ---------------------------------------------------------------------------
-// 路径基准（0027 决议）：所有 fixture 与 scratch 路径共同派生的包根。基准
-// 是 juice 的调用 cwd——juice 于 package root 运行，workspace discovery 由
-// 进程 cwd 推导 root，生成的测试 metaprogram 将其带进构建选项：
-// intermediate_path = <root>/target。旧实现基于测试文件位置（测试程序入口
-// target/transpile 向上两级）推导仓库根，随迁移弃用：它绑定生成文件的
-// 布局，与共享声明的组织无关。
+// Path base: the package root every fixture and scratch path derives from.
+// The base is juice's invocation cwd — juice runs at the package root,
+// workspace discovery derives the root from the process cwd, and the
+// generated test metaprogram carries it into the build options:
+// intermediate_path = <root>/target. The old implementation derived the
+// repository root from the test file's location (the test program entry
+// target/transpile, two levels up); it was dropped with the migration: it
+// bound itself to the generated files' layout, unrelated to the shared
+// declarations' organization.
 //
-// 自足形态（票 0033）：本段被整体切取进 Testing 模块编译视图——模块是密封
-// 作用域，看不到 src/path_safety 的 lexical_absolute_path 声明，故此处不
-// 调用它。测试 metaprogram 以绝对 target 目录设置 intermediate_path
-// （"/" 分隔），剥掉尾部分隔符即为包根，无需路径归一。
+// Self-contained shape: this segment is cut wholesale into the Testing
+// module compile view — the module is a sealed scope and cannot see
+// src/path_safety's lexical_absolute_path declaration, so it is not called
+// here. The test metaprogram sets intermediate_path to the absolute target
+// directory ("/" separated); stripping the trailing separator yields the
+// package root, no path normalization needed.
 // ---------------------------------------------------------------------------
 juice_root :: () -> string {
     options := get_build_options();
-    // path_strip_filename 保留尾部分隔符（String 模块语义）；剥掉后为绝对
-    // 路径，与 src/commands/test.jai 的 scan_entry_parent 同姿势。
+    // path_strip_filename keeps the trailing separator (String module
+    // semantics); stripped, the result is an absolute path — same posture as
+    // src/commands/test.jai's scan_entry_parent.
     root := path_strip_filename(options.intermediate_path);
     while root.count > 0 && (root[root.count - 1] == #char "/" || root[root.count - 1] == #char "\\") root.count -= 1;
     return root;
 }
 
-// Testing 模块自测的记录全局（旧 tests/ 测试文件顶层声明迁移，票 0032）。
+// The Testing module self-tests' record globals (migrated from the old
+// tests/ test files' top-level declarations).
 g_reached := false;
 g_first_reached := false;
 g_second_reached := false;
@@ -81,16 +101,19 @@ testing_module_failures: s64 = 0;
 // package root comes from juice_root(): the test program executes at compile
 // time in the jai compiler child of juice, where the process working
 // directory is the entry file's directory (target/transpile), not the
-// invocation cwd. 历史上按来源前缀存在四份同体拷贝（juice_exe/
-// test_command_juice_exe/testing_juice_exe/tp_juice_exe），已合并为本一份。
+// invocation cwd. Historically four identical per-source-prefix copies
+// existed (juice_exe/test_command_juice_exe/testing_juice_exe/
+// tp_juice_exe); merged into this one.
 juice_exe :: () -> string {
     return tprint("%1/target/juice.exe", juice_root());
 }
 
-// Child 场景：真实 juice.exe 在 fixture package 上跑 `juice test`。
-// fixture_base 区分 fixture 树（commands 场景 tests/data/、转译 run matrix
-// tests/data/transpile/run/、Testing 自测 tests/data/testing-child/）。
-// 历史上 tp_run_juice_test 与本实现同体（仅 fixture 基目录不同），已合并。
+// Child scenarios: the real juice.exe running `juice test` on a fixture
+// package. fixture_base distinguishes the fixture trees (tests/data/ for the
+// command scenarios, tests/data/transpile/run/ for the transpile run matrix,
+// tests/data/testing-child/ for the Testing self-tests). Historically
+// tp_run_juice_test was identical to this implementation (only the fixture
+// base dir differed); merged.
 run_juice_test :: (fixture: string, pattern := "", fixture_base := "tests/data/") -> Process_Result, string, string {
     juice := juice_exe();
     fixture_abs := tprint("%1/%2%3", juice_root(), fixture_base, fixture);
@@ -107,9 +130,11 @@ testing_child_run :: (scenario: string) -> Process_Result, string, string {
     return result, output, errors;
 }
 
-// 退出码检查（child 场景共用）：历史上按来源前缀存在四份同体拷贝
-// （expect_child_exit/expect_exit/testing_expect_exit/tp_expect_exit），
-// 差异仅在失败诊断前缀；合并为一份后以前缀参数保留各自的诊断文本。
+// Exit code check (shared by the child scenarios): historically four
+// identical per-source-prefix copies existed
+// (expect_child_exit/expect_exit/testing_expect_exit/tp_expect_exit),
+// differing only in the failure diagnostic prefix; merged into one with the
+// prefix kept as a parameter for each diagnostic text.
 expect_exit :: (name: string, result: Process_Result, want: s32, tag := "child") -> bool {
     if result.type == .EXITED && result.exit_code == want return true;
     print("[%1 %2] exit result %3/%4, want %5\n", tag, name, result.type, result.exit_code, want);
@@ -117,9 +142,9 @@ expect_exit :: (name: string, result: Process_Result, want: s32, tag := "child")
 }
 
 // Normalize CRLF to LF so expected blocks are compared line by line
-// regardless of the child process's native line endings. 历史上按来源前缀
-// 存在三份逐字拷贝（normalize_crlf/testing_normalize_crlf/
-// tp_normalize_crlf），已合并为本一份。
+// regardless of the child process's native line endings. Historically three
+// verbatim copies existed (normalize_crlf/testing_normalize_crlf/
+// tp_normalize_crlf); merged into this one.
 normalize_crlf :: (s: string) -> string {
     has_cr := false;
     for ch: s {
@@ -145,9 +170,11 @@ normalize_crlf :: (s: string) -> string {
     return builder_to_string(*builder);
 }
 
-// 输出断言（child 场景共用）：逐 needle 检查出现/不出现（want）。历史上按
-// 来源前缀存在三份同体拷贝（output_matches/testing_output_matches/
-// tp_output_matches），差异仅在失败诊断前缀；合并后以前缀参数保留。
+// Output assertion (shared by the child scenarios): checks each needle's
+// presence/absence (want). Historically three identical per-source-prefix
+// copies existed (output_matches/testing_output_matches/
+// tp_output_matches), differing only in the failure diagnostic prefix;
+// merged into one with the prefix kept as a parameter.
 output_matches :: (name: string, output: string, needles: [] string, want := true, tag := "child") -> bool {
     normalized := normalize_crlf(output);
     for needle: needles {
@@ -163,8 +190,8 @@ output_matches :: (name: string, output: string, needles: [] string, want := tru
 
 // 1-based line/column of the first occurrence of `needle` in `file`; 0,0 if
 // the source cannot be read or the needle is missing. Used to build expected
-// failure lines without hardcoding line numbers. 历史上 testing_line_col 与
-// 本实现逐字相同，已合并。
+// failure lines without hardcoding line numbers. Historically
+// testing_line_col was verbatim identical to this implementation; merged.
 fixture_line_col :: (file: string, needle: string) -> (line: s64, col: s64) {
     source, ok := read_entire_file(file);
     if !ok return 0, 0;
@@ -184,8 +211,9 @@ fixture_line_col :: (file: string, needle: string) -> (line: s64, col: s64) {
 // __testing_module_support_end__
 
 // ===========================================================================
-// 旧 tests/ 测试文件顶层声明迁移（票 0032）——run/clean/compile 记录 fake、
-// build transpile seam 与 E2E child 场景 helper
+// Declarations migrated from the old tests/ test files' top level — the
+// run/clean/compile recording fakes, the build transpile seam and the E2E
+// child scenario helpers
 // ===========================================================================
 
 test_launch_count: s64;
@@ -243,10 +271,11 @@ test_compile_artifact :: (root_dir: string, plan: Artifact_Plan, entry: string) 
 
 // Fake transpile step: records every call and returns a canned view with a
 // flat (collision-free by construction) key. The orchestration feeds the key
-// through the pure path function; the fake only fills in content. build 与
-// test 两个 seam 的 fake 共用同一键函数（历史上 build_fake_key/fake_key
-// 两份同体，仅前缀不同，已合并）——fake 键只在 seam 内部流通，测试块以
-// 同一函数重建期望路径。
+// through the pure path function; the fake only fills in content. The build
+// and test seams' fakes share one key function (historically
+// build_fake_key/fake_key were two identical copies differing only in
+// prefix; merged) — the fake keys only circulate inside the seams, and the
+// test blocks rebuild expected paths with the same function.
 fake_key :: (rel: string) -> string {
     result := copy_string(rel);
     for i: 0..result.count-1 {
@@ -343,7 +372,8 @@ child_output_contains :: (name: string, output: string, needle: string) -> bool 
 }
 
 // ===========================================================================
-// 旧 tests/ 测试文件顶层声明迁移（票 0032）——记录 handler 与测试 registry
+// Declarations migrated from the old tests/ test files' top level — the
+// recording handlers and the test registries
 // ===========================================================================
 
 test_a_calls: s64 = 0;
@@ -426,8 +456,8 @@ TEST_REGISTRY_ARGUMENTS :: Command.[
 ];
 
 // ===========================================================================
-// 旧 tests/ 测试文件顶层声明迁移（票 0032）——discovery/resolution/dependency
-// 记录 fake 与 import shim helper
+// Declarations migrated from the old tests/ test files' top level — the
+// discovery/resolution/dependency recording fakes and the import shim helper
 // ===========================================================================
 
 test_discovery_attempts: s64 = 0;
@@ -493,7 +523,8 @@ shim_content_for :: (packages_dir: string, name: string) -> string, bool {
 }
 
 // ===========================================================================
-// 旧 tests/ 测试文件顶层声明迁移（票 0032）——LIB fixture package 构造
+// Declarations migrated from the old tests/ test files' top level — the LIB
+// fixture package construction
 // ===========================================================================
 
 // A LIB package is an import source: it declares no executable targets and
@@ -508,8 +539,8 @@ library_fixture_package :: () -> Package {
 }
 
 // ===========================================================================
-// 旧 tests/ 测试文件顶层声明迁移（票 0032）——test 编排 seam 的记录 fake、
-// 缓存树扫描 helper
+// Declarations migrated from the old tests/ test files' top level — the test
+// orchestration seam's recording fakes and the cache-tree scan helpers
 // ===========================================================================
 
 test_transpiled_files: [..] Test_Source_File;
@@ -607,9 +638,10 @@ make_test_link :: (link: string, target: string, directory: bool, junction: bool
     return result.exit_code == 0;
 }
 
-// 目录扫描（转译树与 golden case 目录共用）：直接子项按文件/目录收集。
-// 历史上 Cache_Dir_Scan/Case_Dir_Scan 两对同形结构与 visitor 各自一份，
-// 已合并。
+// Directory scan (shared by the transpile tree and the golden case
+// directories): collects direct children as files/directories. Historically
+// the Cache_Dir_Scan/Case_Dir_Scan structure pairs and their visitors
+// existed as separate identical copies; merged.
 Dir_Scan :: struct {
     dirs:  [..] string;
     files: [..] string;
@@ -629,9 +661,11 @@ dir_scan_entries :: (dir: string) -> (Dir_Scan, bool) {
     return scan, visited;
 }
 
-// 字节序字典比较（strcmp 语义）与插入排序。历史上 sort_strings（基于
-// String.compare）与 tp_sort_strings/tp_string_less（转译测试）两份同语义
-// 实现并存，已合并为显式字节序比较的一份。
+// Bytewise lexicographic comparison (strcmp semantics) and insertion sort.
+// Historically sort_strings (based on String.compare) and
+// tp_sort_strings/tp_string_less (transpile tests) coexisted as two
+// same-semantics implementations; merged into this one explicit bytewise
+// comparison.
 string_less :: (a: string, b: string) -> bool {
     n := min(a.count, b.count);
     for i: 0..n-1 {
@@ -654,8 +688,8 @@ sort_strings :: (items: [] string) {
 }
 
 // ===========================================================================
-// 旧 tests/ 测试文件顶层声明迁移（票 0032）——golden/negative harness 与
-// compile-and-run matrix helper
+// Declarations migrated from the old tests/ test files' top level — the
+// golden/negative harness and the compile-and-run matrix helpers
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
@@ -774,8 +808,8 @@ read_case_config :: (dir: string) -> Case_Config {
     return config;
 }
 
-// A case directory's input files in production scan order (issue 0003,
-// ticket 0019): within each directory, files first (lexicographic by name),
+// A case directory's input files in production scan order: within each
+// directory, files first (lexicographic by name),
 // then subdirectories (lexicographic), recursing. The driver golden derives
 // its view list, mapping table and test numbering from this exact order.
 collect_case_files :: (dir: string) -> [..] string {
@@ -906,9 +940,10 @@ run_golden_cases :: (update: bool) -> bool {
         // normalized to the <abs> placeholder before comparing.
         driver_text := generate_test_driver(driver_files, driver_view_paths, matches);
         if !compare_or_update(tprint("%1/driver.jai", dir), normalize_golden_abs(driver_text), update) all_ok = false;
-        // 共享 Metaprogram generator 的测试形状（票 0036）：绝对路径经
-        // <abs> 占位符归一后与期望文件逐字节对比——字节一致不变量由
-        // golden 夹具锁定。
+        // The shared Metaprogram generator's test shape: absolute paths are
+        // normalized to the <abs> placeholder and compared byte for byte
+        // against the expected file — the byte-identity invariant is locked
+        // by the golden fixtures.
         metaprogram: Compiler_Metaprogram_Options;
         metaprogram.workspace_name    = "Juice Test Program";
         metaprogram.no_output         = true;

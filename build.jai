@@ -4,29 +4,37 @@
 #import "Compiler";
 #import "Process";
 
-// 自举转译前置（ADR 0006，票 0031；票 0050 共享化；票 0052 骨架收敛）：
-// metaprogram #load test-free 共享模块——src/transpile_front.jai（闭包探测、
-// 视图计算与生产 transpile 步骤，PLAIN 布局：<base>/<rel> 恒写、全闭包落
-// 盘含入口）与 src/metaprogram.jai（共享 Metaprogram generator，本文件生
-// 成编译 metaprogram 后 spawn 子进程 jai 编译——与 Build command 同形状，
-// 入口视图经 add_build_file 编译、诊断精确文件+行号，add_build_string 的
-// +5 偏移退役）。src/transpile_cache.jai 提供共享前端引用的内容寻址路径函
-// 数。被 #load 的代码编译进 metaprogram 执行环境、绝不进入被构建程序（研
-// 究 0028 e1c）。已知无碍：beta 0.2.009 下编译 transpile.jai 会出两条
-// `%%` print 兼容警告（勿"修复"，避免触碰转译器）。
+// Bootstrap transpile front (ADR 0006): the metaprogram #loads the test-free
+// shared modules — src/transpile_front.jai (closure probing, view computation
+// and the production transpile step; PLAIN layout: <base>/<rel> always
+// written, the whole closure including the entry lands on disk) and
+// src/metaprogram.jai (the shared Metaprogram generator; this file generates
+// the compile metaprogram and then spawns a child jai to compile — the same
+// shape as the Build command; the entry view compiles via add_build_file
+// with exact file+line diagnostics; the add_build_string +5 offset is
+// retired). src/transpile_cache.jai provides the content-addressed path
+// functions the shared front references. The #loaded code compiles into the
+// metaprogram execution environment and never into the built program. Known
+// and harmless: compiling transpile.jai under beta 0.2.009 emits two `%%`
+// print compatibility warnings (do not "fix" them; keep the transpiler
+// untouched).
 #load "src/transpile.jai";
 #load "src/transpile_cache.jai";
 #load "src/transpile_front.jai";
 #load "src/metaprogram.jai";
 
-// 剥离前端（票 0031 探测语义；票 0050 机器共享；票 0052 入口落盘）：探测
-// 入口（src/main.jai）沿字面量 in-package #load 的传递闭包。test-free 闭包
-// 返回原文件绝对路径（零转译零落盘，原样直编）；闭包含 test block 则全有
-// 全无视图化——含入口的全部闭包视图落盘 target/transpile/bootstrap/
-// （target directory 转译子树下的自举构建专属子目录，不与 Build command
-// 的内容寻址缓存混用），返回入口视图路径；in-package #load 重写为视图绝
-// 对路径（STRIP 已有机制，无新增转译规则）。与 Build command 共用同一转译
-// 器与视图契约，行号保真不变量一致（ADR 0005）。
+// Strip front (the probe semantics, the shared machinery, the entry
+// landing): probe the entry (src/main.jai) over its transitive closure of
+// literal in-package #loads. A test-free closure returns the original
+// file's absolute path (zero transpile, zero landing, compiled as-is); a
+// closure containing test blocks is viewed all-or-nothing — the whole
+// closure's views including the entry land in target/transpile/bootstrap/
+// (the bootstrap-exclusive subdirectory under the target directory's
+// transpile subtree; never mixed with the Build command's content-addressed
+// cache) and the entry view path is returned; in-package #loads are
+// rewritten to view absolute paths (the existing STRIP mechanism, no new
+// transpile rules). Shares the same transpiler and view contract with the
+// Build command; the line-fidelity invariant is identical (ADR 0005).
 bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     root := front_slashes(get_working_directory());
     closure, ok := probe_package_closure(root, entry_rel, "[Build System] ❌ ");
@@ -54,13 +62,16 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
 
 #run {
     // -------------------------------------------------------------
-    // 1. 读取命令行参数
+    // 1. Read the command-line arguments
     // -------------------------------------------------------------
     build_args := get_toplevel_command_line();
 
-    // 本文件被 `juice test` 作为视图加载进测试程序时（测试程序的编译入口是
-    // 生成的 target/transpile/first.jai），跳过构建：编译期执行会连累整棵
-    // 构建树进入测试程序编译。直接 `jai build.jai` 时末参数是本文件自身。
+    // When `juice test` loads this file into the test program as a view (the
+    // test program's compile entry is the generated
+    // target/transpile/first.jai), skip the build: compile-time execution
+    // would drag the whole build tree into the test program compile. A
+    // direct `jai build.jai` ends with this file itself as the last
+    // argument.
     if build_args.count > 0 {
         last_arg := build_args[build_args.count - 1];
         if ends_with(last_arg, "/first.jai") || ends_with(last_arg, "\\first.jai") return;
@@ -78,44 +89,53 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     root := front_slashes(get_working_directory());
 
     // -------------------------------------------------------------
-    // 2. 声明构建由本 metaprogram 自理（票 0052）：jai 在 #run 未创建任何
-    //    workspace 时会回落 Default_Metaprogram 编译命令行文件本身
-    //    （build.jai 无 main → "No program entry point" 错误、退出码 1）。
-    //    创建空 workspace 是「构建已由本 metaprogram 处理」的信号——真正
-    //    编译发生在步骤 5 的子进程 jai。
+    // 2. Declare the build self-handled by this metaprogram: jai falls back
+    //    to Default_Metaprogram compiling the command-line file itself when
+    //    #run created no workspace (build.jai has no main -> "No program
+    //    entry point" error, exit code 1). Creating an empty workspace is
+    //    the "this metaprogram handles the build" signal — the real compile
+    //    happens in step 5's child jai.
     // -------------------------------------------------------------
     set_build_options_dc(.{do_output = false});
     delegation := compiler_create_workspace("Bootstrap Delegation");
     if !delegation return;
 
     // -------------------------------------------------------------
-    // 3. 剥离前端：探测入口闭包，选择编译入口（原文件或入口视图）。
+    // 3. Strip front: probe the entry closure and choose the compile entry
+    //    (the original file or the entry view).
     // -------------------------------------------------------------
     entry, ok := bootstrap_build_entry("src/main.jai");
     if !ok return;
 
     // -------------------------------------------------------------
-    // 4. Testing 断言模块自举特例（票 0033 对称；票 0051 收口：实现驻共享
-    //    剥离前端 testing_module_strip_view_dir，bootstrap 与 Build
-    //    command 共用一份，此处仅传 cwd 相对模块路径与报错前缀）：
-    //    modules/Testing.jai 内联 test block 后不可被 jai 直接编译，而闭包
-    //    内 `#import "Testing"` 会解析到模块源文件。模块含 test block 时把
-    //    STRIP 视图写到 target/testing-module/Testing.jai 并把其目录前置进
-    //    生成 metaprogram 的 import path。模块 test-free 或不存在时
-    //    testing_view_dir 保持 ""，零变化。
-    //    哨兵约定：testing_view_dir == "" 表示「未启用编译视图特例」——与
-    //    共享 Metaprogram generator 的 testing_view_dir 参数（票 0036）、
-    //    共享 testing_module_strip_view_dir 的返回值同一约定。
+    // 4. The Testing module bootstrap special case (the mirror of the
+    //    test-side special case; consolidated: the implementation lives in
+    //    the shared strip front testing_module_strip_view_dir, one copy for
+    //    bootstrap and the Build command; here we only pass a cwd-relative
+    //    module path and the error prefix):
+    //    modules/Testing.jai cannot be compiled by jai directly once test
+    //    blocks are inlined, and `#import "Testing"` inside the closure
+    //    would resolve to the module source file. When the module contains
+    //    test blocks, its STRIP view is written to
+    //    target/testing-module/Testing.jai and its directory is prepended to
+    //    the generated metaprogram's import path. When the module is
+    //    test-free or absent, testing_view_dir stays "", zero change.
+    //    The sentinel convention: testing_view_dir == "" means "the
+    //    compile-view special case is disabled" — the same convention as the
+    //    shared Metaprogram generator's testing_view_dir parameter and the
+    //    shared testing_module_strip_view_dir's return value.
     // -------------------------------------------------------------
     testing_view_dir := testing_module_strip_view_dir(root, "modules/Testing.jai", "[Build System] ❌ ");
 
     // -------------------------------------------------------------
-    // 5. 生成编译 metaprogram（票 0052：与 Build command 共用共享
-    //    Metaprogram generator）并 spawn 子进程 jai 编译。子进程输出实时
-    //    透传（本 metaprogram 的打印由 jai 收集、正常结束时才刷出——故
-    //    🚀/✅ 行出现在编译输出之后；失败路径 exit(1) 会吞掉本 metaprogram
-    //    的 ❌ 行，退出码与子进程错误输出仍完整，票 0015 机制）。失败时以
-    //    exit(1) 传递退出码，保持三路径 seam。
+    // 5. Generate the compile metaprogram (sharing the Metaprogram generator
+    //    with the Build command) and spawn a child jai to compile. The
+    //    child's output passes through in real time (this metaprogram's
+    //    prints are collected by jai and flushed only on normal exit — so
+    //    the 🚀/✅ lines appear after the compile output; the failure path's
+    //    exit(1) swallows this metaprogram's ❌ lines, but the exit code and
+    //    the child's error output stay intact). Failures propagate the exit
+    //    code with exit(1), keeping the three-path seam.
     // -------------------------------------------------------------
     meta: Compiler_Metaprogram_Options;
     meta.workspace_name    = "Juice Build";
@@ -131,7 +151,8 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     meta.testing_view_dir  = testing_view_dir;
     meta.very_optimized    = is_release;
 
-    // 关键：确保 target 目录存在，防止链接器报错 LNK1104
+    // Key: make sure the target directory exists so the linker does not
+    // error with LNK1104
     make_directory_if_it_does_not_exist("target");
     meta_path := "target/bootstrap-meta.jai";
     if !write_entire_file(meta_path, generate_compiler_metaprogram(meta)) {

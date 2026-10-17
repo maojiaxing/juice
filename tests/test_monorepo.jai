@@ -1,14 +1,15 @@
 // ===========================================================================
-// monorepo（workspace member）E2E 测试（票 0042-0046）
+// Monorepo (workspace member) E2E tests.
 //
-// 2026-10-14 用户修订：monorepo 的 E2E 测试集中于此文件，不内联在
-// command 文件（build/clean/test.jai）中。本文件被 Test discovery 全包
-// 扫描收录，与 src 内联测试同一测试程序执行；child 场景 helper
-// （run_juice_child、run_juice_test、expect_exit、output_matches、
-// child_output_contains、shim_content_for、make_test_link）见
-// tests/test_support.jai（程序级可见）。
+// User revision (2026-10-14): the monorepo E2E tests live in this file, not
+// inlined in the command files (build/clean/test.jai). Test discovery's
+// full-package scan includes this file and runs it in the same test program
+// as the src inline tests; the child scenario helpers (run_juice_child,
+// run_juice_test, expect_exit, output_matches, child_output_contains,
+// shim_content_for, make_test_link) live in tests/test_support.jai
+// (program-level visible).
 //
-// fixture 家族 tests/data/workspace-* 见票 0042。
+// The fixture family tests/data/workspace-* exists for these tests.
 // ===========================================================================
 
 #import "Basic";
@@ -18,15 +19,19 @@
 #import "Testing";
 
 // ---------------------------------------------------------------------------
-// discovery 校验矩阵（票 0043）：每个失败分支一条 E2E，经真实 juice.exe
-// 断言具体错误消息。直测不可行——manifest 求值器的模块目录从运行中可执行
-// 文件推导，测试程序内指向 jai 编译器而非 juice（路径门槛的进程内直测见
-// src/workspace.jai 的 "Workspace member path validity gate"）。
+// Discovery validation matrix: one E2E per failure branch, asserting the
+// concrete error message through the real juice.exe. A direct test is not
+// feasible — the manifest evaluator's module directory derives from the
+// running executable, which points at the jai compiler (not juice) inside
+// the test program (the in-process direct test of the path gate lives in
+// src/workspace.jai's "Workspace member path validity gate").
 //
-// 两个防御分支不入矩阵：`Workspace member directory does not exist`
-// （normalize_existing_path 只做词法归一，不验证存在）与 `escapes package
-// root`（路径有效性门槛已拒绝全部可达拼写：逃逸组件、绝对路径与卷标；
-// junction/symlink 被更早的 safe-directory 检查拦截）。
+// Two defensive branches are outside the matrix: `Workspace member
+// directory does not exist` (normalize_existing_path only normalizes
+// lexically, it never verifies existence) and `escapes package root` (the
+// path validity gate already rejects every reachable spelling: escape
+// components, absolute paths and volume designators; junctions/symlinks are
+// intercepted by the earlier safe-directory check).
 // ---------------------------------------------------------------------------
 
 test "E2E: discovery rejects an invalid root manifest" {
@@ -41,9 +46,9 @@ test "E2E: discovery rejects a member path with escape components" {
     expect(child_output_contains("bad-escape", output, "[juice ERROR] Invalid workspace member path: ../outside"));
 }
 
-// 实测（票 0042 Resolution）：不存在的 member 目录命中 not-a-safe-real-
-// directory 分支——normalize_existing_path 不验证存在，inspect 发现
-// !exists 后走同一分支。
+// Verified by measurement: a member directory that does not exist hits the
+// not-a-safe-real-directory branch — normalize_existing_path never verifies
+// existence, and the inspection finding !exists takes the same branch.
 test "E2E: discovery rejects a member directory that does not exist" {
     result, output, _ := run_juice_child("workspace-bad-missing-dir", "build");
     expect(expect_exit("bad-missing-dir", result, 1, "build child"));
@@ -62,24 +67,28 @@ test "E2E: discovery rejects an invalid member manifest" {
     expect(child_output_contains("bad-invalid-manifest", output, "[juice ERROR] Workspace member manifest is invalid:"));
 }
 
-// member_lib/. 与 member_lib 文本不同、归一化后同目录（票 0042 实测拼写）。
+// "member_lib/." differs textually from "member_lib" but normalizes to the
+// same directory (a measured spelling).
 test "E2E: discovery rejects duplicate member paths" {
     result, output, _ := run_juice_child("workspace-bad-duplicate", "build");
     expect(expect_exit("bad-duplicate", result, 1, "build child"));
     expect(child_output_contains("bad-duplicate", output, "[juice ERROR] Duplicate workspace member path: member_lib/."));
 }
 
-// 边界用例：root 把 "." 列为 member——归一化后与 root 相同，root 已先入
-// 成员清单，命中 duplicate 分支（钉住当前行为）。
+// Edge case: the root lists "." as a member — normalization makes it equal
+// to the root, which entered the member list first, hitting the duplicate
+// branch (pins current behavior).
 test "E2E: discovery rejects the root listed as its own member" {
     result, output, _ := run_juice_child("workspace-edge-self", "build");
     expect(expect_exit("edge-self", result, 1, "build child"));
     expect(child_output_contains("edge-self", output, "[juice ERROR] Duplicate workspace member path: ."));
 }
 
-// 边界用例：member 的 manifest 再声明 members——当前实现只迭代 root 的
-// members 清单，嵌套声明静默忽略，discovery 与 build 成功（钉住当前行为，
-// 与 CONTEXT.md「member 由 root package 声明」一致）。
+// Edge case: a member's manifest declares members of its own — the current
+// implementation only iterates the root's members list, nested declarations
+// are silently ignored, and discovery and build succeed (pins current
+// behavior, consistent with CONTEXT.md's "members are declared by the root
+// package").
 test "E2E: a member declaring its own members is ignored" {
     fixture_root := tprint("%1/tests/data/workspace-edge-nested", juice_root());
     defer delete_directory_full(tprint("%1/target", fixture_root));
@@ -90,9 +99,11 @@ test "E2E: a member declaring its own members is ignored" {
     expect(file_exists(tprint("%1/target/edge_nested.exe", fixture_root)));
 }
 
-// junction 用例运行时制造（票 0043）：在 target/ scratch 复刻 workspace-ok
-// 形状，member_lib 替换为指向真实目录的 junction → 命中 not-a-safe-real-
-// directory 分支。make_test_link 失败（机器拒绝 mklink）时沿用 SKIP 惯例。
+// The junction case is manufactured at runtime: the workspace-ok shape is
+// replicated in a target/ scratch dir with member_lib replaced by a junction
+// pointing at the real directory -> hits the not-a-safe-real-directory
+// branch. When make_test_link fails (the machine refuses mklink), the
+// established SKIP convention applies.
 test "E2E: discovery rejects a junctioned member directory" {
     scratch := tprint("%1/target/workspace-junction", juice_root());
     delete_directory_full(scratch);
@@ -118,10 +129,12 @@ test "E2E: discovery rejects a junctioned member directory" {
 }
 
 // ---------------------------------------------------------------------------
-// monorepo build E2E（票 0044 / 0049）：root 依赖 member → link 非 fetch →
-// shim 指向两种布局的导入入口 → 真实构建 → artifact 调用两 member 函数。
-// member_lib 闭包含 test block（入口自身 + extra.jai）→ 依赖剥离前端视图化
-// 并改写其 shim；root 入口闭包 test-free，无 root 自己的视图。
+// Monorepo build E2E: the root depends on a member -> linked, not fetched ->
+// shims point at the import entries of the two layouts -> a real build -> the
+// artifact calls both member functions. The member_lib closure contains test
+// blocks (the entry itself + extra.jai) -> the dependency strip front views
+// it and rewrites its shim; the root entry closure is test-free, no root
+// views of its own.
 // ---------------------------------------------------------------------------
 
 test "E2E: monorepo build links members and builds the root" {
@@ -132,8 +145,9 @@ test "E2E: monorepo build links members and builds the root" {
     expect(expect_exit("monorepo-build", result, 0, "build child"));
     expect(child_output_contains("monorepo-build", output, "Compiling Target 'ws_root' (src/main.jai) -> target/..."));
 
-    // link 非 fetch：member_extra（test-free）shim 指向导入入口原文；
-    // member_lib 的 shim 被依赖剥离前端改写指向入口剥离视图。
+    // Linked, not fetched: member_extra (test-free) keeps its shim pointing
+    // at the import entry verbatim; member_lib's shim is rewritten by the
+    // dependency strip front to the entry strip view.
     packages_dir := tprint("%1/target/packages", fixture_root);
     lib_content, lib_ok := shim_content_for(packages_dir, "member_lib");
     expect(lib_ok);
@@ -144,17 +158,20 @@ test "E2E: monorepo build links members and builds the root" {
     expect(extra_ok);
     expect(find_index_from_left(extra_content, "#load ") >= 0 && find_index_from_left(extra_content, "member_extra/module.jai") >= 0);
 
-    // artifact 运行：两 member 函数被实际调用（剥离不改产物语义）。
+    // Artifact run: both member functions are actually called (stripping
+    // does not change the product's semantics).
     artifact := tprint("%1/target/ws_root.exe", fixture_root);
     expect(file_exists(artifact));
     run_result, run_output, _, _ := run_command(artifact, capture_and_return_output = true);
     expect(expect_exit("monorepo-artifact", run_result, 0, "build child"));
     expect(child_output_contains("monorepo-artifact", run_output, "ws_root: hello from member_lib | hello from member_extra"));
 
-    // 依赖剥离视图落 target/transpile/deps/member_lib/...，test block 被
-    // 剥离（纯函数契约路径逐字节可重建）；root 入口闭包 test-free——
-    // transpile 树存在但只有 deps 子树。rel 以 member 包根（src/ 目录，
-    // 入口所在处）为基准。
+    // The dependency strip views land under
+    // target/transpile/deps/member_lib/... with the test block stripped (the
+    // pure-contract path is byte-reconstructible); the root entry closure is
+    // test-free — the transpile tree exists but holds only the deps subtree.
+    // rel is relative to the member package root (the src/ directory, where
+    // the entry sits).
     extra_source, read_ok := read_entire_file(tprint("%1/member_lib/src/extra.jai", fixture_root));
     expect(read_ok);
     extra_key := transpile_view_key("extra.jai", extra_source, .STRIP, Load_Target.[], JUICE_VERSION);
@@ -165,10 +182,11 @@ test "E2E: monorepo build links members and builds the root" {
 }
 
 // ---------------------------------------------------------------------------
-// monorepo clean E2E（票 0045）：target 垃圾运行时制造（fixture 不提交
-// target/），root 与 member 的 target 整目录删除、源文件保留、无 target
-// 的 member 不失败（delete_directory_full 对不存在路径返回 true，见
-// src/dependency.jai）。
+// Monorepo clean E2E: target junk is manufactured at runtime (fixtures never
+// commit target/), the root's and members' whole target directories are
+// deleted, sources stay, and a member without target/ does not fail
+// (delete_directory_full returns true for nonexistent paths, see
+// src/dependency.jai).
 // ---------------------------------------------------------------------------
 
 test "E2E: clean removes root and member target directories" {
@@ -176,7 +194,8 @@ test "E2E: clean removes root and member target directories" {
     defer delete_directory_full(tprint("%1/target", fixture_root));
     defer delete_directory_full(tprint("%1/member_lib/target", fixture_root));
 
-    // 运行时制造垃圾：root 与 member_lib 各一个真实 target/；member_extra 不建。
+    // Manufacture junk at runtime: one real target/ for the root and one for
+    // member_lib; member_extra gets none.
     expect(make_directory_if_it_does_not_exist(tprint("%1/target", fixture_root), recursive = true));
     expect(write_entire_file(tprint("%1/target/junk.exe", fixture_root), "junk"));
     expect(make_directory_if_it_does_not_exist(tprint("%1/member_lib/target", fixture_root), recursive = true));
@@ -186,11 +205,11 @@ test "E2E: clean removes root and member target directories" {
     expect(expect_exit("monorepo-clean", result, 0, "clean child"));
     expect(child_output_contains("monorepo-clean", output, "[juice Clean] Workspace cleaned."));
 
-    // 整目录消失（含垃圾）。
+    // The whole directories are gone (junk included).
     expect(!file_exists(tprint("%1/target", fixture_root)));
     expect(!file_exists(tprint("%1/member_lib/target", fixture_root)));
 
-    // 非 target 内容原样保留（clean 不越界）。
+    // Non-target content stays byte-identical (clean never overreaches).
     expect(file_exists(tprint("%1/package.jai", fixture_root)));
     expect(file_exists(tprint("%1/src/main.jai", fixture_root)));
     expect(file_exists(tprint("%1/member_lib/package.jai", fixture_root)));
@@ -200,11 +219,13 @@ test "E2E: clean removes root and member target directories" {
 }
 
 // ---------------------------------------------------------------------------
-// monorepo test E2E（票 0046 / 0049）：root 的测试程序 #import lib member——
-// discovery → 依赖准备（shim）→ 视图编译 → 编译期执行全链路。member 自带
-// 的测试（tests/ 与 src 内联）不随 root 运行（member 边界重申）；src 内联
-// test block 经依赖剥离前端以 STRIP 视图编译（票 0049）。此场景暴露过缺陷
-// 票 0048（test 编译缺 target/packages import 路径，已修复）。
+// Monorepo test E2E: the root's test program #imports a lib member — the
+// full chain: discovery -> dependency preparation (shims) -> view compile ->
+// compile-time execution. The member's own tests (tests/ and src inline) do
+// not run under the root (the member boundary reasserts itself); the src
+// inline test blocks compile as STRIP views through the dependency strip
+// front. This scenario exposed a defect where the test compile missed the
+// target/packages import path (fixed).
 // ---------------------------------------------------------------------------
 
 test "E2E: monorepo root tests import a member library" {
@@ -217,12 +238,14 @@ test "E2E: monorepo root tests import a member library" {
     expect(output_matches("monorepo-test", output, string.["[juice Test] Found 1 tests; compiling test program..."]));
     expect(output_matches("monorepo-test", output, string.["[test] root test imports the member\n1 passed, 0 failed\n"]));
     expect(output_matches("monorepo-test", output, string.["member test must not run in root", "member inline test", "member extra inline test"], want = false));
-    // 依赖剥离在 test 路径同样生效：member_lib 闭包视图落 deps 子树。
+    // The dependency strip applies on the test path too: the member_lib
+    // closure views land in the deps subtree.
     expect(path_exists_as_directory(tprint("%1/target/transpile/deps/member_lib", fixture_root)));
 }
 
-// 含 src 内联 test block 的 member 自为 root 时正常发现并执行全部测试
-// （入口内联块 + 入口闭包内文件块 + tests/ 独立块，按扫描序）。
+// A member with src inline test blocks discovers and runs all its tests
+// normally when it is its own root (the entry inline block + the blocks in
+// the entry closure's files + the standalone tests/ blocks, in scan order).
 test "E2E: member with inline tests runs them as its own root" {
     fixture_root := tprint("%1/tests/data/workspace-ok", juice_root());
     defer delete_directory_full(tprint("%1/member_lib/target", fixture_root));
@@ -234,10 +257,11 @@ test "E2E: member with inline tests runs them as its own root" {
         "[test] member extra inline test\n[test] member inline test\n[test] member test must not run in root\n3 passed, 0 failed\n"]));
 }
 
-// 票 0049 缺陷修正：LIB member（0 effective target）自为 root 跑测试时，
-// Test 以 force_dependencies 照常准备依赖——测试程序经 shim 引用另一
-// member（member_extra → member_lib），此前「0 plans 不生成 shim」的
-// 门控使 import 解析必败。
+// A LIB member (0 effective targets) running tests as its own root: Test
+// still prepares dependencies via force_dependencies — the test program
+// references another member (member_extra -> member_lib) through its shim;
+// the old "0 plans means no shims" gate made that import resolution always
+// fail.
 test "E2E: lib member tests import a dependency without targets" {
     fixture_root := tprint("%1/tests/data/workspace-ok", juice_root());
     defer delete_directory_full(tprint("%1/member_extra/target", fixture_root));

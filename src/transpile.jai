@@ -1,5 +1,5 @@
 // Juice process-internal source-to-source transpiler for test blocks
-// (ADR 0004, ticket 0016). Single-entry pure function: source text +
+// (ADR 0004). Single-entry pure function: source text +
 // context -> view text + test list + diagnostics. No IO, no global state.
 //
 // Output contract (docs/transpiled-output-formatting.md, ADR 0005):
@@ -410,7 +410,7 @@ find_load_target :: (targets: [] Load_Target, resolved: string) -> string, bool 
 }
 
 // ---------------------------------------------------------------------------
-// Build probe utilities (ticket 0021)
+// Build probe utilities
 // ---------------------------------------------------------------------------
 
 // Whether the source contains any test block the transpiler acts on in
@@ -446,8 +446,8 @@ source_has_test_block :: (source: string) -> bool {
 
 // Literal in-package #load targets of a source file, resolved against its
 // package-relative path ("/" separated), in statement order. Non-literal
-// targets (#load CONST) and out-of-package targets are absent by design
-// (issue 0008 resolution 4): their files are never viewed or rewritten.
+// targets (#load CONST) and out-of-package targets are absent by design:
+// their files are never viewed or rewritten.
 source_load_targets :: (source: string, path: string) -> [..] string {
     s := normalize_view_line_endings(source);
     tokens := lex_source(s);

@@ -1,18 +1,23 @@
 // ---------------------------------------------------------------------------
-// 转译器测试（票 0034 自旧 tests/ 迁移，45 块；2026-10-14 测试组织规则后回
-// 驻 tests/——票 0053）。
+// Transpiler tests (45 blocks, migrated from the old tests/; back in tests/
+// per the 2026-10-14 test organization rule).
 //
-// 关键约束（0031 已知风险落地）：src/transpile.jai 与 src/transpile_cache.jai
-// 是 build.jai 的 #load 目标 / 入口闭包成员——test block 随 metaprogram 编译
-// 期文本包含会非法，这两个文件必须保持 test-free。转译器测试块因此不能内
-// 联，按测试组织规则驻 tests/ 本文件：不被任何 #load 引用（不进入口闭包、
-// 不进发布产物），Test discovery 全包扫描将其收录进测试程序（与
-// tests/test_support.jai 同机制）。本文件仅含 test block；生产代码零耦合。
+// Key constraint (a known-risk landing): src/transpile.jai and
+// src/transpile_cache.jai are build.jai's #load targets / entry closure
+// members — test blocks would be illegal inside a metaprogram compile-time
+// text inclusion, so those two files must stay test-free. The transpiler
+// test blocks therefore cannot be inlined and live in tests/ (this file)
+// per the test organization rule: referenced by no #load (outside the entry
+// closure, outside the release product), collected into the test program by
+// Test discovery's full-package scan (same mechanism as
+// tests/test_support.jai). This file contains only test blocks; zero
+// production code coupling.
 // ---------------------------------------------------------------------------
 
-// 共享声明（GOLDEN_CASES/NEGATIVE_CASES 常量、golden/negative harness、
-// expand_ctx/strip_ctx 等 helper 与 compile-and-run matrix helper）位于
-// tests/test_support.jai（组织决议 0027），测试程序程序级共享。
+// Shared declarations (the GOLDEN_CASES/NEGATIVE_CASES constants, the
+// golden/negative harness, the expand_ctx/strip_ctx and other helpers, and
+// the compile-and-run matrix helpers) live in tests/test_support.jai,
+// program-level shared in the test program.
 
 #import "Basic";
 #import "Testing";
@@ -291,7 +296,7 @@ test "Load target resolution" {
 }
 
 // ---------------------------------------------------------------------------
-// Content-addressed cache pure functions (ticket 0020)
+// Content-addressed cache pure functions
 // ---------------------------------------------------------------------------
 
 // The key is a deterministic 16-hex-char hash; every component (relative
@@ -311,7 +316,7 @@ test "Cache key is deterministic and component-sensitive" {
     expect(transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[]) == key);
 }
 
-// Merkle chain (issue 0008 resolution 5): in build mode the load rewrite
+// Merkle chain: in build mode the load rewrite
 // targets embed the target views' hash directories, so a parent's key changes
 // whenever a loaded view's key changes — and stays deterministically
 // computable in dependency order.
@@ -335,7 +340,7 @@ test "Cache key forms a Merkle chain in build mode" {
     expect(parent != transpile_view_key("src/a.jai", "#load \"b.jai\";\n", .STRIP, targets_from, "1"));
 }
 
-// Collision-avoiding path shape (issue 0007): <transpile_dir>/<hash>/<rel>
+// Collision-avoiding path shape: <transpile_dir>/<hash>/<rel>
 // mirrors the package-relative structure inside the hash directory, so
 // "src/a/x.jai" and "src/a_x.jai" stay distinct where a flattened layout
 // would collide.
@@ -351,10 +356,10 @@ test "Cache view path mirrors the relative structure" {
 }
 
 // ---------------------------------------------------------------------------
-// Golden / negative harness（Case_Config、read_case_config、
-// collect_case_files、golden_root、normalize_golden_abs、compare_or_update、
-// case_context、run_golden_cases、run_negative_cases 与 wants_update 见
-// tests/test_support.jai）
+// Golden / negative harness (Case_Config, read_case_config,
+// collect_case_files, golden_root, normalize_golden_abs, compare_or_update,
+// case_context, run_golden_cases, run_negative_cases and wants_update live
+// in tests/test_support.jai)
 // ---------------------------------------------------------------------------
 
 test "Golden baselines" {
@@ -371,13 +376,13 @@ test "Negative cases" {
 // Compile-and-run matrix (docs/transpiled-output-formatting.md §4.1):
 // package-level fixtures under tests/data/transpile/run/, executed end to
 // end via the real juice.exe `test` command; exit codes and the output
-// contract are asserted (no full-output goldens)。Run matrix helper
-// （juice_exe、run_juice_test、expect_exit、normalize_crlf、output_matches、
-// fixture_line_col）见 tests/test_support.jai。
+// contract are asserted (no full-output goldens). The run matrix helpers
+// (juice_exe, run_juice_test, expect_exit, normalize_crlf, output_matches,
+// fixture_line_col) live in tests/test_support.jai.
 // ---------------------------------------------------------------------------
 
 // LIB packages have no effective target; `juice test` still discovers and
-// runs every test in the package (spec 0013 US 23).
+// runs every test in the package.
 test "Run: LIB package passes via juice test" {
     result, output, _ := run_juice_test("lib-package", fixture_base = "tests/data/transpile/run/");
     expect(expect_exit("lib", result, 0, "run"));
@@ -390,8 +395,7 @@ test "Run: LIB package passes via juice test" {
 }
 
 // Pattern filtering end to end: a hit runs exactly the matched tests, a
-// zero-hit pattern succeeds with an explanation and skips the build
-// (spec 0013 US 16/17).
+// zero-hit pattern succeeds with an explanation and skips the build.
 test "Run: pattern hit filters the executed tests" {
     result, output, _ := run_juice_test("lib-package", "strings", fixture_base = "tests/data/transpile/run/");
     expect(expect_exit("pattern-hit", result, 0, "run"));
@@ -408,7 +412,7 @@ test "Run: zero-hit pattern succeeds with an explanation" {
     expect(output_matches("pattern-zero", output, string.["[juice Test] No tests matched 'zzz'."], tag = "run"));
 }
 
-// Crash semantics (spec 0013 US 28): a bare assert inside a test crashes the
+// Crash semantics: a bare assert inside a test crashes the
 // compiler — non-zero exit, no clean per-test attribution line and no
 // summary; the crash point stays attributable by the [test] start line, and
 // the compiler's own assert noise surfaces on stderr.

@@ -1,5 +1,5 @@
-// Content-addressed view cache for transpiled products (ticket 0020, ADR
-// 0003, issue 0008 resolution 5). Pure key/path computation, no IO: the key
+// Content-addressed view cache for transpiled products (ADR
+// 0003). Pure key/path computation, no IO: the key
 // is a hash of the package-relative path, the source content, the mode
 // (build/test) and the juice version, plus the build mode's #load rewrite
 // targets. Because a strip view's rewrite strings embed the target views'
@@ -7,7 +7,7 @@
 // its children's keys and stays deterministically computable in dependency
 // order. Views live at <transpile_dir>/<hash>/<rel_path>: the package-relative
 // structure is mirrored inside the hash directory so distinct files can never
-// collide by name (issue 0007: "src/a/x.jai" vs "src/a_x.jai").
+// collide by name ("src/a/x.jai" vs "src/a_x.jai").
 
 #import "Basic";
 #import "Hash";
@@ -77,7 +77,7 @@ transpile_view_path :: (transpile_dir: string, key: string, rel_path: string) ->
     return tprint("%1/%2/%3", cache_slashes(transpile_dir), key, rel_path);
 }
 
-// Dependency strip view path（票 0049）: <transpile_dir>/deps/<name>/<hash>/<rel_path>.
+// Dependency strip view path: <transpile_dir>/deps/<name>/<hash>/<rel_path>.
 // Dependency closures are viewed into the consumer's transpile tree under a
 // per-dependency subtree, so distinct dependencies can never collide by name
 // (two deps both holding "src/context.jai" share a key only when their views
@@ -89,7 +89,8 @@ transpile_dependency_view_path :: (transpile_dir: string, key: string, name: str
 // The transpile subtree root: <package root>/target/transpile/. Views, the
 // test driver and the test metaprogram products all live under it (Target
 // directory, CONTEXT.md). Build and Test derive it from the same package
-// root (票 0036：build_transpile_dir/test_transpile_dir 逐字同体，收口于此)。
+// root (build_transpile_dir/test_transpile_dir were verbatim duplicates,
+// consolidated here).
 transpile_tree_dir :: (package_root: string) -> string {
     return tprint("%1/target/transpile", cache_slashes(package_root));
 }

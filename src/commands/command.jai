@@ -2,9 +2,10 @@ Command_Handler :: #type (ctx: *Command_Context, arguments: [] string) -> bool;
 Command_Argument_Validator :: #type (arguments: [] string) -> bool;
 
 Command_Context :: struct {
-    // The two process-wide paths (票 0038：Build_Driver 拆解后仅存此二值；
-    // packages_dir 等派生路径由各自持有者推导)：package root（启动时的
-    // 工作目录）与 juice 缓存目录（XDG cache home 下）。
+    // The two process-wide paths (the only survivors of the Build_Driver
+    // teardown; derived paths like packages_dir are derived by their own
+    // owners): the package root (the working directory at startup) and the
+    // juice cache directory (under the XDG cache home).
     root_dir:  string;
     cache_dir: string;
     workspace: Workspace_State;

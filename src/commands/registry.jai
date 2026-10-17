@@ -8,8 +8,9 @@ COMMAND_REGISTRY :: Command.[
 ];
 
 // ---------------------------------------------------------------------------
-// 内联测试（票 0034 自旧 tests/ 迁移）：生产 registry 聚合与
-// 命令声明/参数守卫。共享 helper 见 tests/test_support.jai。
+// Inline tests: the production registry aggregation and
+// the command declaration/argument guards. Shared helpers live in
+// tests/test_support.jai.
 // ---------------------------------------------------------------------------
 
 test "Command-owned declarations in production registry" {

@@ -129,11 +129,12 @@ print_usage :: (registry: [] Command) {
 }
 
 // ---------------------------------------------------------------------------
-// 内联测试（票 0034 自旧 tests/ 迁移）：registry 校验、查
-// 找、循环检测、菱形去重、参数预检与失败传播（含 manifest 严格协议与
-// target 大小写选择两块的归属按映射表整文件迁入）。共享 helper（记录
-// handler、TEST_REGISTRY_* 常量与 reset_dispatch_counters）见
-// tests/test_support.jai。
+// Inline tests: registry validation, command
+// lookup, cycle detection, diamond dedup, argument pre-checks and failure
+// propagation (plus the manifest strict protocol and the case-sensitive
+// target selection blocks, which moved here whole-file per the migration
+// map). Shared helpers (the recording handlers, the TEST_REGISTRY_*
+// constants and reset_dispatch_counters) live in tests/test_support.jai.
 // ---------------------------------------------------------------------------
 
 test "Production registry validation" {

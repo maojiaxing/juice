@@ -36,7 +36,7 @@ path_backslashes :: (path: string) -> string {
 // Directory holding Juice's modules (Testing.jai/Juice.jai), adjacent to the
 // running executable. Shared by the build/test commands (compiler import
 // directories, Testing module source lookup) and the manifest evaluator child
-// (-import_dir) — one derivation, three call sites (票 0036).
+// (-import_dir) — one derivation, three call sites.
 juice_modules_dir :: () -> string {
     exe_path := get_path_of_running_executable();
     bin_dir := path_strip_filename(exe_path);

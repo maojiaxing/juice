@@ -51,9 +51,10 @@ find_files_recursive :: (dir: string, filename: string) -> [..] string {
     return ctx.results;
 }
 
-// Local dependency directory（CONTEXT）：<package root>/target/packages/。
-// root_dir 的纯推导（票 0038：Build_Driver 拆解后，packages_dir 不再是
-// 结构体字段，由其持有者 dependency 模块统一派生）。
+// Local dependency directory (CONTEXT): <package root>/target/packages/.
+// A pure derivation of root_dir (after the Build_Driver teardown,
+// packages_dir is no longer a struct field — the dependency module, its
+// owner, derives it uniformly).
 packages_dir :: (root_dir: string) -> string {
     return to_forward_slashes(tprint("%1/target/packages", root_dir));
 }
@@ -61,10 +62,11 @@ packages_dir :: (root_dir: string) -> string {
 // Import directories every compile gets beyond jai's own defaults: the
 // juice module directory (adjacent to the running executable, holds
 // Testing.jai/Juice.jai) and the package's dependency shim directory when it
-// exists. juice_modules_dir is the shared derivation (src/path_safety.jai,
-// 票 0036). 票 0048：从 build.jai 移入——packages_dir 的派生持有者，build
-// 与 test 共用；此前 test 只注入 modules 目录，root 测试程序的
-// "#import <依赖名>"（含 workspace member）全部解析失败。
+// exists. juice_modules_dir is the shared derivation (src/path_safety.jai).
+// Moved here from build.jai — this module owns the packages_dir derivation
+// and build/test share it; previously test only injected the modules
+// directory, so the root test program's "#import <dependency name>"
+// (including workspace members) always failed to resolve.
 compiler_import_directories :: (packages_dir: string) -> [..] string {
     dirs: [..] string;
     dirs.allocator = temp;
@@ -140,17 +142,22 @@ ensure_import_shim :: (packages_dir: string, name: string, source_dir: string) -
 }
 
 // ---------------------------------------------------------------------------
-// 依赖剥离前端（票 0049）：import shim 是进入依赖闭包的入口——消费者以
-// `#import <依赖名>` 引用依赖时，编译器经 target/packages 下的 shim 直接
-// #load 依赖的导入入口（ADR 0004 剥离保证 = 入口同包闭包，依赖源此前裸传
-// jai）。依赖源码内联 test block 后不可被 jai 直接编译，本前端对每个 shim：
-// 解析入口路径 → 以依赖包为根探测入口的字面量 in-package #load 闭包
-// （probe_package_closure，票 0050 起驻 src/transpile_front.jai）→ 闭包含
-// test block 时整闭包生成 STRIP 视图（ADR 0004 全有全无语义），落
-// target/transpile/deps/<依赖名>/...，并把 shim 的 #load 改写到入口视图。
-// test-free 依赖零转译、shim 原样不动。Build 与 Test 共用本前端；依赖中的
-// test block 不被发现、不执行（Test discovery 不扫依赖包），两路径只做剥
-// 离编译。
+// Dependency strip front: the import shim is the entry into a dependency
+// closure — when a consumer references a dependency via `#import <name>`,
+// the compiler #loads the dependency's import entry directly through the
+// shim under target/packages (the ADR 0004 strip guarantee = the entry's
+// in-package closure; dependency sources used to be passed to jai raw).
+// Dependency sources with inlined test blocks cannot be compiled by jai
+// directly, so this front handles each shim: parse the entry path -> probe
+// the entry's literal in-package #load closure with the dependency package
+// as root (probe_package_closure, lives in src/transpile_front.jai) -> when
+// the closure contains test blocks, view the whole closure with STRIP (the
+// ADR 0004 all-or-nothing semantics), landing under
+// target/transpile/deps/<name>/..., and rewrite the shim's #load to the
+// entry view. Test-free dependencies get zero transpile and their shims
+// stay untouched. Build and Test share this front; test blocks inside
+// dependencies are neither discovered nor executed (Test discovery never
+// scans dependency packages) — both paths only make them compilable.
 // ---------------------------------------------------------------------------
 
 // The #load target literal of a generated import shim: the dependency entry's
@@ -215,12 +222,14 @@ collect_shim_names :: (packages_dir: string) -> [..] string, bool {
     return ctx.names, true;
 }
 
-// 闭包探测与视图计算机器（Build_Source_File / Build_Closure_File /
-// Build_File_Output / probe_package_closure / Strip_View_State /
-// closure_index / view_of_file / transpile_build_file）自票 0050 起驻
-// src/transpile_front.jai——test-free 共享剥离前端（bootstrap build.jai 以
-// #load 复用，故必须 test-free；其测试驻 tests/transpile_front_tests.jai，
-// 票 0053）。本文件的依赖剥离前端（下文）消费同一机器。
+// The closure probe and view computation machinery (Build_Source_File /
+// Build_Closure_File / Build_File_Output / probe_package_closure /
+// Strip_View_State / closure_index / view_of_file / transpile_build_file)
+// lives in src/transpile_front.jai — the test-free shared strip front
+// (bootstrap build.jai reuses it via #load, so it must stay test-free; its
+// tests live in tests/transpile_front_tests.jai per the test organization
+// rule). This file's dependency strip front (below) consumes the same
+// machinery.
 
 // The dependency strip front shared by build and test: for every import shim
 // in the dependency directory, probe the dependency entry's closure; a
@@ -273,10 +282,11 @@ prepare_dependency_strip_views :: (
 }
 
 // ---------------------------------------------------------------------------
-// 内联测试（票 0049）：依赖剥离前端——shim 解析、test-free 依赖零动作、
-// 含 test 闭包的视图生成与 shim 改写、`..` 逃逸 #load 保持 verbatim、
-// 坏 shim 留给编译器。共享 fake（fake_build_transpile、记录全局、
-// build_seam_write、reset_build_seam）见 tests/test_support.jai。
+// Inline tests: the dependency strip front — shim parsing, zero action for
+// test-free dependencies, view generation and shim rewriting for closures
+// containing tests, `..`-escaping #loads staying verbatim, bad shims left to
+// the compiler. Shared fakes (fake_build_transpile, the record globals,
+// build_seam_write, reset_build_seam) live in tests/test_support.jai.
 // ---------------------------------------------------------------------------
 
 test "Dependency strip: shim load target parses the generated shape" {
@@ -298,7 +308,7 @@ test "Dependency strip: a test-free dependency stays untouched" {
     reset_build_seam();
     expect(prepare_dependency_strip_views(root, fake_build_transpile));
     expect(test_build_transpile_calls == 0);
-    // shim 原样不动（无剥离、无重写）。
+    // The shim stays byte-identical (no strip, no rewrite).
     shim, ok := read_entire_file(tprint("%1/target/packages/depx.jai", root));
     expect(ok && shim == dependency_shim_content("depx", tprint("%1/src/module.jai", dep)));
     expect(!file_exists(tprint("%1/target/transpile", root)));
@@ -316,16 +326,17 @@ test "Dependency strip: a test closure is viewed and the shim rewritten" {
     reset_build_seam();
     expect(prepare_dependency_strip_views(root, fake_build_transpile));
 
-    // 整闭包视图化，子先父后（Merkle 链）：extra.jai 先于 module.jai。
-    // rel 以依赖包根（入口所在目录 <dep>/src）为基准。
+    // The whole closure is viewed, children before parents (Merkle chain):
+    // extra.jai before module.jai. rel is relative to the dependency package
+    // root (the entry's directory, <dep>/src).
     expect(test_build_transpile_calls == 2);
     expect(test_build_transpiled_files.count == 2);
     expect(test_build_transpiled_files[0] == "extra.jai" && test_build_transpiled_files[1] == "module.jai");
-    // 入口的 load 改写指向子视图（deps/<名> 子树）。
+    // The entry's load rewrite points at the child view (deps/<name> subtree).
     extra_view := tprint("%1/target/transpile/deps/depx/%2/extra.jai", root, fake_key("extra.jai"));
     expect(test_build_transpiled_rewrites.count == 1);
     expect(test_build_transpiled_rewrites[0] == tprint("extra.jai -> %1", extra_view));
-    // 视图落 deps/depx 子树；shim 改写指向入口视图。
+    // Views land in the deps/depx subtree; the shim is rewritten to the entry view.
     entry_view := tprint("%1/target/transpile/deps/depx/%2/module.jai", root, fake_key("module.jai"));
     expect(file_exists(entry_view) && file_exists(extra_view));
     shim, ok := read_entire_file(tprint("%1/target/packages/depx.jai", root));
@@ -338,8 +349,8 @@ test "Dependency strip: an escaping load stays verbatim and unviewed" {
     defer delete_directory_full(root);
     dep := tprint("%1/dep", root);
     expect(build_seam_write(dep, "src/module.jai", "#load \"extra.jai\";\nmain_decl :: () -> s32 { return 1; }\n"));
-    // `..` 逃逸出依赖包根（src/ 之上）：out-of-package，不跟进、不重写
-    // （issue 0008 决议 4）。
+    // `..` escapes the dependency package root (above src/): out-of-package,
+    // never followed, never rewritten.
     expect(build_seam_write(dep, "src/extra.jai", "#load \"../../outside.jai\";\nextra_decl :: () -> s32 { return 2; }\n\ntest \"dep test\" {\n}\n"));
     expect(build_seam_write(dep, "outside.jai", "outside_decl :: () -> s32 { return 3; }\n"));
     expect(build_seam_write(root, "target/packages/depx.jai", dependency_shim_content("depx", tprint("%1/src/module.jai", dep))));
@@ -349,7 +360,8 @@ test "Dependency strip: an escaping load stays verbatim and unviewed" {
     expect(test_build_transpile_calls == 2);
     expect(test_build_transpiled_files.count == 2);
     expect(test_build_transpiled_files[0] == "extra.jai" && test_build_transpiled_files[1] == "module.jai");
-    // outside.jai 不在闭包、不被视图化：无第三个转译调用。
+    // outside.jai is outside the closure and never viewed: no third
+    // transpile call.
     expect(!file_exists(tprint("%1/target/transpile/deps/depx/%2/outside.jai", root, fake_key("outside.jai"))));
 }
 
@@ -363,7 +375,7 @@ test "Dependency strip: missing entry or bad shim is left to the compiler" {
     reset_build_seam();
     expect(prepare_dependency_strip_views(root, fake_build_transpile));
     expect(test_build_transpile_calls == 0);
-    // 两个 shim 都原样保留。
+    // Both shims stay byte-identical.
     shim, ok := read_entire_file(tprint("%1/target/packages/missing.jai", root));
     expect(ok && shim == dependency_shim_content("missing", tprint("%1/nope/src/module.jai", root)));
 }

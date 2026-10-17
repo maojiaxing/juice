@@ -1,22 +1,26 @@
 // ---------------------------------------------------------------------------
-// Metaprogram 生成器测试（票 0052 自 src/metaprogram.jai 迁入，3 块 + 新增
-// 1 块；2026-10-14 测试组织规则后驻 tests/——票 0053）。
+// Metaprogram generator tests (moved here from src/metaprogram.jai: the 3
+// existing blocks + 1 new block; living in tests/ per the 2026-10-14 test
+// organization rule).
 //
-// 关键约束（与 transpile_tests.jai 同）：src/metaprogram.jai 自票 0052 起是
-// bootstrap build.jai 的 #load 目标——test block 随 metaprogram 编译期文本
-// 包含会非法，该文件必须保持 test-free。测试块因此不能内联，按测试组织规
-// 则驻 tests/ 本文件：不被任何 #load 引用（不进入口闭包、不进发布产物），
-// Test discovery 全包扫描收录进测试程序。本文件仅含 test block；生产代码零
-// 耦合。
+// Key constraint (same as transpile_tests.jai): src/metaprogram.jai is
+// bootstrap build.jai's #load target — test blocks would be illegal inside a
+// metaprogram compile-time text inclusion, so that file must stay test-free.
+// The test blocks therefore cannot be inlined and live in tests/ (this
+// file): referenced by no #load (outside the entry closure, outside the
+// release product), collected into the test program by Test discovery's
+// full-package scan. This file contains only test blocks; zero production
+// code coupling.
 // ---------------------------------------------------------------------------
 
 #import "Basic";
 #import "Testing";
 
 // ---------------------------------------------------------------------------
-// 生成文本的字节形状（票 0036）：可执行形状逐字节锁定（无 golden 覆盖）；
-// 测试形状的完整字节锁定由 golden 夹具承担，这里只锁关键行与哨兵开关的
-// 零变化语义。
+// Byte shapes of the generated text: the executable shape is byte-locked
+// (no golden covers it); the test shape's full byte lock is carried by the
+// golden fixtures — here only the key lines and the sentinel switch's
+// zero-change semantics are locked.
 // ---------------------------------------------------------------------------
 
 test "Metaprogram generator: executable shape is byte-locked" {
@@ -47,8 +51,9 @@ test "Metaprogram generator: test shape emits NO_OUTPUT with plain lines" {
     expect(find_index_from_left(text, "compiler_create_workspace(\"Juice Test Program\");") >= 0);
 }
 
-// 哨兵约定："" 表示未启用 Testing 模块编译视图特例——启用时只多一行
-// import_paths 前置行，其余文本零变化。
+// The sentinel convention: "" means the Testing module compile view special
+// case is disabled — enabling it only prepends one import_paths line, the
+// rest of the text changes by zero bytes.
 test "Metaprogram generator: sentinel on prepends one view-dir line" {
     base: Compiler_Metaprogram_Options;
     base.workspace_name    = "Juice Test Program";
@@ -69,9 +74,9 @@ test "Metaprogram generator: sentinel on prepends one view-dir line" {
 }
 
 // ---------------------------------------------------------------------------
-// 票 0052 新增：very_optimized 的发射形状——默认零发射（既有消费方逐字节
-// 不变），true 时恰多一行、位置在 import_path 设置之后、set_build_options
-// 之前。
+// The very_optimized emission shape — the default emits nothing (existing
+// consumers stay byte-identical), true emits exactly one line, positioned
+// after the import_path assignment and before set_build_options.
 // ---------------------------------------------------------------------------
 
 test "Metaprogram generator: very_optimized emits one line, default emits none" {

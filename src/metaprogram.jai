@@ -1,24 +1,32 @@
-// 进程内编译 metaprogram 生成器（票 0036，CONTEXT：Metaprogram
-// generator）：Build、Test 与 bootstrap（票 0052）共用，生成驱动 jai 编译
-// 器的一次性 workspace/拦截/消息循环源文本骨架。历史上有两份生成器
-// （generate_build_metaprogram / generate_test_metaprogram）加一份
-// bootstrap 手写版（build.jai，ADR 0006 对称复制），骨架与 "" 哨兵约定
-// 靠注释互相承诺；收口后骨架与哨兵在本文单点成立。票 0052：bootstrap 改
-// 走「生成 + 子进程」后成为第三个消费方——本文件必须 test-free（其测试
-// 驻 tests/metaprogram_tests.jai，先例 tests/transpile_tests.jai，票 0053）。
+// The in-process compiler metaprogram generator (CONTEXT: Metaprogram
+// generator): shared by Build, Test and bootstrap, it produces the one-shot
+// workspace/intercept/message-loop source text skeleton that drives the jai
+// compiler. Historically there were two generators
+// (generate_build_metaprogram / generate_test_metaprogram) plus a hand-
+// written bootstrap copy (build.jai, the ADR 0006 symmetric duplicate),
+// with the skeleton and the "" sentinel convention promised to each other
+// only through comments; after the consolidation the skeleton and sentinel
+// hold in this single file. Bootstrap became the third consumer when it
+// switched to "generate + child process" — this file must stay test-free
+// (its tests live in tests/metaprogram_tests.jai, following the
+// tests/transpile_tests.jai precedent and the test organization rule).
 //
-// 字节一致不变量：两种输出形状与收口前逐字节一致——
-//   可执行形状（no_output = false）：output_executable_name/output_path/
-//   intermediate_path 三行（含列对齐空格），不输出 output_type 行；
-//   测试形状（no_output = true）：output_type = .NO_OUTPUT 行加不齐头的
-//   intermediate_path 行，不输出 executable name/path 行。
-// Test 形状由 tests/data/transpile/golden/*/first.jai 逐字节锁定；可执行
-// 形状由 tests/metaprogram_tests.jai 的内联测试锁定。
+// Byte-identity invariant: both output shapes are byte-identical to their
+// pre-consolidation forms —
+//   executable shape (no_output = false): the output_executable_name/
+//   output_path/intermediate_path three lines (with column-aligned spaces),
+//   no output_type line;
+//   test shape (no_output = true): the output_type = .NO_OUTPUT line plus an
+//   unaligned intermediate_path line, no executable name/path lines.
+// The Test shape is byte-locked by tests/data/transpile/golden/*/first.jai;
+// the executable shape is locked by the inline tests in
+// tests/metaprogram_tests.jai.
 //
-// 哨兵约定（票 0033 特例）：testing_view_dir == "" 表示「未启用 Testing
-// 模块编译视图特例」——与共享 testing_module_strip_view_dir 的返回值、
-// Test 的 testing_module_view、bootstrap build.jai 的 testing_view_dir
-// 同一约定（生成输出与特例前逐字节一致）。
+// Sentinel convention: testing_view_dir == "" means "the Testing module
+// compile view special case is disabled" — the same convention as the shared
+// testing_module_strip_view_dir's return value, Test's testing_module_view
+// and bootstrap build.jai's testing_view_dir (generated output stays
+// byte-identical to the pre-special-case shape).
 
 #import "Basic";
 #import "String";
@@ -28,9 +36,10 @@
 // directories (in emission order), and the single build file added after the
 // intercept begins. All paths must be "/" separated (the generator slashes
 // the ones it quotes anyway). testing_view_dir follows the "" sentinel
-// convention above. very_optimized（票 0052）：true 时在 set_build_options
-// 前发射 set_optimization(.VERY_OPTIMIZED)——默认 false 零发射，既有消费方
-// 的输出逐字节不变（bootstrap 的 release 验证路径靠它保留）。
+// convention above. very_optimized: when true, emits
+// set_optimization(.VERY_OPTIMIZED) before set_build_options — false by
+// default emits nothing, so existing consumers' output stays byte-identical
+// (bootstrap's release verification path relies on it).
 Compiler_Metaprogram_Options :: struct {
     workspace_name:    string;
     no_output:         bool = false;
@@ -67,7 +76,7 @@ generate_compiler_metaprogram :: (options: Compiler_Metaprogram_Options) -> stri
     print_to_builder(*builder, "    import_paths: [..] string;\n");
     print_to_builder(*builder, "    array_add(*import_paths, .. options.import_path);\n");
     if options.testing_view_dir != "" {
-        // Testing module compile view special case (ticket 0033): the view
+        // Testing module compile view special case: the view
         // directory is prepended so `#import "Testing"` resolves to the
         // test-free view instead of the module source file.
         print_to_builder(*builder, "    array_add(*import_paths, %1);\n", quote_jai_string(options.testing_view_dir));
@@ -77,8 +86,8 @@ generate_compiler_metaprogram :: (options: Compiler_Metaprogram_Options) -> stri
     }
     print_to_builder(*builder, "    options.import_path = import_paths;\n");
     if options.very_optimized {
-        // 票 0052：bootstrap 的 release 验证路径——仅在非默认时发射，既有
-        // 消费方的输出逐字节不变。
+        // Bootstrap's release verification path — emitted only when
+        // non-default, so existing consumers' output stays byte-identical.
         print_to_builder(*builder, "    set_optimization(*options, .VERY_OPTIMIZED);\n");
     }
     print_to_builder(*builder, "    set_build_options(options, workspace);\n");
@@ -87,7 +96,7 @@ generate_compiler_metaprogram :: (options: Compiler_Metaprogram_Options) -> stri
     // The message loop only consumes messages — jai exits non-zero on its
     // own when the intercepted workspace has errors, and calling exit() from
     // a metaprogram would kill the process before jai flushes the collected
-    // print output (ticket 0015 finding).
+    // print output.
     print_to_builder(*builder, "    while true {\n");
     print_to_builder(*builder, "        msg := compiler_wait_for_message();\n");
     print_to_builder(*builder, "        if !msg continue;\n");
@@ -104,7 +113,8 @@ generate_compiler_metaprogram :: (options: Compiler_Metaprogram_Options) -> stri
     return builder_to_string(*builder);
 }
 
-// 生成文本的字节形状测试（可执行形状逐字节锁定、测试形状关键行、哨兵
-// 开关、very_optimized 发射）驻 tests/metaprogram_tests.jai——本文件是
-// bootstrap 的 #load 目标，必须保持 test-free（票 0052；票 0053 测试组织
-// 规则）。
+// Byte-shape tests of the generated text (the executable shape is
+// byte-locked, the test shape's key lines, the sentinel switch and the
+// very_optimized emission) live in tests/metaprogram_tests.jai — this file
+// is bootstrap's #load target and must stay test-free (per the test
+// organization rule).

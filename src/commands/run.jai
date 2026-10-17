@@ -79,10 +79,11 @@ run_prepared_workspace :: (
 }
 
 // ---------------------------------------------------------------------------
-// 内联测试（票 0034 自旧 tests/ 迁移）：Run 目标选择与 launch
-// seam；E2E child 场景验证 run 经由 build 前置继承剥离语义。共享 helper
-// （test_launch_* 记录全局、run_juice_child 等 child 场景 helper）见
-// tests/test_support.jai。
+// Inline tests: Run's target selection and launch
+// seam; the E2E child scenario verifies that run inherits the strip
+// semantics through its build prerequisite. Shared helpers (the
+// test_launch_* record globals, run_juice_child and the other child
+// scenario helpers) live in tests/test_support.jai.
 // ---------------------------------------------------------------------------
 
 test "Run launches the selected prepared artifact" {

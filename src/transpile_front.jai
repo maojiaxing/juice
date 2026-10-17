@@ -1,20 +1,22 @@
 // ---------------------------------------------------------------------------
-// 剥离前端（票 0050，架构体检候选 2）：闭包探测、视图计算与生产 transpile
-// 步骤的 test-free 共享模块。
+// Strip front: the test-free shared module for closure probing, view
+// computation and the production transpile step.
 //
-// 三个消费方：
-// - bootstrap build.jai 以 #load 复用（metaprogram 编译单元不能包含 test
-//   block，#load 目标必须 test-free——本文件测试驻
-//   tests/transpile_front_tests.jai，先例 tests/transpile_tests.jai，票
-//   0053 测试组织规则）；
-// - Build command 与依赖剥离前端经程序级 #load 复用（main.jai 装载序：
-//   transpile.jai → transpile_cache.jai → 本文件，与 build.jai 的 #load 序
-//   对称）。
+// Three consumers:
+// - bootstrap build.jai reuses it via #load (a metaprogram compile unit
+//   cannot contain test blocks, so every #load target must be test-free —
+//   this file's tests live in tests/transpile_front_tests.jai, following the
+//   tests/transpile_tests.jai precedent and the test organization rule);
+// - the Build command and the dependency strip front reuse it via the
+//   program-level #load (main.jai load order: transpile.jai ->
+//   transpile_cache.jai -> this file, symmetric to build.jai's #load order).
 //
-// 两个 adapter 成立的真实 seam：视图落点与入口处理按 Strip_View_Layout
-// 参数化——CONTENT_ADDRESSED（runtime：内容寻址 + 缓存命中跳过写入，入口
-// 落盘）与 PLAIN（bootstrap：<base>/<rel> 恒写、入口视图留内存喂
-// add_build_string，行号偏移恒 +5）。报错前缀按消费方注入（error_prefix）。
+// Two adapters over the same real seam: the view landing and entry handling
+// are parameterized by Strip_View_Layout — CONTENT_ADDRESSED (runtime:
+// content-addressed + cache-hit-skip writing, the entry lands on disk) and
+// PLAIN (bootstrap: <base>/<rel> always written, the entry view is kept in
+// memory for add_build_string, with the constant +5 line offset). The error
+// prefix is injected per consumer (error_prefix).
 // ---------------------------------------------------------------------------
 
 #import "Basic";
@@ -22,9 +24,11 @@
 #import "File_Utilities";
 #import "String";
 
-// 路径分隔符归一为斜杠。本模块自包含的本地实现：bootstrap #load 本模块，
-// 不能依赖 path_safety/manifest 的运行时代码（与 path_safety.jai 的
-// path_slashes 同语义；bootstrap 的原本地复制随票 0050 删除）。
+// Normalize path separators to forward slashes. A self-contained local
+// implementation: bootstrap #loads this module and cannot depend on the
+// runtime code in path_safety/manifest (same semantics as path_safety.jai's
+// path_slashes; bootstrap's own local copy was deleted with the strip front
+// consolidation).
 front_slashes :: (path: string) -> string {
     result := copy_string(path);
     for i: 0..result.count-1 {
@@ -37,7 +41,7 @@ front_slashes :: (path: string) -> string {
 // path, mirroring the test command's Test_Source_File. A dependency closure
 // file's rel_path is relative to the dependency package root (views land
 // under deps/<name>/..., the path itself stays dependency-relative).
-// 原驻 dependency.jai（票 0049），票 0050 随剥离前端迁入。
+// Originally lived in dependency.jai; moved here with the strip front.
 Build_Source_File :: struct {
     rel_path: string;
     abs_path: string;
@@ -69,12 +73,13 @@ probe_visited :: (visited: [] string, rel_path: string) -> bool {
 
 // Probe one package's closure: DFS from the entry over literal in-package
 // #load edges, with `package_root` as the resolution boundary. Non-literal
-// and out-of-package targets are not followed (issue 0008 resolution 4).
-// Files are listed in DFS preorder — the entry first, then each load
-// target's subtree in statement order. The consumer package's build closure
-// (build.jai's probe_build_closure), dependency closures (dependency.jai 的
-// 依赖剥离前端) and the bootstrap closure (build.jai) share this probe.
-// error_prefix 由消费方注入（bootstrap 用 "[Build System] ❌ "）。
+// and out-of-package targets are not followed. Files are listed in DFS
+// preorder — the entry first, then each load target's subtree in statement
+// order. The consumer package's build closure (build.jai's
+// probe_build_closure), dependency closures (dependency.jai's dependency
+// strip front) and the bootstrap closure (build.jai) share this probe.
+// error_prefix is injected by the consumer (bootstrap uses
+// "[Build System] ❌ ").
 probe_package_closure :: (package_root: string, entry_rel: string, error_prefix: string = "[juice ERROR] ") -> [..] Build_Closure_File, bool {
     entry: Build_Source_File;
     entry.rel_path = entry_rel;
@@ -116,9 +121,9 @@ probe_package_closure :: (package_root: string, entry_rel: string, error_prefix:
     return files, true;
 }
 
-// 闭包全有全无判定的共享判定（issue 0008 决议 1/2）：任一文件含 test block
-// 即整闭包视图化。bootstrap 前端、Build command 前端与依赖剥离前端三处同
-// 体扫描收敛于此（票 0050）。
+// The shared all-or-nothing closure decision: any file containing a test
+// block views the whole closure. The bootstrap front, the Build command
+// front and the dependency strip front all converge on this one scan.
 closure_has_tests :: (closure: [] Build_Closure_File) -> bool {
     for file: closure {
         if file.has_tests return true;
@@ -126,24 +131,29 @@ closure_has_tests :: (closure: [] Build_Closure_File) -> bool {
     return false;
 }
 
-// 内容寻址缓存的 skip-existing 判定。本模块自包含的本地实现：bootstrap
-// #load 本模块，不能依赖 path_safety.jai 的运行时代码（其
-// path_exists_as_regular_file 经 inspect_path_entry 同语义——存在且是普通
-// 文件即跳过写入）。目标目录受「普通目录、非符号链接」约束（CONTEXT.md），
-// 视图路径上的符号链接是既有防御之外的同级边角；PLAIN 布局不经过本判定
-// （恒写）。
+// The content-addressed cache's skip-existing check. A self-contained local
+// implementation: bootstrap #loads this module and cannot depend on the
+// runtime code in path_safety.jai (its path_exists_as_regular_file has the
+// same semantics via inspect_path_entry — exists and is a regular file means
+// skip the write). The target directory is constrained to be a real
+// directory, not a symlink (CONTEXT.md); a symlink on a view path is a
+// same-level corner outside that existing defense. The PLAIN layout never
+// runs this check (always writes).
 front_view_exists :: (path: string) -> bool {
     return file_exists(path) && !is_directory(path);
 }
 
-// 视图落点与入口处理的两种布局（两个 adapter，真实 seam）：
-// - CONTENT_ADDRESSED：runtime——内容寻址视图路径（transpile_cache.jai 的
-//   transpile_view_path / transpile_dependency_view_path），缓存命中跳过写
-//   入（skip existing）；
-// - PLAIN：bootstrap——<transpile_dir>/<rel> 恒写、无缓存。票 0052 起入口
-//   同样落盘（bootstrap 改走「生成 + 子进程」，生成的 metaprogram 以
-//   add_build_file 编译入口视图，诊断精确文件+行号——add_build_string 的
-//   +5 偏移与「入口进内存」分支随之退役）。
+// The two view-landing and entry-handling layouts (two adapters, one real
+// seam):
+// - CONTENT_ADDRESSED: runtime — content-addressed view paths
+//   (transpile_cache.jai's transpile_view_path /
+//   transpile_dependency_view_path), cache hits skip the write;
+// - PLAIN: bootstrap — <transpile_dir>/<rel> always written, no cache. The
+//   entry now lands on disk like every other file (bootstrap switched to
+//   "generate + child process": the generated metaprogram compiles the entry
+//   view via add_build_file, with exact file+line diagnostics — the
+//   add_build_string +5 offset and the "entry into memory" branch are
+//   retired).
 Strip_View_Layout :: enum {
     CONTENT_ADDRESSED;
     PLAIN;
@@ -152,15 +162,15 @@ Strip_View_Layout :: enum {
 // Shared state of one closure's view computation: per-file states (0 =
 // uncomputed, 1 = computing, 2 = done) and the resulting view paths.
 // "Computing" re-entry means the literal in-package #load graph has a
-// cycle and the path rewrites cannot be resolved (issue 0008 resolution 2).
+// cycle and the path rewrites cannot be resolved.
 // dep_name non-empty marks a dependency closure: views land under
-// deps/<dep_name>/ instead of the tree root (票 0049). 原 Build_View_State
-// （dependency.jai，票 0049），票 0050 泛化迁入。
+// deps/<dep_name>/ instead of the tree root. Formerly Build_View_State
+// (dependency.jai); generalized and moved here.
 Strip_View_State :: struct {
     closure:       [] Build_Closure_File;
     transpile:     #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output;
-    transpile_dir: string;   // CONTENT_ADDRESSED：转译树根；PLAIN：视图基目录（绝对）
-    dep_name:      string;   // CONTENT_ADDRESSED 非空 → deps/<名> 子树
+    transpile_dir: string;   // CONTENT_ADDRESSED: transpile tree root; PLAIN: view base dir (absolute)
+    dep_name:      string;   // CONTENT_ADDRESSED non-empty -> deps/<name> subtree
     layout:        Strip_View_Layout;
     error_prefix:  string = "[juice ERROR] ";
     states:        [..] s64;
@@ -177,8 +187,8 @@ closure_index :: (state: *Strip_View_State, rel_path: string) -> (s64, bool) {
 
 // Compute one closure file's strip view in dependency order (children
 // first, Merkle chain) and write it per the state's layout. Returns the
-// absolute view path. 票 0052：两种布局的入口都落盘（PLAIN 的「入口进内
-// 存」分支随 add_build_string 退役）。
+// absolute view path. Both layouts land the entry on disk (the PLAIN
+// "entry into memory" branch retired with add_build_string).
 view_of_file :: (state: *Strip_View_State, index: s64) -> string, bool {
     if state.failed return "", false;
     if state.states[index] == 2 return state.view_paths[index], true;
@@ -250,8 +260,8 @@ view_of_file :: (state: *Strip_View_State, index: s64) -> string, bool {
 // derive the content-addressed cache key (path + source + mode + version +
 // load targets). The load rewrite table embeds the target views' hash
 // directories, so keys form a Merkle chain computable in dependency order.
-// 原驻 commands/build.jai（票 0049），票 0050 迁入——bootstrap 与 Build
-// command 共用同一生产步骤。
+// Originally lived in commands/build.jai; moved here so bootstrap and the
+// Build command share one production step.
 transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output {
     output: Build_File_Output;
     source, ok := read_entire_file(file.abs_path);
@@ -271,16 +281,21 @@ transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target) 
 }
 
 // ---------------------------------------------------------------------------
-// Testing 断言模块 STRIP 特例（票 0033 对称特例；票 0051 收口于此——bootstrap
-// 与 Build command 共用一份，此前两者各持同路径同哨兵的对称副本）：模块源文
-// 件内联 test block 后不可被 jai 直接编译，任何 `#import "Testing"` 的构建都
-// 必须解析到 test-free 的 STRIP 视图。本函数在每次编译前重写
-// <package_root>/target/testing-module/Testing.jai（session product，与 test
-// 命令的编译视图同路径——test 写 EXPAND、build/自举写 STRIP，各自运行前重
-// 写）。模块 test-free、缺失或不可读时返回 ""：metaprogram 输出与特例前字
-// 节一致，零变化。module_source 由消费方给定：bootstrap 传 cwd 相对
-// "modules/Testing.jai"，Build command 传 juice_modules_dir() 推导的绝对路径
-// （bootstrap 无法引用 path_safety 的运行时代码）。
+// The Testing module STRIP special case (the mirror of the Test-side special
+// case; consolidated here so bootstrap and the Build command share one copy,
+// where before each held a symmetric duplicate with the same path and
+// sentinel): the module source file cannot be compiled by jai directly once
+// test blocks are inlined, so any build that resolves `#import "Testing"`
+// must resolve to a test-free STRIP view. This function rewrites
+// <package_root>/target/testing-module/Testing.jai before every compile (a
+// session product, same path as the test command's compile view — test
+// writes EXPAND, build/bootstrap write STRIP, each rewritten before its own
+// run). A test-free, missing or unreadable module returns "": the
+// metaprogram output stays byte-identical to the pre-special-case shape,
+// zero change. module_source is supplied by the consumer: bootstrap passes a
+// cwd-relative "modules/Testing.jai", the Build command passes the absolute
+// path derived from juice_modules_dir() (bootstrap cannot reference the
+// runtime code in path_safety).
 // ---------------------------------------------------------------------------
 testing_module_strip_view_dir :: (package_root: string, module_source: string, error_prefix: string = "[juice ERROR] ") -> string {
     module_abs := front_slashes(module_source);

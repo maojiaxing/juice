@@ -238,10 +238,12 @@ revalidate_artifact_plan :: (plan: Artifact_Plan, package_root: string) -> bool 
 }
 
 // ---------------------------------------------------------------------------
-// 内联测试（票 0034 自旧 tests/ 迁移）：effective-target 与
-// artifact-plan 解析的回归测试。无名显式 target 用例锁住旧版 Juice 会把
-// "-exe ''" 送进编译器的声明形状——Windows 丢弃空参数使 "-output_path" 滑
-// 成裸输入文件。Fixture 路径派生自 juice_root()（tests/test_support.jai）。
+// Inline tests: effective-target and
+// artifact-plan resolution regressions. The unnamed-explicit-target case
+// locks in the declaration shape where the old Juice would pass "-exe ''"
+// through to the compiler — Windows drops empty arguments, which made
+// "-output_path" slip into a bare input file. Fixture paths derive from
+// juice_root() (tests/test_support.jai).
 // ---------------------------------------------------------------------------
 
 test "Resolution rejects an unnamed explicit target" {
@@ -285,7 +287,7 @@ test "Resolution builds a plan for a valid declaration" {
 
 // A LIB package is an import source: it declares no executable targets and
 // resolves to zero plans once its module.jai import entry is verified
-// （library_fixture_package 见 tests/test_support.jai）。
+// (library_fixture_package lives in tests/test_support.jai).
 
 test "Library package rejects executable targets" {
     pkg := library_fixture_package();
@@ -296,7 +298,7 @@ test "Library package rejects executable targets" {
 
 test "Library package requires a module.jai import entry" {
     pkg := library_fixture_package();
-    pkg.dir = juice_root();  // 仓库根没有 module.jai
+    pkg.dir = juice_root();  // The repository root has no module.jai
     result := resolve_artifact_plans(pkg);
     expect(!result.success && result.error == .MODULE_ENTRY_NOT_FOUND && result.plans.count == 0);
 }

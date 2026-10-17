@@ -33,9 +33,10 @@ main :: () {
 
     ctx: Command_Context;
     ctx.root_dir = get_working_directory();
-    // Juice 管理的缓存（manifest 求值临时文件、git 仓库缓存）落 XDG cache
-    // home；packages_dir 等其余派生路径由各自持有者从 root_dir 推导
-    // （票 0038：Build_Driver 拆解）。
+    // The caches Juice manages (manifest evaluator temp files, git repo
+    // caches) land in the XDG cache home; the other derived paths
+    // (packages_dir etc.) are derived from root_dir by their respective
+    // owners (after the Build_Driver teardown).
     ctx.cache_dir = tprint("%1/juice", get_cache_home());
     result := dispatch_command(COMMAND_REGISTRY, command, *ctx, command_arguments);
     if !result.success exit(1);

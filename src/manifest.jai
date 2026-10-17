@@ -62,11 +62,13 @@ build_eval_code :: (manifest_path: string, output_path: string) -> string {
     append(*builder, "        print_to_builder(*builder, \"DEP=%1|%2|%3|%4\\n\", dep.name, dep.version, dep.source, dep.package);\n");
     append(*builder, "    }\n\n");
 
-    // 写失败必须让 child 以非零退出码失败（票 0035）：旧实现静默忽略写入
-    // 结果，child 退出码仍为 0，父进程会把陈旧/缺失数据当作成功——偶发
-    // workspace member 丢失或 "Failed to fetch dependency"。退出码 2 是
-    // 「manifest 数据写失败」专用信号，父进程据此重试；manifest 编译错误等
-    // 其他失败仍是退出码 1，不触发重试。
+    // A write failure must fail the child with a nonzero exit code: the old
+    // implementation silently ignored the write result, the child still
+    // exited 0, and the parent treated stale/missing data as success —
+    // occasionally losing a workspace member or reporting "Failed to fetch
+    // dependency". Exit code 2 is the dedicated "manifest data write failed"
+    // signal the parent retries on; other failures (manifest compile errors
+    // etc.) stay exit code 1 and never trigger a retry.
     append(*builder, "    if !write_entire_file(\"");
     append(*builder, clean_output);
     append(*builder, "\", builder_to_string(*builder)) {\n");
@@ -197,11 +199,13 @@ parse_manifest_data :: (content: string) -> Package {
     return result.package;
 }
 
-// FNV-1a 64 位散列 → 16 位小写十六进制（本地复制：与 src/transpile_cache.jai
-// 的 hash_hex 同语义）。#load 注入的声明跨文件共享（如 to_forward_slashes），
-// 但仅对 #load 语句之后加载的文件可见：main.jai 中 manifest.jai 先于
-// transpile_cache.jai 加载，故此处不可见 hash_hex 声明；调整 #load 顺序会
-// 牵动生产构建链（transpile_cache 依赖 transpile.jai 的类型），保持复制。
+// FNV-1a 64-bit hash rendered as 16 lowercase hex characters (a local copy:
+// same semantics as src/transpile_cache.jai's hash_hex). Declarations
+// injected via #load are shared across files (like to_forward_slashes) but
+// only visible to files loaded after the #load statement: main.jai loads
+// manifest.jai before transpile_cache.jai, so hash_hex is not visible here;
+// reordering the #loads would ripple through the production build chain
+// (transpile_cache depends on transpile.jai's types), so the copy stays.
 manifest_hash_hex :: (s: string) -> string {
     hash := fnv1a_hash(s.data, s.count);
     out: [16] u8;
@@ -212,12 +216,15 @@ manifest_hash_hex :: (s: string) -> string {
     return copy_string(to_string(out.data, 16));
 }
 
-// 临时文件命名（票 0035）：manifest 求值器的临时文件曾共享固定名
-// （eval_manifest.jai / manifest_data.txt）——连序或并发的求值 child 进程
-// 互相覆盖：前一 child 写完的文件被瞬时锁定（AV），后一 child 写失败却静默
-// 读到陈旧 manifest 数据（偶发 workspace member 丢失）。现按被求值 manifest
-// 的绝对路径散列命名：不同 manifest 绝不同名，跨进程互不干扰；同一 manifest
-// 的并发求值内容相同，同名无害。
+// Temp file naming: the manifest evaluator's temp files used to share fixed
+// names (eval_manifest.jai / manifest_data.txt) — sequential or concurrent
+// evaluator child processes overwrote each other: a file written by one
+// child got transiently locked (AV), and a later child whose write failed
+// silently read stale manifest data (occasionally losing a workspace
+// member). Names now hash the absolute path of the manifest being
+// evaluated: distinct manifests never collide across processes; concurrent
+// evaluations of the same manifest produce identical content, so the shared
+// name is harmless.
 manifest_temp_file_names :: (cache_dir: string, pkg_dir: string) -> (string, string) {
     stem := manifest_hash_hex(pkg_dir);
     eval_src := to_forward_slashes(tprint("%1/eval_manifest_%2.jai", cache_dir, stem));
@@ -245,9 +252,12 @@ load_package_manifest :: (cache_dir: string, pkg_dir: string) -> Package, bool {
     bin_dir  := path_strip_filename(exe_path);
     global_modules_dir := to_forward_slashes(tprint("%1/../modules", bin_dir));
 
-    // 数据写失败（退出码 2）重试至多两次（票 0035）：瞬时文件锁（AV 等）随
-    // 重试消失；重试沿用同一临时文件对（同 manifest 同名，写入失败前文件
-    // 内容未变，重试直接覆盖）。其余非零退出码是真正的求值失败，立即报错。
+    // Retry a data-write failure (exit code 2) at most twice: transient file
+    // locks (AV etc.) disappear across retries; each retry reuses the same
+    // temp file pair (same manifest, same names, and a file that failed to
+    // write has unchanged content, so the retry just overwrites it). Any
+    // other nonzero exit code is a real evaluation failure and errors out
+    // immediately.
     attempts := 0;
     while true {
         result := run_command("jai", temp_eval_src, "-import_dir", global_modules_dir, "-quiet");

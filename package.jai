@@ -1,8 +1,8 @@
 #import "Juice";
 
-// Juice 自举（ticket 0023）：仓库自身是 BIN package，target 为自身入口，
-// 使 `juice test` 于仓库根可运行（test 经 workspace 准备调用消费 prepared
-// workspace）。
+// Juice bootstrap: the repository itself is a BIN package whose target is
+// its own entry, so `juice test` runs at the repository root (test consumes
+// the prepared workspace through the workspace preparation call).
 PACKAGE :: Package.{
     name    = "juice",
     version = "0.1.0",

@@ -44,9 +44,9 @@ get_user_home_directory :: () -> string {
     }
 }
 
-// 票 0038：get_config_home/get_data_home 曾只服务 Build_Driver 的
-// config_dir/data_dir 死字段，随拆解删除（get_cache_home 保留，manifest
-// 求值器与 git 缓存用）。
+// get_config_home/get_data_home once served only the Build_Driver's
+// config_dir/data_dir dead fields and were deleted with that teardown
+// (get_cache_home stays — the manifest evaluator and the git cache use it).
 
 get_cache_home :: () -> string {
 	#if OS == .WINDOWS {

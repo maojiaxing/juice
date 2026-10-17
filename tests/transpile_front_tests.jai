@@ -1,22 +1,27 @@
 // ---------------------------------------------------------------------------
-// 剥离前端测试（票 0050 新建，2 块自 commands/build.jai 迁入；2026-10-14 测
-// 试组织规则后驻 tests/——票 0053）。
+// Strip front tests (created for the strip front; 2 blocks moved in from
+// commands/build.jai; living in tests/ per the 2026-10-14 test organization
+// rule).
 //
-// 关键约束（与 transpile_tests.jai 同）：src/transpile_front.jai 是 build.jai
-// 的 #load 目标——test block 随 metaprogram 编译期文本包含会非法，该文件必
-// 须保持 test-free。测试块因此不能内联，按测试组织规则驻 tests/ 本文件：不
-// 被任何 #load 引用（不进入口闭包、不进发布产物），Test discovery 全包扫描
-// 收录进测试程序。本文件仅含 test block；生产代码零耦合。
+// Key constraint (same as transpile_tests.jai): src/transpile_front.jai is
+// build.jai's #load target — test blocks would be illegal inside a
+// metaprogram compile-time text inclusion, so that file must stay test-free.
+// The test blocks therefore cannot be inlined and live in tests/ (this
+// file): referenced by no #load (outside the entry closure, outside the
+// release product), collected into the test program by Test discovery's
+// full-package scan. This file contains only test blocks; zero production
+// code coupling.
 //
-// 共享声明（juice_root、build_seam_write、fake_build_transpile 等 seam fake
-// 与记录全局）见 tests/test_support.jai（组织决议 0027），测试程序程序级共享。
+// Shared declarations (juice_root, build_seam_write, fake_build_transpile
+// and the other seam fakes and record globals) live in
+// tests/test_support.jai, program-level shared in the test program.
 // ---------------------------------------------------------------------------
 
 #import "Basic";
 #import "Testing";
 
 // ---------------------------------------------------------------------------
-// 生产 transpile 步骤（自 commands/build.jai 迁入，票 0050）
+// The production transpile step (moved here from commands/build.jai)
 // ---------------------------------------------------------------------------
 
 // The real per-file step strips fixture test blocks and derives the
@@ -36,7 +41,7 @@ test "Real build transpile step strips fixture tests" {
 }
 
 // Only literal in-package #load targets are rewritten: non-literal and
-// out-of-package statements stay verbatim (issue 0008 resolution 4).
+// out-of-package statements stay verbatim.
 test "Build strip keeps unrewritable loads verbatim" {
     root := tprint("%1/target/build-strip-verbatim", juice_root());
     delete_directory_full(root);
@@ -55,12 +60,13 @@ test "Build strip keeps unrewritable loads verbatim" {
 }
 
 // ---------------------------------------------------------------------------
-// PLAIN 布局（bootstrap 策略，票 0050）：<base>/<rel> 恒写、入口进内存
+// PLAIN layout (the bootstrap strategy): <base>/<rel> always written
 // ---------------------------------------------------------------------------
 
-// 入口与其他文件同样落盘（票 0052：bootstrap 改走「生成 + 子进程」后，生
-// 成的 metaprogram 以 add_build_file 编译入口视图——PLAIN 布局不再有「入
-// 口进内存」分支，诊断精确文件+行号）。
+// The entry lands on disk like every other file (bootstrap switched to
+// "generate + child process": the generated metaprogram compiles the entry
+// view via add_build_file — the PLAIN layout no longer has an
+// "entry into memory" branch, and diagnostics are exact file+line).
 test "Strip front: PLAIN layout writes the entry view to disk" {
     root := tprint("%1/target/front-plain-entry", juice_root());
     delete_directory_full(root);
@@ -85,13 +91,14 @@ test "Strip front: PLAIN layout writes the entry view to disk" {
     expect(found);
     entry_path, ok2 := view_of_file(*state, entry_index);
     expect(ok2 && entry_path == tprint("%1/target/transpile/bootstrap/src/main.jai", root));
-    // 入口与子视图都落盘（依赖序：helper 先于入口）。
+    // Both the entry and the child views land on disk (dependency order:
+    // helper before entry).
     expect(file_exists(entry_path));
     expect(file_exists(tprint("%1/target/transpile/bootstrap/src/helper.jai", root)));
 }
 
-// PLAIN 布局无缓存语义：已存在的视图每次重写（与 CONTENT_ADDRESSED 的
-// skip-existing 相反）。
+// The PLAIN layout has no cache semantics: an existing view is rewritten
+// every time (the opposite of CONTENT_ADDRESSED's skip-existing).
 test "Strip front: PLAIN layout always rewrites existing views" {
     root := tprint("%1/target/front-plain-rewrite", juice_root());
     delete_directory_full(root);
@@ -99,7 +106,8 @@ test "Strip front: PLAIN layout always rewrites existing views" {
     expect(build_seam_write(root, "src/main.jai", "#load \"helper.jai\";\n\nmain :: () {}\n"));
     expect(build_seam_write(root, "src/helper.jai", "helper :: () -> s32 { return 1; }\n\ntest \"helper test\" {\n}\n"));
 
-    // 陈旧视图占位：PLAIN 恒写语义下必须被重写（CONTENT_ADDRESSED 则跳过）。
+    // Stale view placeholder: the PLAIN always-write semantics must rewrite
+    // it (CONTENT_ADDRESSED would skip it).
     helper_view := tprint("%1/target/transpile/bootstrap/src/helper.jai", root);
     expect(build_seam_write(root, "target/transpile/bootstrap/src/helper.jai", "// stale\n"));
 
@@ -125,11 +133,11 @@ test "Strip front: PLAIN layout always rewrites existing views" {
 }
 
 // ---------------------------------------------------------------------------
-// 探测与全有全无判定（票 0050）
+// Probing and the all-or-nothing decision
 // ---------------------------------------------------------------------------
 
-// 全有全无判定：任一文件含 test block 即整闭包视图化（issue 0008 决议
-// 1/2）；全 test-free 闭包零转译。
+// The all-or-nothing decision: any file containing a test block views the
+// whole closure; an all-test-free closure gets zero transpile.
 test "Strip front: closure_has_tests detects any test block" {
     root := tprint("%1/target/front-has-tests", juice_root());
     delete_directory_full(root);
@@ -143,7 +151,8 @@ test "Strip front: closure_has_tests detects any test block" {
     expect(ok2 && closure_has_tests(dirty));
 }
 
-// 入口文件不存在：探测失败（files 空、ok false），调用方跳过构建。
+// A missing entry file fails the probe (files empty, ok false) and the
+// caller skips the build.
 test "Strip front probe: a missing entry file fails the probe" {
     root := tprint("%1/target/front-probe-missing", juice_root());
     delete_directory_full(root);
@@ -153,10 +162,12 @@ test "Strip front probe: a missing entry file fails the probe" {
 }
 
 // ---------------------------------------------------------------------------
-// Testing 模块 STRIP 特例（票 0051 收口：bootstrap 与 Build command 共用）
+// The Testing module STRIP special case (consolidated here: bootstrap and
+// the Build command share it)
 // ---------------------------------------------------------------------------
 
-// 模块 test-free：零动作（返回 "" 哨兵、不创建视图目录）。
+// A test-free module: zero action (returns the "" sentinel, no view
+// directory created).
 test "Strip front: Testing module view disabled for a test-free module" {
     root := tprint("%1/target/front-testing-clean", juice_root());
     delete_directory_full(root);
@@ -168,8 +179,9 @@ test "Strip front: Testing module view disabled for a test-free module" {
     expect(!file_exists(tprint("%1/target/testing-module", root)));
 }
 
-// 模块含 test block：STRIP 视图写 <root>/target/testing-module/Testing.jai
-// （与 test 命令的编译视图同路径），返回值是其目录。
+// A module containing test blocks: the STRIP view is written to
+// <root>/target/testing-module/Testing.jai (same path as the test command's
+// compile view), and the return value is its directory.
 test "Strip front: Testing module STRIP view writes to the package target" {
     root := tprint("%1/target/front-testing-view", juice_root());
     delete_directory_full(root);
