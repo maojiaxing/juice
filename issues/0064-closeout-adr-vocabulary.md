@@ -34,7 +34,7 @@ blocked-by: [0061, 0062, 0063]
 **验证结果（四接缝全量复核）：**
 
 - 接缝 1（三路径不变式，先清 target/transpile）：`jai build.jai`（debug）+ `jai build.jai - release` 构建成功；`./target/juice.exe test` debug 与 release 产物各验一遍 = **exit 0** + latch「Testing module register stays clean between tests」**5/0** + **30 GOLDEN PASS**（无 JUICE_UPDATE_GOLDEN 运行）+ **242 passed, 0 failed**；`juice build` 自构建绿（exe 复制为 target/juice-build.exe 运行，毕后删除——LNK1104 规避）。
-- 接缝 2（转译输出契约面）：transpile_tests / transpile_front_tests / metaprogram_tests 逐字节未改、原样通过；golden/negative/run 矩阵零重定。
+- 接缝 2（转译输出契约面）：transpile_front_tests / metaprogram_tests 逐字节未改、原样通过；transpile_tests 按 0062 缓存键契约测试演化（11 行——成分注释 + 异管线/缺省值断言）；golden/negative/run 矩阵零重定（唯一 UPDATE 运行在 0062——7/7 golden driver.jai 哈希列一次性重定，0062 偏差 1）。
 - 接缝 3（插件接口姊妹测试）：tests/transpile_plugin_tests.jai 13 块全绿（0061 的 10 + 0062 的 2 + 0063 显式声明 1——合成第三插件：探测聚合 / 派发三通道 / 跨文件状态续走 / 模式适用性 / 缓存键敏感性 / ADR 0005 违反拒绝）。
 - 接缝 4（Package 配置面）：manifest 内联 9 块 + transpile_config 内联 4 块 + 姊妹文件显式声明 1 块 + 组装接线 2 块 + E2E 2 块（pipeline-explicit / pipeline-unknown）全绿。
 - 工作树位于 jai/juice-0064-implement（父目录 = jai/），`../jaix` / `../jaix-cli` 自然解析（0061 偏差 1 同款布局）——jaix 系 E2E（pre-step build/test、monorepo）原样通过，无 junction 挂载。
