@@ -15,10 +15,11 @@
 // The scan contract: recursive from the package root, excluding dot entries
 // at any depth, non-lowercase-.jai files, the root manifest, the root-level
 // target/ (the mirror landing spot — excluded to prevent recursion),
-// workspace member subtrees (boundary from the discovery snapshot) and
-// links of any kind; enumeration order is the same deterministic DFS — per
-// directory, files first (lexicographic) then subdirectories
-// (lexicographic). The walk itself is the shared scan walk
+// jaix driver litter (spec 054 decision 5 — the shared predicate in
+// src/scan_walk.jai), workspace member subtrees (boundary from the
+// discovery snapshot) and links of any kind; enumeration order is the same
+// deterministic DFS — per directory, files first (lexicographic) then
+// subdirectories (lexicographic). The walk itself is the shared scan walk
 // (src/scan_walk.jai); this module owns only the jaix exclusion set and the
 // jaix-specific error message. Two additions over the test discovery set:
 // the marker's config file is skipped (jaix's parser cannot round-trip the
@@ -106,7 +107,10 @@ jaix_collect_directory_excluded :: (info: *File_Visit_Info, collect: *Jaix_Colle
 // marker's config file (jaix's parser cannot round-trip the config shape —
 // `X :: #import "X"` — and the config is jaix's compile-time input, not a
 // transpile input; spec 055 decision 5's "scanned, identity view harmless"
-// premise does not hold), and files containing juice test blocks — the
+// premise does not hold), jaix driver litter (spec 054 decision 5 —
+// content-based and unconditional, so legacy pre-dot-prefix hash-named
+// litter is excluded too; the shared predicate lives in src/scan_walk.jai),
+// and files containing juice test blocks — the
 // mixed-package seam: jaix cannot parse test blocks without its test block
 // plugin, and the marker config excludes that plugin (US 18 double
 // processing exclusion), so juice's own test block files keep their
@@ -117,6 +121,7 @@ jaix_collect_file_excluded :: (info: *File_Visit_Info, collect: *Jaix_Collect_Co
     if !ends_with(info.short_name, ".jai") return true;
     if info.short_name == "package.jai" && paths_equal(scan_entry_parent(info.full_name), collect.root) return true;
     if collect.config_rel != "" && paths_equal(scan_rel_path(info.full_name, collect.root), collect.config_rel) return true;
+    if is_jaix_driver_litter(info.full_name) return true;
     source, ok := read_entire_file(info.full_name, log_errors = false);
     if ok && source_has_test_block(source) return true;
     return false;
@@ -274,6 +279,40 @@ test "Jaix front: the scan applies the exclusion set in scan order" {
         "src/main.jai",
         "src/sub/deep.jai",
         "src/target/ok.jai",
+    ];
+    if files.count != expected.count {
+        print("[jaix scan] got %1 files, want %2\n", files.count, expected.count);
+        for file: files print("[jaix scan] got %\n", file.rel_path);
+    }
+    expect(files.count == expected.count);
+    for i: 0..expected.count-1 {
+        expect(files[i].rel_path == expected[i]);
+        expect(files[i].abs_path == tprint("%1/%2", root, expected[i]));
+    }
+}
+
+// Driver litter joins the file exclusion set (spec 054 decision 5): the
+// content check is unconditional — no jaix marker gating — so legacy
+// pre-dot-prefix hash-named litter is excluded too; a user file that
+// mentions the marker not at line start stays scanned. The config skip and
+// the test block skip stay their own rules.
+test "Jaix front: the scan excludes driver litter" {
+    root := tprint("%1/target/jaix-front-driver-litter", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "package.jai", "PACKAGE :: Package.{};\n"));
+    expect(build_seam_write(root, "9f1120f8dbedfeaa.jai", "#import \"Basic\";\n#import \"Compiler\";\n#import \"File\";\n\n#load \"C:/pkg/jaix.config.jai\";\n\n#run {\n    set_build_options_dc(.{do_output=false});\n    main();\n}\n\n// jaix transpile driver：JAIX_TRANSPILE_PROTOCOL=2\n"));
+    expect(build_seam_write(root, "src/main.jai", "main :: () {}\n"));
+    expect(build_seam_write(root, "src/indented.jai", "    // jaix transpile driver indented\n"));
+
+    prepared: Prepared_Workspace;
+    prepared.discovery.root_dir = root;
+    prepared.discovery.root_package = .{name = "root", version = "1", jaix = .{config = "jaix.config.jai"}};
+    files, ok := collect_jaix_files(*prepared);
+    expect(ok);
+    expected := string.[
+        "src/indented.jai",
+        "src/main.jai",
     ];
     if files.count != expected.count {
         print("[jaix scan] got %1 files, want %2\n", files.count, expected.count);

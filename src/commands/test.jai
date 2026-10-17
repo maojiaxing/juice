@@ -520,7 +520,9 @@ generate_test_driver :: (files: [] Test_Source_File, view_paths: [] string, matc
 // lowercase ".jai" test source from the package root. Dot entries are
 // excluded at any depth; the root-level target/ (managed products),
 // tests/data/ (fixture directory), modules/ (module directory) and the scan
-// root's own manifest are excluded; workspace member subtrees are pruned via
+// root's own manifest are excluded; jaix driver litter (a line in the file
+// head starting with the driver marker — the shared predicate in
+// src/scan_walk.jai) is excluded; workspace member subtrees are pruned via
 // the discovery snapshot (members run their tests as their own root);
 // symlinks and junctions are not followed. Enumeration order is the scan
 // order: a deterministic DFS where each directory yields its files first
@@ -570,12 +572,16 @@ collect_directory_is_excluded :: (info: *File_Visit_Info, collect: *Test_Collect
 }
 
 // File-side exclusions: dot entries at any depth, non-lowercase-.jai
-// extensions, and the scan root's own manifest (a nested source
-// file that happens to be named package.jai is user code and stays scanned).
+// extensions, the scan root's own manifest (a nested source
+// file that happens to be named package.jai is user code and stays
+// scanned), and jaix driver litter (spec 054 decision 5 — content-based
+// and unconditional, so legacy pre-dot-prefix hash-named litter is
+// excluded too; the shared predicate lives in src/scan_walk.jai).
 collect_file_is_excluded :: (info: *File_Visit_Info, collect: *Test_Collect_Context) -> bool {
     if info.short_name.count > 0 && info.short_name[0] == #char "." return true;
     if !ends_with(info.short_name, ".jai") return true;
     if info.short_name == "package.jai" && paths_equal(scan_entry_parent(info.full_name), collect.root) return true;
+    if is_jaix_driver_litter(info.full_name) return true;
     return false;
 }
 
@@ -968,6 +974,44 @@ test "Collection applies the exclusion set in scan order" {
     for i: 0..expected.count-1 {
         expect(files[i].rel_path == expected[i]);
         expect(files[i].abs_path == tprint("%1/tests/data/scan-fixture/%2", juice_root(), expected[i]));
+    }
+}
+
+// Driver litter (spec 054 decision 5): a scanned file whose head carries
+// the jaix driver marker is generated litter, not package source — the
+// content check is unconditional (test discovery knows nothing of jaix
+// markers), so legacy pre-dot-prefix hash-named litter is excluded too.
+// User files that mention the marker past the head window or not at line
+// start stay scanned.
+test "Collection excludes jaix driver litter" {
+    root := tprint("%1/target/collect-driver-litter", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "e99c791055012844.jai", "#import \"Basic\";\n#import \"Compiler\";\n#import \"File\";\n\n#load \"C:/pkg/config.jai\";\n\n#run {\n    set_build_options_dc(.{do_output=false});\n    main();\n}\n\n// jaix transpile driver：JAIX_TRANSPILE_PROTOCOL=2\n"));
+    expect(build_seam_write(root, "src/main.jai", "main :: () {}\n"));
+    filler: String_Builder;
+    for 1..40 append(*filler, "// a long filler comment line with no marker in it\n");
+    append(*filler, "// jaix transpile driver mention beyond the window\n");
+    expect(build_seam_write(root, "src/mention.jai", builder_to_string(*filler)));
+    expect(build_seam_write(root, "src/indented.jai", "    // jaix transpile driver indented\n"));
+
+    prepared: Prepared_Workspace;
+    prepared.discovery.root_dir = root;
+    files, ok := collect_test_files(*prepared);
+    expect(ok);
+    expected := string.[
+        "src/indented.jai",
+        "src/main.jai",
+        "src/mention.jai",
+    ];
+    if files.count != expected.count {
+        print("[collect] got %1 files, want %2\n", files.count, expected.count);
+        for file: files print("[collect] got %\n", file.rel_path);
+    }
+    expect(files.count == expected.count);
+    for i: 0..expected.count-1 {
+        expect(files[i].rel_path == expected[i]);
+        expect(files[i].abs_path == tprint("%1/%2", root, expected[i]));
     }
 }
 

@@ -18,6 +18,10 @@
 // failure channel; the message is the consumer's ("test sources" vs "jaix
 // sources" stay distinct).
 //
+// The jaix driver litter predicate (spec 054 decision 5/6) also lives
+// here — one implementation, referenced by both wrappers' file exclusion
+// predicates.
+//
 // Loaded by main.jai before jaix_front.jai and commands/test.jai, and not
 // #loaded by the bootstrap build.jai metaprogram directly, so inline test
 // blocks are allowed (they enter the bootstrap closure through src/main.jai
@@ -169,11 +173,58 @@ sort_scan_entries :: (entries: [] Scan_Entry) {
 }
 
 // ---------------------------------------------------------------------------
+// Driver litter exclusion (spec 054 decision 5, ticket 0058): a scanned
+// .jai file is generated jaix driver litter, not package source, when a
+// line in its head starts with the literal marker comment. The jaix CLI
+// writes the marker as the driver's identification line —
+// "// jaix transpile driver：JAIX_TRANSPILE_PROTOCOL=…" — right after the
+// imports/#load/#run preamble (measured on disk: the first line is
+// "#import \"Basic\";" and the marker sits within the first ~400 bytes), so
+// the match scans lines inside a bounded head window — a partial read,
+// never the whole file; the scan is the hot path. The protocol version
+// after the literal prefix does not participate in the match: stable
+// across jaix versions. Content-based rather than name-based, and
+// unconditional (no jaix marker gating): legacy pre-dot-prefix hash-named
+// litter is excluded too. An unreadable file is not litter — the real
+// diagnostic is the consumer's (the transpile step or the compile).
+// ---------------------------------------------------------------------------
+
+// The literal marker prefix; a litter line starts with it at column 0.
+JAIX_DRIVER_MARKER :: "// jaix transpile driver";
+
+// Head window in bytes the litter check inspects. The real driver's marker
+// line sits within the first ~400 bytes (imports, the #load config line,
+// the #run block), so a small bounded read covers it with margin.
+DRIVER_HEAD_SCAN_LIMIT :: 1024;
+
+is_jaix_driver_litter :: (path: string) -> bool {
+    f, open_ok := file_open(path);
+    if !open_ok return false;
+    defer file_close(*f);
+    buffer: [DRIVER_HEAD_SCAN_LIMIT] u8;
+    read_ok, count := file_read(f, buffer.data, DRIVER_HEAD_SCAN_LIMIT);
+    if !read_ok return false;
+    head: string;
+    head.data = buffer.data;
+    head.count = count;
+    rest := head;
+    while true {
+        found, line, tail := split_from_left(rest, #char "\n");
+        // CRLF tolerance: a trailing carriage return stays out of the match.
+        if line.count > 0 && line[line.count-1] == #char "\r" line.count -= 1;
+        if starts_with(line, JAIX_DRIVER_MARKER) return true;
+        if !found break;
+        rest = tail;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // Inline tests: the walk skeleton matrix — one custom exclusion set
 // exercises the orchestration, the enumeration order, the failure channel
 // and the path helpers once (the consumers' own matrices cover their
-// exclusion sets). build_seam_write and juice_root live in
-// tests/test_support.jai.
+// exclusion sets), plus the driver litter predicate matrix.
+// build_seam_write and juice_root live in tests/test_support.jai.
 // ---------------------------------------------------------------------------
 
 Scan_Test_Context :: struct {
@@ -244,4 +295,68 @@ test "Scan walk: the path helpers" {
     expect(scan_rel_path("C:/pkg/src/main.jai", "C:/pkg") == "src/main.jai");
     expect(scan_rel_path("C:/pkg/main.jai", "C:/pkg/") == "main.jai");
     expect(scan_rel_path("C:/pkg", "C:/pkg") == "C:/pkg");
+}
+
+// The driver litter predicate matrix: the real on-disk driver shape (the
+// marker sits after the imports/#load/#run preamble, not on the first
+// line), the first-line variant, the literal prefix-only match, CRLF
+// tolerance, and the no-false-positive faces (marker past the head window,
+// marker not at column 0, unreadable file).
+test "Driver litter: the head marker identifies real and legacy drivers" {
+    root := tprint("%1/target/driver-litter", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(make_directory_if_it_does_not_exist(root, recursive = true));
+
+    // The real driver shape, hash-named without a dot (legacy
+    // pre-dot-prefix jaix): the marker line is not the first line.
+    driver := tprint("%1/aabbccddeeff00112233.jai", root);
+    expect(write_entire_file(driver, "#import \"Basic\";\n#import \"Compiler\";\n#import \"File\";\n\n#load \"C:/pkg/config.jai\";\n\n#run {\n    set_build_options_dc(.{do_output=false});\n    main();\n}\n\n// jaix transpile driver：JAIX_TRANSPILE_PROTOCOL=2\n// jaix transpile driver root_dir = C:/pkg\n"));
+    expect(is_jaix_driver_litter(driver));
+
+    // A marker on the first line matches too.
+    first_line := tprint("%1/first-line.jai", root);
+    expect(write_entire_file(first_line, "// jaix transpile driver：JAIX_TRANSPILE_PROTOCOL=1\n"));
+    expect(is_jaix_driver_litter(first_line));
+
+    // The literal prefix alone decides; the content after it does not
+    // participate in the match.
+    prefix_only := tprint("%1/prefix-only.jai", root);
+    expect(write_entire_file(prefix_only, "// jaix transpile driver anything after\n"));
+    expect(is_jaix_driver_litter(prefix_only));
+}
+
+test "Driver litter: CRLF line endings tolerate the carriage return" {
+    root := tprint("%1/target/driver-litter-crlf", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(make_directory_if_it_does_not_exist(root, recursive = true));
+    crlf := tprint("%1/crlf.jai", root);
+    expect(write_entire_file(crlf, "#import \"Basic\";\r\n#load \"c.jai\";\r\n// jaix transpile driver root_dir = C:/pkg\r\n"));
+    expect(is_jaix_driver_litter(crlf));
+}
+
+test "Driver litter: user files stay in — marker past the head window or not at line start" {
+    root := tprint("%1/target/driver-litter-keep", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(make_directory_if_it_does_not_exist(root, recursive = true));
+
+    // The marker past the bounded head window: a user file mentioning the
+    // driver convention deep in its body stays scanned.
+    filler: String_Builder;
+    for 1..40 append(*filler, "// a long filler comment line with no marker in it\n");
+    append(*filler, "// jaix transpile driver mention beyond the window\n");
+    deep := tprint("%1/deep.jai", root);
+    expect(write_entire_file(deep, builder_to_string(*filler)));
+    expect(!is_jaix_driver_litter(deep));
+
+    // The marker not at column 0: an indented mention stays scanned.
+    indented := tprint("%1/indented.jai", root);
+    expect(write_entire_file(indented, "    // jaix transpile driver indented\n"));
+    expect(!is_jaix_driver_litter(indented));
+
+    // An unreadable file is not litter — the real diagnostic stays with
+    // the consumer.
+    expect(!is_jaix_driver_litter(tprint("%1/no-such.jai", root)));
 }
