@@ -9,8 +9,10 @@
 //   tests/transpile_tests.jai precedent and the test organization rule);
 // - the Build command and the dependency strip front reuse it via the
 //   program-level #load (main.jai load order: transpile.jai ->
-//   transpile_plugin.jai -> transpile_cache.jai -> this file, symmetric to
-//   build.jai's #load order).
+//   transpile_plugin.jai -> transpile_config.jai -> transpile_cache.jai ->
+//   this file; build.jai's #load order is the same minus transpile_config,
+//   which the bootstrap never loads — it never evaluates a package
+//   manifest).
 //
 // Two adapters over the same real seam: the view landing and entry handling
 // are parameterized by Strip_View_Layout — CONTENT_ADDRESSED (runtime:

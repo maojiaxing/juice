@@ -107,10 +107,11 @@ juice 自身 Transpile 机制插件化，用户可见的结果：
 
 **收口（2026-10-18，票 0064）**：接缝 1-4 全绿 + ADR/CONTEXT/IMPLEMENTATION 文档同步——收口定义达成。
 
-- **接缝 1（juice 三路径）**：debug 与 release 构建绿 + 各 **242 passed, 0 failed** + **30 GOLDEN PASS**（0062 之后零 UPDATE）+ `juice build` 自构建绿。
-- **接缝 2（转译输出契约面）**：transpile_tests / transpile_front_tests / metaprogram_tests 逐字节未改、原样通过；golden/negative/run 矩阵零重定（0062 偏差 1 的 driver.jai 哈希列一次性重定已落档——键变必然落点变化，非排版漂移）。
+- **接缝 1（juice 三路径）**：debug 与 release 构建绿 + 各 **242 passed, 0 failed** + **30 GOLDEN PASS**（全程唯一 UPDATE 运行在 0062：7/7 golden driver.jai 仅键哈希列一次性重定——键变必然落点变化；视图 9/9 + first.jai 7/7 + negative 7/7 零重定，0062 偏差 1）+ `juice build` 自构建绿。
+- **接缝 2（转译输出契约面）**：transpile_front_tests / metaprogram_tests 逐字节未改、原样通过；transpile_tests 按 0062 缓存键契约测试演化（11 行：成分注释补管线描述 + 异管线 / 缺省值断言）后原样通过；golden/negative/run 矩阵零重定（唯一重定即 0062 偏差 1 的 driver.jai 哈希列一次性重定——键变必然落点变化，非排版漂移）。
 - **接缝 3（插件接口姊妹测试）**：tests/transpile_plugin_tests.jai 13 块全绿——合成第三插件证明探测聚合 / 派发三通道（Edit/清单/诊断）/ 跨文件状态续走 / 模式适用性 / 缓存键对 name+version 敏感 / ADR 0005 违反拒绝。
 - **接缝 4（Package 配置面）**：协议记录单测（声明序 / 空声明缺省）+ 严格解析两 case + 校验门矩阵（未知 id / 重复 id / 非法选项）+ 显式声明两内置插件（缺省序）== 缺省管线（视图与缓存键同值）+ E2E fixture 双 case（pipeline-explicit / pipeline-unknown）全绿。
+- **story 22 / story 27 字面缺口备注**：两 story 的兑现按 0063 已落档偏差收窄——story 22（声明 version v1 为装饰性字段：不校验、不进键，缓存键反映解析后的内置 version——0063 偏差 3）；story 27（「编译期选项检查」未达字面：选项行在 manifest 编译期可写、load 期校验门响亮拒绝，不静默——0063 偏差 4）。
 
 **决定直落**：1 → 0061（进程内管线 + 两内置插件；第三方宿主与段二留后续）；2 → 0061（插件接口形状：身份 + 模式适用性 + 探测钩子成对 + 转译钩子 + 跨文件状态）；3 → 0061（runner + 区域交互契约显式化）；4 → 0061（探测聚合 + test-free 零转译短路不变）；5 → 0062（缓存键管线描述 + JUICE_VERSION 语义泛化）；6 → 0063（Package 声明面 + 协议记录 + 校验门 + 未声明 = 缺省）；7 → 0061（test-free 共享模块 + 姊妹测试 + seam 注入不变）；8 → 0061（runner 强制 ADR 0005——「1 行换 1 行」+「以 token 为界」）；9 → 0061/0062/0063 全程（视图落盘 / driver/metaprogram 生成 / golden 矩阵复用不动）；10 → 0064 ADR 0008（并存不替代）；11 → 0064（ADR + CONTEXT + IMPLEMENTATION 同步）。US 1-34 全兑现（33/34 文档收口经 0064 落地）。
 

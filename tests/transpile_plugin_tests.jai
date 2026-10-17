@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Transpile pipeline tests (spec 0060 Testing Decisions 接缝 3/4, tickets
+// Transpile pipeline tests (spec 0060 Testing Decisions seam 3/4, tickets
 // 0061/0062/0063): the plugin interface and runner mechanics, proven with a
 // synthetic third plugin — dispatch through the three output channels (edits
 // / manifest entries / diagnostics), cross-file state continuation, mode
@@ -23,7 +23,7 @@
 #import "Testing";
 
 // ===========================================================================
-// The synthetic third plugin (spec 0060 Testing Decisions 接缝 3): proves the
+// The synthetic third plugin (spec 0060 Testing Decisions seam 3): proves the
 // pipeline mechanics — dispatch through the three output channels, cross-file
 // state continuation, mode applicability, probe aggregation — without
 // touching the two built-in plugins' locked outputs.
@@ -364,7 +364,7 @@ test "Cache key: omitted pipeline means the default pipeline" {
 
 // ---------------------------------------------------------------------------
 // Package configuration surface (spec 0060 decision 6, ticket 0063, Testing
-// Decisions 接缝 4): an explicit declaration of the two built-in plugins in
+// Decisions seam 4): an explicit declaration of the two built-in plugins in
 // the default order goes through the production seams and produces exactly
 // the same views and cache keys as the undeclared default. The manifest
 // protocol / gate matrices live in src/manifest.jai's inline tests; the

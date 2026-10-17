@@ -58,7 +58,9 @@ Transpile_Scan :: struct {
 // the probe hooks are paired with the transpile hook:
 // - has_anchor: does the transpile hook act on anything in this source?
 //   Feeds the closure viewing decision (ADR 0004 decision 1) via
-//   pipeline_has_anchors. Required.
+//   pipeline_has_anchors. Nullable (null = this plugin never triggers
+//   closure viewing — the #load plugin has no anchor of its own);
+//   pipeline_has_anchors skips null hooks.
 // - load_edges: the load edges this source contributes to the closure DFS,
 //   via pipeline_load_edges. Optional (null = no edges).
 // - transpile: dispatched by the runner at every scan position (in

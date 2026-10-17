@@ -16,3 +16,5 @@ src 原文件内联 test block 后（[地图 0025](../issues/0025-spec-src-inlin
 **修订（2026-10，用户拍板）**：第 4 条中测试共享声明的约定位置由 `src/test_support.jai` 改为 `tests/test_support.jai`（纯测试支撑代码不驻 src/；机制不变——不进两条构建路径）。
 
 **修订（2026-10-14，票 0052，用户拍板）**：决定 2 重写为「入口与其他文件同样落盘 + 生成 metaprogram + 子进程」；决定 1 的 #load 集扩为共享剥离前端与生成器核心；Considered Options 增 (d)。
+
+**修订（2026-10-18，[ADR 0008](0008-transpile-pipeline-contract.md)）**：决定 1 的 #load 集再增 src/transpile_plugin.jai（注册表驱动转译管线——插件接口、两内置插件与管线 runner；test-free 共享模块，其单元测试驻 tests/transpile_plugin_tests.jai）。
