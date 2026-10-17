@@ -13,6 +13,7 @@
 #load "transpile_cache.jai";
 #load "transpile_front.jai";
 #load "metaprogram.jai";
+#load "scan_walk.jai";
 #load "jaix_front.jai";
 #load "commands/command.jai";
 #load "commands/build.jai";

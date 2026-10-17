@@ -76,7 +76,7 @@ juice_root :: () -> string {
     options := get_build_options();
     // path_strip_filename keeps the trailing separator (String module
     // semantics); stripped, the result is an absolute path — same posture as
-    // src/commands/test.jai's scan_entry_parent.
+    // src/scan_walk.jai's scan_entry_parent.
     root := path_strip_filename(options.intermediate_path);
     while root.count > 0 && (root[root.count - 1] == #char "/" || root[root.count - 1] == #char "\\") root.count -= 1;
     return root;

@@ -38,12 +38,12 @@ test_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     return test_prepared_workspace(prepared, pattern, files);
 }
 
-// One test source file: the package-relative path ("/" separated, mirrors the
-// package directory structure) and the absolute path of the source file.
-Test_Source_File :: struct {
-    rel_path: string;
-    abs_path: string;
-}
+// One test source file — the shared scan record (src/scan_walk.jai's
+// Scan_File: the package-relative path, "/" separated, plus the absolute
+// path). Kept under the test command's own name so the command-layer
+// vocabulary is unchanged; the test discovery walk and the jaix pre-step
+// scan deal in one record type.
+Test_Source_File :: Scan_File;
 
 // The transpile step's output for one file: the expand-mode view text, the
 // content-addressed cache key (pure function over path + source + mode +
@@ -525,9 +525,11 @@ generate_test_driver :: (files: [] Test_Source_File, view_paths: [] string, matc
 // symlinks and junctions are not followed. Enumeration order is the scan
 // order: a deterministic DFS where each directory yields its files first
 // (lexicographic by name) and then recurses into its subdirectories
-// (lexicographic) — enumeration, call and report order derive from it.
+// (lexicographic) — enumeration, call and report order derive from it. The
+// walk itself is the shared scan walk (src/scan_walk.jai); this wrapper owns
+// only the test discovery exclusion set and the test-specific error message.
 collect_test_files :: (prepared: *Prepared_Workspace) -> [] Test_Source_File, bool {
-    collect: Collect_Context;
+    collect: Test_Collect_Context;
     collect.root = prepared.discovery.root_dir;
     // Member boundaries come from the workspace discovery snapshot (root
     // package first); the scan consumes it without merging into discovery.
@@ -535,55 +537,19 @@ collect_test_files :: (prepared: *Prepared_Workspace) -> [] Test_Source_File, bo
         if index == 0 continue;
         array_add(*collect.member_dirs, copy_string(pkg.dir));
     }
-    visited := visit_files(collect.root, true, *collect, collect_test_file_visitor,
-        visit_files = true, visit_directories = true,
-        visit_symlinks = false, follow_directory_symlinks = false);
-    if !visited {
+    files, ok := collect_scan_files(collect.root, *collect, collect_directory_is_excluded, collect_file_is_excluded);
+    if !ok {
         print("[juice ERROR] Could not scan package root for test sources: %\n", collect.root);
         return Test_Source_File.[], false;
     }
-    return enumerate_test_files(*collect), true;
+    return files, true;
 }
 
-// Raw walk entries plus the member boundaries consumed from the discovery
-// snapshot; the deterministic enumeration happens after the walk.
-Collect_Context :: struct {
+// The wrapper's exclusion context: the scan root plus the member boundaries
+// consumed from the discovery snapshot.
+Test_Collect_Context :: struct {
     root:        string;
     member_dirs: [..] string;
-    files:       [..] Scan_Entry;
-    dirs:        [..] Scan_Entry;
-}
-
-Scan_Entry :: struct {
-    short_name: string;
-    full_name:  string;
-}
-
-collect_test_file_visitor :: (info: *File_Visit_Info, collect: *Collect_Context) {
-    if info.is_directory {
-        if !collect_directory_is_scanned(info, collect) {
-            info.descend_into_directory = false;
-            return;
-        }
-        entry: Scan_Entry;
-        entry.short_name = copy_string(info.short_name);
-        entry.full_name  = copy_string(info.full_name);
-        array_add(*collect.dirs, entry);
-        return;
-    }
-    if collect_file_is_excluded(info, collect) return;
-    entry: Scan_Entry;
-    entry.short_name = copy_string(info.short_name);
-    entry.full_name  = copy_string(info.full_name);
-    array_add(*collect.files, entry);
-}
-
-// Directory part of a walk entry without the trailing separator
-// (path_strip_filename keeps it; the walk roots and dir names do not).
-scan_entry_parent :: (full_name: string) -> string {
-    parent := path_strip_filename(full_name);
-    while parent.count > 0 && (parent[parent.count - 1] == #char "/" || parent[parent.count - 1] == #char "\\") parent.count -= 1;
-    return parent;
 }
 
 // Directory-side exclusions: dot entries at any depth; the
@@ -592,85 +558,25 @@ scan_entry_parent :: (full_name: string) -> string {
 // kind — visit_files already skips symlink entries itself, Windows junctions
 // surface as plain directories there, so they are inspected explicitly in
 // line with the path_safety posture.
-collect_directory_is_scanned :: (info: *File_Visit_Info, collect: *Collect_Context) -> bool {
-    if info.short_name.count > 0 && info.short_name[0] == #char "." return false;
-    rel := test_file_rel_path(info.full_name, collect.root);
-    if paths_equal(rel, "target") || paths_equal(rel, "tests/data") || paths_equal(rel, "modules") return false;
+collect_directory_is_excluded :: (info: *File_Visit_Info, collect: *Test_Collect_Context) -> bool {
+    if info.short_name.count > 0 && info.short_name[0] == #char "." return true;
+    rel := scan_rel_path(info.full_name, collect.root);
+    if paths_equal(rel, "target") || paths_equal(rel, "tests/data") || paths_equal(rel, "modules") return true;
     for member: collect.member_dirs {
-        if paths_equal(info.full_name, member) return false;
+        if paths_equal(info.full_name, member) return true;
     }
     entry := inspect_path_entry(info.full_name);
-    return !entry.is_symlink && !entry.is_junction;
+    return entry.is_symlink || entry.is_junction;
 }
 
 // File-side exclusions: dot entries at any depth, non-lowercase-.jai
 // extensions, and the scan root's own manifest (a nested source
 // file that happens to be named package.jai is user code and stays scanned).
-collect_file_is_excluded :: (info: *File_Visit_Info, collect: *Collect_Context) -> bool {
+collect_file_is_excluded :: (info: *File_Visit_Info, collect: *Test_Collect_Context) -> bool {
     if info.short_name.count > 0 && info.short_name[0] == #char "." return true;
     if !ends_with(info.short_name, ".jai") return true;
     if info.short_name == "package.jai" && paths_equal(scan_entry_parent(info.full_name), collect.root) return true;
     return false;
-}
-
-// Deterministic DFS enumeration in scan order: within each
-// directory, files first (lexicographic by name), then subdirectories
-// (lexicographic), recursing. This order derives the transpile enumeration,
-// the driver call order and the report order.
-enumerate_test_files :: (collect: Collect_Context) -> [..] Test_Source_File {
-    out: [..] Test_Source_File;
-    stack: [..] string;
-    array_add(*stack, copy_string(collect.root));
-    while stack.count > 0 {
-        dir := stack[stack.count - 1];
-        stack.count -= 1;
-        dir_files: [..] Scan_Entry;
-        dir_subdirs: [..] Scan_Entry;
-        for entry: collect.files {
-            if paths_equal(scan_entry_parent(entry.full_name), dir) array_add(*dir_files, entry);
-        }
-        for entry: collect.dirs {
-            if paths_equal(scan_entry_parent(entry.full_name), dir) array_add(*dir_subdirs, entry);
-        }
-        sort_scan_entries(dir_files);
-        sort_scan_entries(dir_subdirs);
-        for entry: dir_files {
-            file: Test_Source_File;
-            file.abs_path = path_slashes(entry.full_name);
-            file.rel_path = test_file_rel_path(entry.full_name, collect.root);
-            array_add(*out, file);
-        }
-        // Push in reverse so the subdirectories pop in sorted order.
-        i := dir_subdirs.count;
-        while i > 0 {
-            i -= 1;
-            array_add(*stack, dir_subdirs[i].full_name);
-        }
-    }
-    return out;
-}
-
-sort_scan_entries :: (entries: [] Scan_Entry) {
-    for i: 1..entries.count-1 {
-        if i >= entries.count break;
-        key := entries[i];
-        j := i - 1;
-        while j >= 0 && compare(entries[j].short_name, key.short_name) > 0 {
-            entries[j+1] = entries[j];
-            j -= 1;
-        }
-        entries[j+1] = key;
-    }
-}
-
-// Package-relative path of a scanned absolute path: everything after the
-// package root prefix, "/" separated.
-test_file_rel_path :: (absolute: string, root: string) -> string {
-    rel := path_slashes(absolute);
-    prefix := path_slashes(root);
-    if prefix.count > 0 && prefix[prefix.count - 1] == #char "/" prefix.count -= 1;
-    if rel.count > prefix.count return slice(rel, prefix.count + 1, rel.count - prefix.count - 1);
-    return rel;
 }
 
 // ---------------------------------------------------------------------------

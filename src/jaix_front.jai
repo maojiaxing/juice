@@ -12,20 +12,22 @@
 // inline test blocks are allowed (they enter the bootstrap closure through
 // src/main.jai and get stripped like every other src file).
 //
-// The scan contract mirrors the test discovery walk (commands/test.jai):
-// recursive from the package root, excluding dot entries at any depth,
-// non-lowercase-.jai files, the root manifest, the root-level target/ (the
-// mirror landing spot — excluded to prevent recursion), workspace member
-// subtrees (boundary from the discovery snapshot) and links of any kind;
-// enumeration order is the same deterministic DFS — per directory, files
-// first (lexicographic) then subdirectories (lexicographic). Two additions
-// over the test discovery set: the marker's config file is skipped (jaix's
-// parser cannot round-trip the config shape, and the config is jaix's
-// compile-time input rather than a transpile input), and files containing
-// juice test blocks are skipped — jaix cannot parse test blocks without its
-// test block plugin, and the marker config excludes that plugin (spec 055
-// US 18 double processing exclusion), so juice's own test block files keep
-// their original transpile path and stay out of the mirror.
+// The scan contract: recursive from the package root, excluding dot entries
+// at any depth, non-lowercase-.jai files, the root manifest, the root-level
+// target/ (the mirror landing spot — excluded to prevent recursion),
+// workspace member subtrees (boundary from the discovery snapshot) and
+// links of any kind; enumeration order is the same deterministic DFS — per
+// directory, files first (lexicographic) then subdirectories
+// (lexicographic). The walk itself is the shared scan walk
+// (src/scan_walk.jai); this module owns only the jaix exclusion set and the
+// jaix-specific error message. Two additions over the test discovery set:
+// the marker's config file is skipped (jaix's parser cannot round-trip the
+// config shape, and the config is jaix's compile-time input rather than a
+// transpile input), and files containing juice test blocks are skipped —
+// jaix cannot parse test blocks without its test block plugin, and the
+// marker config excludes that plugin (spec 055 US 18 double processing
+// exclusion), so juice's own test block files keep their original transpile
+// path and stay out of the mirror.
 //
 // The spawn contract (spec 055 decision 7): per file
 // `jaix transpile <abs input> -o <abs output> --config <abs config>` — all
@@ -48,24 +50,17 @@
 #import "String";
 
 // ---------------------------------------------------------------------------
-// Scan (test discovery family): the walk skeleton mirrors the test
-// discovery walk in commands/test.jai — same contract, different exclusion
-// set (no root-level tests/data//modules/ exclusion, plus the juice test
-// block skip) and a different file record type, so the implementation stays
-// self-contained here.
+// Scan (test discovery family): the whole-package scan the pre-step mirrors.
+// The walk is the shared scan walk (src/scan_walk.jai); this wrapper owns
+// the jaix exclusion set (no root-level tests/data//modules/ exclusion,
+// plus the config skip and the juice test block skip) and the jaix-specific
+// error message.
 // ---------------------------------------------------------------------------
 
 Jaix_Collect_Context :: struct {
     root:        string;
     config_rel:  string;
     member_dirs: [..] string;
-    files:       [..] Jaix_Scan_Entry;
-    dirs:        [..] Jaix_Scan_Entry;
-}
-
-Jaix_Scan_Entry :: struct {
-    short_name: string;
-    full_name:  string;
 }
 
 // Full-package scan: recursively collects every lowercase ".jai" source
@@ -73,7 +68,7 @@ Jaix_Scan_Entry :: struct {
 // header. Member boundaries come from the workspace discovery snapshot
 // (root package first), consumed without merging into discovery — the test
 // discovery posture.
-collect_jaix_files :: (prepared: *Prepared_Workspace) -> [] Build_Source_File, bool {
+collect_jaix_files :: (prepared: *Prepared_Workspace) -> [] Scan_File, bool {
     collect: Jaix_Collect_Context;
     collect.root = prepared.discovery.root_dir;
     collect.config_rel = path_slashes(prepared.discovery.root_package.jaix.config);
@@ -81,41 +76,12 @@ collect_jaix_files :: (prepared: *Prepared_Workspace) -> [] Build_Source_File, b
         if index == 0 continue;
         array_add(*collect.member_dirs, copy_string(pkg.dir));
     }
-    visited := visit_files(collect.root, true, *collect, jaix_collect_visitor,
-        visit_files = true, visit_directories = true,
-        visit_symlinks = false, follow_directory_symlinks = false);
-    if !visited {
+    files, ok := collect_scan_files(collect.root, *collect, jaix_collect_directory_excluded, jaix_collect_file_excluded);
+    if !ok {
         print("[juice ERROR] Could not scan package root for jaix sources: %\n", collect.root);
-        return Build_Source_File.[], false;
+        return Scan_File.[], false;
     }
-    return enumerate_jaix_files(*collect), true;
-}
-
-jaix_collect_visitor :: (info: *File_Visit_Info, collect: *Jaix_Collect_Context) {
-    if info.is_directory {
-        if !jaix_collect_directory_scanned(info, collect) {
-            info.descend_into_directory = false;
-            return;
-        }
-        entry: Jaix_Scan_Entry;
-        entry.short_name = copy_string(info.short_name);
-        entry.full_name  = copy_string(info.full_name);
-        array_add(*collect.dirs, entry);
-        return;
-    }
-    if jaix_collect_file_excluded(info, collect) return;
-    entry: Jaix_Scan_Entry;
-    entry.short_name = copy_string(info.short_name);
-    entry.full_name  = copy_string(info.full_name);
-    array_add(*collect.files, entry);
-}
-
-// Directory part of a walk entry without the trailing separator
-// (path_strip_filename keeps it; the walk roots and dir names do not).
-jaix_scan_entry_parent :: (full_name: string) -> string {
-    parent := path_strip_filename(full_name);
-    while parent.count > 0 && (parent[parent.count - 1] == #char "/" || parent[parent.count - 1] == #char "\\") parent.count -= 1;
-    return parent;
+    return files, true;
 }
 
 // Directory-side exclusions: dot entries at any depth; the root-level
@@ -123,15 +89,15 @@ jaix_scan_entry_parent :: (full_name: string) -> string {
 // subtrees; and links of any kind — visit_files already skips symlink
 // entries itself, Windows junctions surface as plain directories there, so
 // they are inspected explicitly in line with the path_safety posture.
-jaix_collect_directory_scanned :: (info: *File_Visit_Info, collect: *Jaix_Collect_Context) -> bool {
-    if info.short_name.count > 0 && info.short_name[0] == #char "." return false;
-    rel := jaix_file_rel_path(info.full_name, collect.root);
-    if paths_equal(rel, "target") return false;
+jaix_collect_directory_excluded :: (info: *File_Visit_Info, collect: *Jaix_Collect_Context) -> bool {
+    if info.short_name.count > 0 && info.short_name[0] == #char "." return true;
+    rel := scan_rel_path(info.full_name, collect.root);
+    if paths_equal(rel, "target") return true;
     for member: collect.member_dirs {
-        if paths_equal(info.full_name, member) return false;
+        if paths_equal(info.full_name, member) return true;
     }
     entry := inspect_path_entry(info.full_name);
-    return !entry.is_symlink && !entry.is_junction;
+    return entry.is_symlink || entry.is_junction;
 }
 
 // File-side exclusions: dot entries at any depth, non-lowercase-.jai
@@ -149,70 +115,11 @@ jaix_collect_directory_scanned :: (info: *File_Visit_Info, collect: *Jaix_Collec
 jaix_collect_file_excluded :: (info: *File_Visit_Info, collect: *Jaix_Collect_Context) -> bool {
     if info.short_name.count > 0 && info.short_name[0] == #char "." return true;
     if !ends_with(info.short_name, ".jai") return true;
-    if info.short_name == "package.jai" && paths_equal(jaix_scan_entry_parent(info.full_name), collect.root) return true;
-    if collect.config_rel != "" && paths_equal(jaix_file_rel_path(info.full_name, collect.root), collect.config_rel) return true;
+    if info.short_name == "package.jai" && paths_equal(scan_entry_parent(info.full_name), collect.root) return true;
+    if collect.config_rel != "" && paths_equal(scan_rel_path(info.full_name, collect.root), collect.config_rel) return true;
     source, ok := read_entire_file(info.full_name, log_errors = false);
     if ok && source_has_test_block(source) return true;
     return false;
-}
-
-// Package-relative path of a scanned absolute path: everything after the
-// package root prefix, "/" separated (the test discovery posture).
-jaix_file_rel_path :: (absolute: string, root: string) -> string {
-    rel := path_slashes(absolute);
-    prefix := path_slashes(root);
-    if prefix.count > 0 && prefix[prefix.count - 1] == #char "/" prefix.count -= 1;
-    if rel.count > prefix.count return slice(rel, prefix.count + 1, rel.count - prefix.count - 1);
-    return rel;
-}
-
-// Deterministic DFS enumeration in scan order: within each directory,
-// files first (lexicographic by name), then subdirectories (lexicographic),
-// recursing — the test discovery order contract.
-enumerate_jaix_files :: (collect: Jaix_Collect_Context) -> [..] Build_Source_File {
-    out: [..] Build_Source_File;
-    stack: [..] string;
-    array_add(*stack, copy_string(collect.root));
-    while stack.count > 0 {
-        dir := stack[stack.count - 1];
-        stack.count -= 1;
-        dir_files: [..] Jaix_Scan_Entry;
-        dir_subdirs: [..] Jaix_Scan_Entry;
-        for entry: collect.files {
-            if paths_equal(jaix_scan_entry_parent(entry.full_name), dir) array_add(*dir_files, entry);
-        }
-        for entry: collect.dirs {
-            if paths_equal(jaix_scan_entry_parent(entry.full_name), dir) array_add(*dir_subdirs, entry);
-        }
-        sort_jaix_scan_entries(dir_files);
-        sort_jaix_scan_entries(dir_subdirs);
-        for entry: dir_files {
-            file: Build_Source_File;
-            file.abs_path = path_slashes(entry.full_name);
-            file.rel_path = jaix_file_rel_path(entry.full_name, collect.root);
-            array_add(*out, file);
-        }
-        // Push in reverse so the subdirectories pop in sorted order.
-        i := dir_subdirs.count;
-        while i > 0 {
-            i -= 1;
-            array_add(*stack, dir_subdirs[i].full_name);
-        }
-    }
-    return out;
-}
-
-sort_jaix_scan_entries :: (entries: [] Jaix_Scan_Entry) {
-    for i: 1..entries.count-1 {
-        if i >= entries.count break;
-        key := entries[i];
-        j := i - 1;
-        while j >= 0 && compare(entries[j].short_name, key.short_name) > 0 {
-            entries[j+1] = entries[j];
-            j -= 1;
-        }
-        entries[j+1] = key;
-    }
 }
 
 // ---------------------------------------------------------------------------
