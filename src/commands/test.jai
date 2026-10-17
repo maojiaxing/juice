@@ -47,7 +47,7 @@ Test_Source_File :: Scan_File;
 
 // The transpile step's output for one file: the expand-mode view text, the
 // content-addressed cache key (pure function over path + source + mode +
-// version) and the test entries found in it.
+// version + pipeline description) and the test entries found in it.
 Test_File_Output :: struct {
     view:        string;
     key:         string;
@@ -71,7 +71,7 @@ transpile_test_file :: (file: Test_Source_File, next_test_number: s64) -> Test_F
     ctx.next_test_number = next_test_number;
     result := transpile_source(source, ctx);
     output.view = result.view;
-    output.key = transpile_view_key(file.rel_path, source, .EXPAND, Load_Target.[], JUICE_VERSION);
+    output.key = transpile_view_key(file.rel_path, source, .EXPAND, Load_Target.[], JUICE_VERSION, ctx.plugins);
     output.tests = result.tests;
     output.diagnostics = result.diagnostics;
     return output;

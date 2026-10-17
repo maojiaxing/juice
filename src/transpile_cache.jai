@@ -1,21 +1,35 @@
 // Content-addressed view cache for transpiled products (ADR
 // 0003). Pure key/path computation, no IO: the key
 // is a hash of the package-relative path, the source content, the mode
-// (build/test) and the juice version, plus the build mode's #load rewrite
-// targets. Because a strip view's rewrite strings embed the target views'
+// (build/test), the juice pipeline contract version, the pipeline
+// description (the ordered name+version sequence of the plugins that
+// produce the view — a plugin version bump or a pipeline reorder changes
+// the key precisely) and the build mode's #load rewrite targets. Because a
+// strip view's rewrite strings embed the target views'
 // hash directories, the keys form a Merkle chain — a parent's key depends on
 // its children's keys and stays deterministically computable in dependency
 // order. Views live at <transpile_dir>/<hash>/<rel_path>: the package-relative
 // structure is mirrored inside the hash directory so distinct files can never
 // collide by name ("src/a/x.jai" vs "src/a_x.jai").
+//
+// The pipeline description comes from src/transpile_plugin.jai (loaded right
+// before this file in both build.jai and main.jai): Transpile_Plugin
+// identity + resolve_pipeline (an empty registry resolves to the default
+// pipeline, the same convention the runner applies — a view and its key
+// always reflect the same pipeline).
 
 #import "Basic";
 #import "Hash";
 #import "String";
 
-// Version component of the cache key. Bump whenever the transpiler's output
-// contract changes (view layout, driver format); old hash directories are
-// abandoned in place and disappear with `clean` (no active cleanup).
+// Version component of the cache key: the pipeline output contract version
+// (spec 0060 decision 5). Per-plugin output contracts are expressed by the
+// pipeline description component (name+version) — a plugin version bump
+// invalidates precisely; this constant covers the runner-level contract
+// (view layout, driver format, the key's own serialization shape). Bump it
+// when that contract changes in a way no plugin version expresses; old hash
+// directories are abandoned in place and disappear with `clean` (no active
+// cleanup).
 JUICE_VERSION :: "0.1.0";
 
 // Normalize backslashes to forward slashes (local to keep this module
@@ -45,19 +59,30 @@ hash_hex :: (s: string) -> string {
 // (empty for test-mode views and for build-mode files without in-package
 // loads). Its `to` strings embed the target views' hash directories, so the
 // parent key changes whenever a loaded view's key changes (Merkle chain).
+// `pipeline` is the registry that produces the view: its description (the
+// ordered name+version sequence, in declaration order) joins the key, so a
+// plugin rename, a version bump or a pipeline reorder invalidates the view
+// precisely. An omitted or empty pipeline means the default pipeline
+// (resolve_pipeline — the runner's own convention).
 transpile_view_key :: (
     rel_path: string,
     source: string,
     mode: Transpile_Mode,
     load_targets: [] Load_Target,
-    version := JUICE_VERSION
+    version := JUICE_VERSION,
+    pipeline: [] Transpile_Plugin = Transpile_Plugin.[]
 ) -> string {
+    resolved := resolve_pipeline(pipeline);
     builder: String_Builder;
     print_to_builder(*builder, "%1\0%2\0%3\0%4\0",
         rel_path,
         source,
         ifx mode == .EXPAND then "test" else "build",
         version);
+    print_to_builder(*builder, "%1\0", resolved.count);
+    for plugin: resolved {
+        print_to_builder(*builder, "%1\0%2\0", plugin.name, plugin.version);
+    }
     print_to_builder(*builder, "%1\0", load_targets.count);
     for target: load_targets {
         print_to_builder(*builder, "%1\0%2\0", target.from, target.to);

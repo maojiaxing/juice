@@ -262,10 +262,12 @@ view_of_file :: (state: *Strip_View_State, index: s64) -> string, bool {
 // The build transpile step's production default: read the file, strip test
 // blocks, rewrite in-package #load targets to the given view paths, and
 // derive the content-addressed cache key (path + source + mode + version +
-// load targets). The load rewrite table embeds the target views' hash
-// directories, so keys form a Merkle chain computable in dependency order.
-// Originally lived in commands/build.jai; moved here so bootstrap and the
-// Build command share one production step.
+// pipeline description + load targets — the pipeline is the context's
+// registry, so the key always reflects the pipeline that produced the
+// view). The load rewrite table embeds the target views' hash directories,
+// so keys form a Merkle chain computable in dependency order. Originally
+// lived in commands/build.jai; moved here so bootstrap and the Build
+// command share one production step.
 transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output {
     output: Build_File_Output;
     source, ok := read_entire_file(file.abs_path);
@@ -279,7 +281,7 @@ transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target) 
     ctx.load_targets = load_targets;
     result := transpile_source(source, ctx);
     output.view = result.view;
-    output.key = transpile_view_key(file.rel_path, source, .STRIP, load_targets, JUICE_VERSION);
+    output.key = transpile_view_key(file.rel_path, source, .STRIP, load_targets, JUICE_VERSION, ctx.plugins);
     output.diagnostics = result.diagnostics;
     return output;
 }

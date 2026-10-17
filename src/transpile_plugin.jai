@@ -364,6 +364,16 @@ default_transpile_pipeline :: () -> [..] Transpile_Plugin {
     return pipeline;
 }
 
+// The "empty registry means the default pipeline" convention, in one place
+// (spec 0060 decision 3): the runner and the cache key both resolve their
+// pipeline through here, so a view and its key always reflect the same
+// pipeline — a key computed from an empty registry matches the view the
+// runner produces from it.
+resolve_pipeline :: (plugins: [] Transpile_Plugin) -> [] Transpile_Plugin {
+    if plugins.count == 0 return default_transpile_pipeline();
+    return plugins;
+}
+
 // 1-based line and column of a byte offset (binary search over the line
 // start offsets from compute_line_starts).
 offset_location :: (starts: [] s64, offset: s64) -> s64, s64 {
@@ -452,8 +462,7 @@ transpile_source :: (source: string, ctx: Transpile_Context) -> Transpile_Result
     tests: [..] Test_Entry;
     diagnostics: [..] Transpile_Diagnostic;
 
-    pipeline := ctx.plugins;
-    if pipeline.count == 0 pipeline = default_transpile_pipeline();
+    pipeline := resolve_pipeline(ctx.plugins);
 
     scan: Transpile_Scan;
     scan.source = s;

@@ -300,7 +300,8 @@ test "Load target resolution" {
 // ---------------------------------------------------------------------------
 
 // The key is a deterministic 16-hex-char hash; every component (relative
-// path, source content, mode, version) participates in it.
+// path, source content, mode, version, pipeline description) participates
+// in it.
 test "Cache key is deterministic and component-sensitive" {
     key := transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION);
     expect(key == transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION));
@@ -312,8 +313,14 @@ test "Cache key is deterministic and component-sensitive" {
     expect(key != transpile_view_key("src/a.jai", "x := 2;\n", .EXPAND, Load_Target.[], JUICE_VERSION));
     expect(key != transpile_view_key("src/a.jai", "x := 1;\n", .STRIP, Load_Target.[], JUICE_VERSION));
     expect(key != transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], "1"));
-    // The omitted version defaults to the juice version constant.
+    // A different pipeline description changes the key.
+    expect(key != transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION, .[test_block_plugin()]));
+    // The omitted version defaults to the juice version constant; the
+    // omitted (or empty) pipeline defaults to the default pipeline
+    // description.
     expect(transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[]) == key);
+    expect(transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION, default_transpile_pipeline()) == key);
+    expect(transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION, Transpile_Plugin.[]) == key);
 }
 
 // Merkle chain: in build mode the load rewrite

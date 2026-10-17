@@ -1,11 +1,12 @@
 // ---------------------------------------------------------------------------
-// Transpile pipeline tests (spec 0060 Testing Decisions 接缝 3, ticket 0061):
-// the plugin interface and runner mechanics, proven with a synthetic third
-// plugin — dispatch through the three output channels (edits / manifest
-// entries / diagnostics), cross-file state continuation, mode
-// applicability, probe aggregation and the runner's ADR 0005 rejection —
-// without touching the two built-in plugins' locked outputs (those stay
-// locked by tests/transpile_tests.jai).
+// Transpile pipeline tests (spec 0060 Testing Decisions 接缝 3, tickets
+// 0061/0062): the plugin interface and runner mechanics, proven with a
+// synthetic third plugin — dispatch through the three output channels (edits
+// / manifest entries / diagnostics), cross-file state continuation, mode
+// applicability, probe aggregation, the runner's ADR 0005 rejection and the
+// cache key's pipeline description component (name/version/order
+// sensitivity) — without touching the two built-in plugins' locked outputs
+// (those stay locked by tests/transpile_tests.jai).
 //
 // Key constraint (same as tests/transpile_tests.jai): src/transpile_plugin.jai
 // is a build.jai #load target / entry closure member — test blocks would be
@@ -305,4 +306,56 @@ test "Runner rejects token-unbounded plugin edits" {
     expect(result.diagnostics.count == 1);
     expect(result.diagnostics[0].message == "编辑未以 token 为界");
     expect(result.view == "violate_bounds;\n");
+}
+
+// ---------------------------------------------------------------------------
+// Cache-key pipeline description (spec 0060 decision 5, ticket 0062): the
+// view cache key embeds the ordered name+version sequence of the registry
+// that produces the view, so a plugin rename, a version bump or a pipeline
+// reorder each changes the key precisely — and an omitted pipeline means
+// the default registry.
+// ---------------------------------------------------------------------------
+
+test "Cache key: pipeline description is component-sensitive" {
+    base: [..] Transpile_Plugin;
+    array_add(*base, load_plugin());
+    array_add(*base, synth_plugin());
+    key := transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION, base);
+    expect(key == transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION, base));
+
+    // Name change → key change (same version, same order, same input).
+    renamed: [..] Transpile_Plugin;
+    array_add(*renamed, load_plugin());
+    renamed_synth := synth_plugin();
+    renamed_synth.name = "synth-renamed";
+    array_add(*renamed, renamed_synth);
+    expect(key != transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION, renamed));
+
+    // Version change → key change.
+    bumped: [..] Transpile_Plugin;
+    array_add(*bumped, load_plugin());
+    bumped_synth := synth_plugin();
+    bumped_synth.version = "1.0.1";
+    array_add(*bumped, bumped_synth);
+    expect(key != transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION, bumped));
+
+    // Order change → key change.
+    reversed: [..] Transpile_Plugin;
+    array_add(*reversed, synth_plugin());
+    array_add(*reversed, load_plugin());
+    expect(key != transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION, reversed));
+}
+
+test "Cache key: omitted pipeline means the default pipeline" {
+    key := transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION);
+    // The default registry's description joins the key when the pipeline is
+    // omitted or empty...
+    expect(key == transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION, default_transpile_pipeline()));
+    expect(key == transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION, Transpile_Plugin.[]));
+    // ...and the description is order-sensitive: the reordered default must
+    // not collide with it.
+    reversed: [..] Transpile_Plugin;
+    array_add(*reversed, test_block_plugin());
+    array_add(*reversed, load_plugin());
+    expect(key != transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION, reversed));
 }
