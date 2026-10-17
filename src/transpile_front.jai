@@ -9,7 +9,8 @@
 //   tests/transpile_tests.jai precedent and the test organization rule);
 // - the Build command and the dependency strip front reuse it via the
 //   program-level #load (main.jai load order: transpile.jai ->
-//   transpile_cache.jai -> this file, symmetric to build.jai's #load order).
+//   transpile_plugin.jai -> transpile_cache.jai -> this file, symmetric to
+//   build.jai's #load order).
 //
 // Two adapters over the same real seam: the view landing and entry handling
 // are parameterized by Strip_View_Layout — CONTENT_ADDRESSED (runtime:
@@ -104,8 +105,11 @@ probe_package_closure :: (package_root: string, entry_rel: string, error_prefix:
 
         cf: Build_Closure_File;
         cf.file = file;
-        cf.has_tests = source_has_test_block(source);
-        cf.loads = source_load_targets(source, file.rel_path);
+        // Probe aggregation (spec 0060 decision 4): the closure decisions
+        // ask the pipeline's plugin hooks instead of hardcoding the two
+        // transforms (the default registry for now).
+        cf.has_tests = pipeline_has_anchors(default_transpile_pipeline(), source, file.rel_path);
+        cf.loads = pipeline_load_edges(default_transpile_pipeline(), source, file.rel_path);
         array_add(*files, cf);
 
         // Push in reverse so targets pop in statement order.
@@ -302,7 +306,7 @@ testing_module_strip_view_dir :: (package_root: string, module_source: string, e
     if !front_view_exists(module_abs) return "";
     source, ok := read_entire_file(module_abs);
     if !ok return "";
-    if !source_has_test_block(source) return "";
+    if !pipeline_has_anchors(default_transpile_pipeline(), source, "modules/Testing.jai") return "";
 
     ctx: Transpile_Context;
     ctx.mode = .STRIP;

@@ -10,6 +10,7 @@
 #load "target.jai";
 #load "dependency.jai";
 #load "transpile.jai";
+#load "transpile_plugin.jai";
 #load "transpile_cache.jai";
 #load "transpile_front.jai";
 #load "metaprogram.jai";

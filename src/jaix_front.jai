@@ -123,7 +123,7 @@ jaix_collect_file_excluded :: (info: *File_Visit_Info, collect: *Jaix_Collect_Co
     if collect.config_rel != "" && paths_equal(scan_rel_path(info.full_name, collect.root), collect.config_rel) return true;
     if is_jaix_driver_litter(info.full_name) return true;
     source, ok := read_entire_file(info.full_name, log_errors = false);
-    if ok && source_has_test_block(source) return true;
+    if ok && pipeline_has_anchors(default_transpile_pipeline(), source, scan_rel_path(info.full_name, collect.root)) return true;
     return false;
 }
 

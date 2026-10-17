@@ -1,6 +1,10 @@
-// Juice process-internal source-to-source transpiler for test blocks
-// (ADR 0004). Single-entry pure function: source text +
-// context -> view text + test list + diagnostics. No IO, no global state.
+// Juice process-internal source-to-source transpiler infrastructure (ADR
+// 0004): the shared types (Transpile_Mode / Load_Target / Transpile_Context
+// / Test_Entry / Transpile_Diagnostic / Transpile_Result), the lexer, the
+// edit mechanism and the line-fidelity helpers. The pipeline itself — the
+// plugin interface, the two built-in plugins and the transpile_source
+// runner — lives in src/transpile_plugin.jai, loaded right after this file
+// in both build.jai and main.jai. No IO, no global state.
 //
 // Output contract (docs/transpiled-output-formatting.md, ADR 0005):
 // every view has exactly as many lines as its source file; verbatim regions
@@ -38,6 +42,18 @@ Transpile_Context :: struct {
     next_test_number: s64;
     // STRIP mode only: rewrite targets for literal in-package #load statements.
     load_targets: [] Load_Target;
+    // Registry-driven pipeline (spec 0060 decision 3): the registered
+    // plugins, declaration order = dispatch order. An empty list means the
+    // default pipeline (the two built-in plugins) — every existing caller
+    // keeps its behavior unchanged.
+    plugins: [..] Transpile_Plugin;
+    // Per-plugin cross-file state slots, aligned with plugins order (spec
+    // 0060 decision 2's Transpile_Context extension fields): each plugin
+    // casts its slot to its own state type; the caller owns the slot's
+    // storage, which persists across transpile_source calls (the same
+    // channel family as next_test_number's numbering continuation). The
+    // default pipeline uses no slots (null).
+    plugin_state: [..] *void;
 }
 
 Test_Entry :: struct {
@@ -410,66 +426,6 @@ find_load_target :: (targets: [] Load_Target, resolved: string) -> string, bool 
 }
 
 // ---------------------------------------------------------------------------
-// Build probe utilities
-// ---------------------------------------------------------------------------
-
-// Whether the source contains any test block the transpiler acts on in
-// either mode: a `test` anchor in statement position at file top level, or
-// one at brace depth > 0 (rejected with a diagnostic there). Anchors in
-// non-statement positions (e.g. `if test {`) pass through untouched and do
-// not count. The build front probes closures with this to decide whether
-// viewing is needed (ADR 0004 decision 1).
-source_has_test_block :: (source: string) -> bool {
-    s := normalize_view_line_endings(source);
-    tokens := lex_source(s);
-    depth := 0;
-    have_prev := false;
-    prev_text := "";
-    i := 0;
-    while i < tokens.count {
-        tok := tokens[i];
-        text := token_text(s, tok);
-        if tok.kind == .IDENT && text == "test" && is_test_anchor(s, tokens, i) {
-            if depth > 0 || is_statement_position(have_prev, prev_text) return true;
-        }
-        if tok.kind == .PUNCT && text == "{" {
-            depth += 1;
-        } else if tok.kind == .PUNCT && text == "}" {
-            if depth > 0 depth -= 1;
-        }
-        prev_text = text;
-        have_prev = true;
-        i += 1;
-    }
-    return false;
-}
-
-// Literal in-package #load targets of a source file, resolved against its
-// package-relative path ("/" separated), in statement order. Non-literal
-// targets (#load CONST) and out-of-package targets are absent by design:
-// their files are never viewed or rewritten.
-source_load_targets :: (source: string, path: string) -> [..] string {
-    s := normalize_view_line_endings(source);
-    tokens := lex_source(s);
-    targets: [..] string;
-    i := 0;
-    while i < tokens.count {
-        tok := tokens[i];
-        if tok.kind == .DIRECTIVE && token_text(s, tok) == "#load" && i + 2 < tokens.count
-            && tokens[i+1].kind == .STRING && token_text(s, tokens[i+2]) == ";" {
-            target := tokens[i+1];
-            value := decode_jai_string(slice(s, target.start + 1, target.end - target.start - 2));
-            resolved, in_package := resolve_load_target(path, value);
-            if in_package array_add(*targets, resolved);
-            i += 3;
-            continue;
-        }
-        i += 1;
-    }
-    return targets;
-}
-
-// ---------------------------------------------------------------------------
 // Edits and output assembly
 // ---------------------------------------------------------------------------
 
@@ -579,6 +535,10 @@ load_strip_edit :: (s: string, starts: [] s64, load_tok: Token, semi_tok: Token)
     return .{start = load_tok.start, end = semi_tok.end, text = builder_to_string(*builder)};
 }
 
+// ---------------------------------------------------------------------------
+// Anchor machinery (shared with the test-block plugin in transpile_plugin.jai)
+// ---------------------------------------------------------------------------
+
 find_matching_close :: (s: string, tokens: [] Token, open_index: s64) -> s64, bool {
     depth := 0;
     j := open_index;
@@ -608,149 +568,4 @@ is_test_anchor :: (s: string, tokens: [] Token, index: s64) -> bool {
     if index + 1 < tokens.count && token_text(s, tokens[index + 1]) == "{" return true;
     if index + 2 < tokens.count && tokens[index + 1].kind == .STRING && token_text(s, tokens[index + 2]) == "{" return true;
     return false;
-}
-
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
-transpile_source :: (source: string, ctx: Transpile_Context) -> Transpile_Result {
-    s := normalize_view_line_endings(source);
-    tokens := lex_source(s);
-    starts := compute_line_starts(s);
-
-    edits: [..] Edit;
-    tests: [..] Test_Entry;
-    diagnostics: [..] Transpile_Diagnostic;
-
-    depth := 0;
-    have_prev := false;
-    prev_text := "";
-
-    i := 0;
-    while i < tokens.count {
-        tok := tokens[i];
-        text := token_text(s, tok);
-
-        // Literal #load statement: DIRECTIVE(#load) STRING ;
-        if tok.kind == .DIRECTIVE && text == "#load" && i + 2 < tokens.count && tokens[i+1].kind == .STRING && token_text(s, tokens[i+2]) == ";" {
-            target := tokens[i+1];
-            semi := tokens[i+2];
-            shared_before := i > 0 && tokens[i-1].end_line >= tok.line;
-            shared_after := i + 3 < tokens.count && tokens[i+3].line == semi.line;
-            if shared_before || shared_after {
-                array_add(*diagnostics, .{line = tok.line, column = tok.column, message = "#load 必须独占其行"});
-                // Fall through: the statement stays verbatim.
-            } else {
-                value := decode_jai_string(slice(s, target.start + 1, target.end - target.start - 2));
-                resolved, in_package := resolve_load_target(ctx.path, value);
-                if in_package {
-                    if ctx.mode == .EXPAND {
-                        array_add(*edits, load_strip_edit(s, starts, tok, semi));
-                    } else if target.end_line > target.line {
-                        array_add(*diagnostics, .{line = target.line, column = target.column, message = "#load 目标字符串不可跨行"});
-                    } else {
-                        rewrite_to, found := find_load_target(ctx.load_targets, resolved);
-                        if !found {
-                            array_add(*diagnostics, .{line = tok.line, column = tok.column, message = "in-package #load 缺少视图目标"});
-                        } else {
-                            array_add(*edits, .{start = target.start, end = target.end, text = quote_jai_string(rewrite_to)});
-                        }
-                    }
-                    i += 3;
-                    prev_text = ";";
-                    have_prev = true;
-                    continue;
-                }
-            }
-        }
-
-        // Test block anchors: `test` + string + `{`, or `test` + `{`.
-        if tok.kind == .IDENT && text == "test" {
-            named := false;
-            brace_index := -1;
-            if i + 2 < tokens.count && tokens[i+1].kind == .STRING && token_text(s, tokens[i+2]) == "{" {
-                named = true;
-                brace_index = i + 2;
-            } else if i + 1 < tokens.count && token_text(s, tokens[i+1]) == "{" {
-                brace_index = i + 1;
-            }
-
-            if brace_index >= 0 {
-                brace := tokens[brace_index];
-                name_tok := tokens[i+1];
-                single_line := brace.line == tok.line;
-                if named {
-                    single_line = single_line && name_tok.line == tok.line && name_tok.end_line == tok.line;
-                }
-                if depth > 0 {
-                    array_add(*diagnostics, .{line = tok.line, column = tok.column, message = "test block 仅允许文件顶层"});
-                } else if !is_statement_position(have_prev, prev_text) {
-                    // Not a statement start: e.g. `if test { ... }`. Pass through.
-                } else if !single_line {
-                    array_add(*diagnostics, .{line = tok.line, column = tok.column, message = "test 头必须位于同一行"});
-                } else {
-                    close_index, closed := find_matching_close(s, tokens, brace_index);
-                    if !closed {
-                        array_add(*diagnostics, .{line = tok.line, column = tok.column, message = "test block 缺少闭合 }"});
-                        break;
-                    }
-                    close := tokens[close_index];
-                    if ctx.mode == .STRIP {
-                        // Any other token after the closing brace on the same
-                        // line would be swallowed by the placeholder comment.
-                        // A chained test anchor is fine: each block gets its
-                        // own placeholder and they share the line.
-                        trailing := close_index + 1 < tokens.count && tokens[close_index + 1].line == close.line;
-                        if trailing && !is_test_anchor(s, tokens, close_index + 1) {
-                            next := tokens[close_index + 1];
-                            array_add(*diagnostics, .{line = next.line, column = next.column, message = "test block 闭括号后不得有其他语句"});
-                            // Fall through: the block stays verbatim.
-                        } else {
-                            array_add(*edits, strip_block_edit(s, starts, tok, close));
-                            i = close_index + 1;
-                            prev_text = "}";
-                            have_prev = true;
-                            continue;
-                        }
-                    } else {
-                        number := ctx.next_test_number + tests.count;
-                        entry: Test_Entry;
-                        entry.number = number;
-                        entry.line = tok.line;
-                        if named {
-                            entry.name = decode_jai_string(slice(s, name_tok.start + 1, name_tok.end - name_tok.start - 2));
-                        } else {
-                            entry.name = tprint("%1:%2", ctx.path, tok.line);
-                        }
-                        array_add(*tests, entry);
-                        array_add(*edits, .{start = tok.start, end = brace.end, text = tprint("juice_test_%1 :: () -> () {", number)});
-                        array_add(*edits, .{start = close.end, end = close.end, text = " @test"});
-                        // Scan the body (loads inside it still need stripping);
-                        // the closing brace is consumed by the "@test" edit.
-                        i = brace_index + 1;
-                        depth += 1;
-                        prev_text = "{";
-                        have_prev = true;
-                        continue;
-                    }
-                }
-            }
-        }
-
-        if tok.kind == .PUNCT && text == "{" {
-            depth += 1;
-        } else if tok.kind == .PUNCT && text == "}" {
-            if depth > 0 depth -= 1;
-        }
-        prev_text = text;
-        have_prev = true;
-        i += 1;
-    }
-
-    result: Transpile_Result;
-    result.view = apply_edits(s, edits);
-    result.tests = tests;
-    result.diagnostics = diagnostics;
-    return result;
 }

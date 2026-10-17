@@ -343,7 +343,7 @@ testing_module_view :: (package_root: string, support_view: string, next_test_nu
     if module_file.abs_path == "" return result, true;
 
     source, ok := read_entire_file(module_file.abs_path);
-    if !ok || !source_has_test_block(source) return result, true;
+    if !ok || !pipeline_has_anchors(default_transpile_pipeline(), source, module_file.rel_path) return result, true;
 
     result.enabled = true;
     result.in_package = module_in_package;

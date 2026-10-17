@@ -13,13 +13,17 @@
 // the compile metaprogram and then spawns a child jai to compile — the same
 // shape as the Build command; the entry view compiles via add_build_file
 // with exact file+line diagnostics; the add_build_string +5 offset is
-// retired). src/transpile_cache.jai provides the content-addressed path
-// functions the shared front references. The #loaded code compiles into the
-// metaprogram execution environment and never into the built program. Known
-// and harmless: compiling transpile.jai under beta 0.2.009 emits two `%%`
-// print compatibility warnings (do not "fix" them; keep the transpiler
+// retired). src/transpile_plugin.jai provides the registry-driven pipeline
+// (plugin interface, the two built-in plugins, the transpile_source runner,
+// the probe aggregation). src/transpile_cache.jai provides the
+// content-addressed path functions the shared front references. The #loaded
+// code compiles into the metaprogram execution environment and never into
+// the built program. Known and harmless: compiling transpile.jai /
+// transpile_plugin.jai under beta 0.2.009 emits two `%%` print
+// compatibility warnings (do not "fix" them; keep the transpiler
 // untouched).
 #load "src/transpile.jai";
+#load "src/transpile_plugin.jai";
 #load "src/transpile_cache.jai";
 #load "src/transpile_front.jai";
 #load "src/metaprogram.jai";
