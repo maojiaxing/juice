@@ -1,6 +1,6 @@
 ---
 title: "Spec: juice 转译机制插件化——管线 runner + 内置插件 + Package 配置面（jaix 风格）"
-status: open
+status: closed
 labels: [ready-for-agent]
 assignee: maojiaxing
 blocked-by: []
@@ -102,3 +102,20 @@ juice 自身 Transpile 机制插件化，用户可见的结果：
 - 语言：中文交流与文档。
 - 每会话开工先读 juice CONTEXT.md 与测试组织规则（memory 已记）；juice 三路径验证循环见既有记忆。
 - 收口定义：四接缝全绿 + ADR/CONTEXT/IMPLEMENTATION 同步。
+
+## Resolution
+
+**收口（2026-10-18，票 0064）**：接缝 1-4 全绿 + ADR/CONTEXT/IMPLEMENTATION 文档同步——收口定义达成。
+
+- **接缝 1（juice 三路径）**：debug 与 release 构建绿 + 各 **242 passed, 0 failed** + **30 GOLDEN PASS**（0062 之后零 UPDATE）+ `juice build` 自构建绿。
+- **接缝 2（转译输出契约面）**：transpile_tests / transpile_front_tests / metaprogram_tests 逐字节未改、原样通过；golden/negative/run 矩阵零重定（0062 偏差 1 的 driver.jai 哈希列一次性重定已落档——键变必然落点变化，非排版漂移）。
+- **接缝 3（插件接口姊妹测试）**：tests/transpile_plugin_tests.jai 13 块全绿——合成第三插件证明探测聚合 / 派发三通道（Edit/清单/诊断）/ 跨文件状态续走 / 模式适用性 / 缓存键对 name+version 敏感 / ADR 0005 违反拒绝。
+- **接缝 4（Package 配置面）**：协议记录单测（声明序 / 空声明缺省）+ 严格解析两 case + 校验门矩阵（未知 id / 重复 id / 非法选项）+ 显式声明两内置插件（缺省序）== 缺省管线（视图与缓存键同值）+ E2E fixture 双 case（pipeline-explicit / pipeline-unknown）全绿。
+
+**决定直落**：1 → 0061（进程内管线 + 两内置插件；第三方宿主与段二留后续）；2 → 0061（插件接口形状：身份 + 模式适用性 + 探测钩子成对 + 转译钩子 + 跨文件状态）；3 → 0061（runner + 区域交互契约显式化）；4 → 0061（探测聚合 + test-free 零转译短路不变）；5 → 0062（缓存键管线描述 + JUICE_VERSION 语义泛化）；6 → 0063（Package 声明面 + 协议记录 + 校验门 + 未声明 = 缺省）；7 → 0061（test-free 共享模块 + 姊妹测试 + seam 注入不变）；8 → 0061（runner 强制 ADR 0005——「1 行换 1 行」+「以 token 为界」）；9 → 0061/0062/0063 全程（视图落盘 / driver/metaprogram 生成 / golden 矩阵复用不动）；10 → 0064 ADR 0008（并存不替代）；11 → 0064（ADR + CONTEXT + IMPLEMENTATION 同步）。US 1-34 全兑现（33/34 文档收口经 0064 落地）。
+
+**实施链**：0061（管线核心，212 → 222）→ 0062（缓存键面，222 → 224）→ 0063（配置面，224 → 242）→ 0064（本收口票，零产品代码）。
+
+**文档**：ADR 0008 新篇（管线契约）+ ADR 0005 修订行（硬约束由 runner 强制——机制承载）；CONTEXT.md 新词条转译管线 / 插件声明面 + Transpile 词条同步；IMPLEMENTATION.md 模块表补 transpile_plugin / transpile_config 行（transpile_cache 行补 0062 语义）。
+
+**偏差（链上汇总）**：0061 四条（工作树机制 / 「编辑以 token 为界」读法修正——起点与终点各落在某 token 的起点或终点边界 / 测试计数 +10 / 缓存键与配置面归后续票）、0062 四条（driver.jai 金样 7/7 哈希列一次性重定——键变必然落点变化 / resolve_pipeline 极小提取 / 计数 +2 / 生产键位点预接 ctx.plugins）、0063 六条（依赖视图与 jaix mirror 排除集恒缺省管线 / Testing 模块视图恒缺省管线 / 声明 version 不校验不进键 / 类型化选项槽执行级形状 = key/value 选项行 / seam #type 增默认空第三形参（本版 jai 无闭包）/ 求值器 codegen 测试为形状锁）。0064 无产品代码偏差（收口票纪律）。

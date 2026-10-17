@@ -77,8 +77,16 @@ Package 的全部 Juice 管理生成物所在的固定约定目录 `target/`：a
 _Avoid_: result 目录（遗留不再管理）、bin 目录。
 
 **Transpile（转译）**:
-将含 test block 的源文件转换为合法 Jai 的 source-to-source 步骤，是 Juice 进程内的库。Build 从入口闭包探测：闭包含 test block 才转译（剥离模式），否则原样直编；Test 对发现的全部文件转译（展开模式）。依赖剥离前端（票 0049）把同一剥离语义延至依赖闭包：Build 与 Test 都经 import shim 探测依赖入口闭包，含 test block 时整闭包剥离视图落 `target/transpile/deps/<依赖名>/...` 并改写 shim。Test block 的保证生效范围是 build 下入口经字面量 in-package `#load` 可达的文件与依赖 shim 可达的依赖闭包、test 下全包发现的文件；其余非字面量与 out-of-package `#load` 的目标不转译，其含 test block 由编译错误暴露。转译产物按内容寻址缓存。
-_Avoid_: 通用语法扩展框架（转译只为 test block 服务）。
+将含 test block 的源文件转换为合法 Jai 的 source-to-source 步骤，是 Juice 进程内的库。Build 从入口闭包探测：闭包含 test block 才转译（剥离模式），否则原样直编；Test 对发现的全部文件转译（展开模式）。依赖剥离前端（票 0049）把同一剥离语义延至依赖闭包：Build 与 Test 都经 import shim 探测依赖入口闭包，含 test block 时整闭包剥离视图落 `target/transpile/deps/<依赖名>/...` 并改写 shim。Test block 的保证生效范围是 build 下入口经字面量 in-package `#load` 可达的文件与依赖 shim 可达的依赖闭包、test 下全包发现的文件；其余非字面量与 out-of-package `#load` 的目标不转译，其含 test block 由编译错误暴露。转译产物按内容寻址缓存。机制是注册表驱动的转译管线（spec 0060，[ADR 0008](docs/adr/0008-transpile-pipeline-contract.md)——见该词条）：test block 与 `#load` 处理是前两个内置插件，扫描循环升级为管线 runner；转译管线另有包作者的声明面（插件声明面——见该词条）。
+_Avoid_: 通用语法扩展框架（转译只为 test block 服务）；把两内置插件写回扫描核心循环（插件化后核心不该再长分支）。
+
+**转译管线（transpile pipeline）**:
+juice 自身 Transpile 的注册表驱动机制（src/transpile_plugin.jai，spec 0060 决定 2/3/4/7/8 / 票 0061，[ADR 0008](docs/adr/0008-transpile-pipeline-contract.md)）：test block 与 `#load` 处理是前两个内置插件，扫描循环升级为管线 runner，按声明序向注册插件派发——新的转换只写插件、不改核心。插件接口 = {name, version, 模式适用性声明（STRIP/EXPAND）, 探测钩子成对（has_anchor / 可选 load_edges）, 转译钩子（扫描位点回调 → Edit/清单条目/诊断）, 跨文件状态经 Transpile_Context 扩展字段}。闭包探测与视图缓存键都走管线（探测聚合；键含有序 name+version 管线描述分量——JUICE_VERSION 语义泛化为「管线输出契约版本」）。ADR 0005 的「1 行换 1 行、编辑以 token 为界」由 runner 对每个插件强制——违反形状的编辑在转译期诊断拒绝。空注册表 = 缺省管线（[load, test-block]）。区域交互契约在 runner 层显式化：EXPAND 下 test 体内 `#load` 仍被剥离、STRIP 下随占位消失。跨 bootstrap 与 runtime 共享（build.jai 的 `#load` 目标，测试驻 tests/transpile_plugin_tests.jai 姊妹文件——票 0053 规则）。
+_Avoid_: 把新转换写进扫描核心循环；把 juice 管线与 jaix 的 AST 插件模型混称（并存不替代）。
+
+**插件声明面（plugin declaration surface）**:
+Package 配置（package.jai）里声明转译管线的字段（spec 0060 决定 6 / 票 0063）：`Package.transpile.plugins` 数组（插件 id + version + 类型化选项槽）。manifest 求值器按声明序打印 `TRANSPILE_PLUGIN=<id>|<version>` 可重复协议记录（JAIX_CONFIG 同族：恒打印、选项不跨进程）；校验门（validate_transpile_pipeline）拒绝未知 id / 重复 id / 非法选项——诊断响亮。组装（src/transpile_config.jai，非 bootstrap `#load` 目标）把声明映射到内置注册表实例：声明序 = 管线序；未声明 = 缺省管线（现状行为零变化）；显式声明两内置插件（缺省序）与未声明同值。v1 两内置插件选项集为空（选项槽就位、无实际选项行）。依赖视图与 Testing 模块视图恒走缺省管线（依赖声明面与 Testing 模块语义解耦——票 0063 偏差）。
+_Avoid_: 声明与缺省语义各解释一处（缺省解析 = resolve_pipeline 单一落点，视图与其键恒同管线）。
 
 **前置转译（pre-step）**:
 Package 声明 jaix 标记后，build 与 test 在编译前自动执行的 jaix 转译编排（[ADR 0007](docs/adr/0007-jaix-optional-pre-step.md)——可选、子进程、通用扩展，对照 ADR 0004 的义务转译）：整包扫描（骨架驻共享扫描模块 Scan walk——见该词条；test 发现同族排除规则 + jaix 特有排除——marker 的 config 文件与含 juice test block 的文件）→ 逐文件 spawn `jaix transpile`（全绝对路径、stderr 透传）→ 镜像落 `target/jaix/`。转译失败 = 前置失败 = command 失败（诊断透传、不编译、不产 artifact）；缺 jaix exe = 清晰错误。标记缺席 = 无前置（零行为变化）。jaix 是独立通用转译器（try/catch 等扩展语法），与 juice 自身 Transpile（test block 专用义务转译）并存不替代。
