@@ -1026,10 +1026,11 @@ prepend_jaix_to_path :: () {
 }
 
 // jaix's CLI driver files land in the child process's working directory
-// (hash-named, one per transpile call — 049 decision 12), so an in-place
-// child scenario leaves them at the fixture root. Deletes every root-level
-// .jai file that is not one of the fixture's two manifests (the fixture
-// keeps its sources in src/).
+// (dot-prefixed `.jaix-<hash>.jai`, one per transpile call — 049 decision 12
+// naming, 0056 dot prefix), so an in-place child scenario leaves them at
+// the fixture root. Deletes every root-level .jai file that is not one of
+// the fixture's two manifests (the fixture keeps its sources in src/) — the
+// name-unrelated cleanup matches the dot-prefixed names unchanged.
 clean_jaix_driver_files :: (fixture_root: string) {
     scan, visited := dir_scan_entries(fixture_root);
     if !visited return;

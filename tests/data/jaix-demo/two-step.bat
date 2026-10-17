@@ -82,8 +82,9 @@ echo [two-step] step 2: juice build
 "%JUICE%" build
 if errorlevel 1 exit /b 1
 REM The wired pre-step's jaix spawns leave driver litter at the package root
-REM (the scan cwd); the next juice invocation would scan that litter as package
-REM sources -- clean between the two commands.
+REM (the scan cwd). Juice's scans exclude driver litter themselves (dot-prefix
+REM naming + content marker), so the next invocation succeeds either way; clean
+REM between the two commands to keep the fixture root tidy.
 call :clean_driver_files
 echo [two-step] step 2: juice run
 "%JUICE%" run
@@ -91,9 +92,10 @@ if errorlevel 1 exit /b 1
 call :clean_driver_files
 exit /b 0
 
-REM jaix's CLI driver files land in the working directory (one hash-named .jai
-REM per transpile call); the fixture keeps only its two manifests at the root,
-REM so every other root-level .jai is disposable driver litter.
+REM jaix's CLI driver files land in the working directory (one dot-prefixed
+REM .jaix-<hash>.jai per transpile call); the fixture keeps only its two
+REM manifests at the root, so every other root-level .jai is disposable driver
+REM litter -- the name-unrelated cleanup matches the dot-prefixed names too.
 :clean_driver_files
 for %%f in ("%ROOT%*.jai") do (
   if /i not "%%~nxf"=="package.jai" if /i not "%%~nxf"=="jaix.config.jai" del "%%f"

@@ -19,6 +19,7 @@ Juice uses an explicit static command registry and prerequisite Dispatcher. Each
 | `src/path_safety.jai` | Shared filesystem/path inspection and validation, plus the juice modules directory derivation |
 | `src/transpile_cache.jai` | Pure content-addressed cache keys/paths for transpiled views, and the transpile subtree root |
 | `src/transpile_front.jai` | Shared test-free strip front (ticket 0050): closure probing, view computation, the production transpile step, and the Testing-module STRIP view special case (ticket 0051) — consumed by the bootstrap `build.jai` (`#load`, PLAIN layout), the Build command, and the dependency strip front |
+| `src/scan_walk.jai` | Shared package-scan skeleton (ticket 0057): walk orchestration, deterministic DFS enumeration, path helpers, and the jaix driver-litter predicate — consumed by the test command's discovery and the jaix pre-step scan |
 | `src/metaprogram.jai` | Shared compiler metaprogram generator (one-shot workspace/intercept/message-loop skeleton) consumed by Build, Test, and the bootstrap (ticket 0052, `very_optimized` emission for the release path) |
 | `src/main.jai` | File loading, context initialization (package root and cache paths), CLI argument slicing, and dispatch |
 

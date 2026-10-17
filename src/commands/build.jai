@@ -788,3 +788,75 @@ test "E2E: the two-step script and the wired build are the same build (dual path
     expect(child_output_contains("two-step script", output, "double(-6): NEGATIVE 0"));
     expect(file_exists(artifact));
 }
+
+// The double-build E2E (spec 054 Testing Decisions seam 3): two consecutive
+// wired builds of the demo fixture. The first build's jaix driver litter
+// stays on disk — the real jaix subprocess product, dot-prefixed
+// (.jaix-<hash>.jai) and content-marked — and the second build succeeds
+// unchanged, producing the same artifact behavior and the byte-identical
+// mirror (the idempotency face held through the litter). Red before
+// 0056/0058: the second build's whole-package scan parsed the legacy
+// hash-named litter as source and failed (060 deviation 3).
+test "E2E: two consecutive wired builds are the same build despite driver litter" {
+    fixture_root := tprint("%1/tests/data/jaix-demo", juice_root());
+    delete_directory_full(tprint("%1/target", fixture_root));
+    defer delete_directory_full(tprint("%1/target", fixture_root));
+    defer clean_jaix_driver_files(fixture_root);
+    prepend_jaix_to_path();
+
+    // The first wired build: the pre-step runs and the real jaix
+    // subprocess leaves its driver files at the fixture root (the spawn
+    // cwd). They stay — no cleaning between the two builds, so the second
+    // build's scans face the real litter.
+    result, output, _ := run_juice_child("jaix-demo", "build");
+    expect(expect_exit("jaix-demo first", result, 0, "build child"));
+    expect(child_output_contains("jaix-demo first", output, "[juice] Running jaix pre-step (2 files) -> target/jaix/..."));
+
+    // The litter is really on disk and dot-prefixed (the jaix naming,
+    // 0056): without it the double build would prove nothing.
+    litter_names: [..] string;
+    scan, visited := dir_scan_entries(fixture_root);
+    expect(visited);
+    for name: scan.files {
+        if !ends_with(name, ".jai") continue;
+        if name == "package.jai" || name == "jaix.config.jai" continue;
+        array_add(*litter_names, name);
+    }
+    expect(litter_names.count > 0);
+    for name: litter_names {
+        expect(name[0] == #char ".");
+    }
+
+    // The first artifact's run output is the idempotency baseline.
+    artifact := tprint("%1/target/jaix-demo.exe", fixture_root);
+    expect(file_exists(artifact));
+    first_run, first_run_output, _, _ := run_command(artifact, capture_and_return_output = true);
+    expect(expect_exit("jaix-demo artifact first", first_run, 0, "build child"));
+    expect(child_output_contains("jaix-demo artifact first", first_run_output, "double(20): NONE 40"));
+    expect(child_output_contains("jaix-demo artifact first", first_run_output, "double(-6): NEGATIVE 0"));
+
+    // The second wired build over the litter: the scans exclude the
+    // driver files (dot-prefix entries at any depth plus the content
+    // marker), the pre-step still scans exactly the two sources and the
+    // build succeeds unchanged.
+    result, output, _ = run_juice_child("jaix-demo", "build");
+    expect(expect_exit("jaix-demo second", result, 0, "build child"));
+    expect(child_output_contains("jaix-demo second", output, "[juice] Running jaix pre-step (2 files) -> target/jaix/..."));
+
+    // The idempotency faces the double build holds: the artifact behaves
+    // byte-identically at run time and the mirror is byte-identical to
+    // the originals after the second pre-step. (The exe itself is not
+    // bit-reproducible — jai debug builds embed per-build data in the PE
+    // timestamp and the debug info, so two identical compiles differ
+    // byte-wise; 0059 deviation 1. The run output and the mirror are the
+    // deterministic faces.)
+    second_run, second_run_output, _, _ := run_command(artifact, capture_and_return_output = true);
+    expect(expect_exit("jaix-demo artifact second", second_run, 0, "build child"));
+    expect(second_run_output == first_run_output);
+    mirror := tprint("%1/target/jaix", fixture_root);
+    main_view, ok2 := read_entire_file(tprint("%1/src/main.jai", mirror));
+    main_original, ok3 := read_entire_file(tprint("%1/src/main.jai", fixture_root));
+    expect(ok2 && ok3 && main_view == main_original);
+    calc_view, ok4 := read_entire_file(tprint("%1/src/calc.jai", mirror));
+    expect(ok4 && find_index_from_left(calc_view, "try_0_err, try_0_v := half(n);") >= 0);
+}
