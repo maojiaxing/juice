@@ -8,7 +8,8 @@
 // shared modules — src/transpile_front.jai (closure probing, view computation
 // and the production transpile step; PLAIN layout: <base>/<rel> always
 // written, the whole closure including the entry lands on disk) and
-// src/metaprogram.jai (the shared Metaprogram generator; this file generates
+// src/metaprogram.jai (the shared Metaprogram generator plus the
+// bootstrap options assembly pure function; this file generates
 // the compile metaprogram and then spawns a child jai to compile — the same
 // shape as the Build command; the entry view compiles via add_build_file
 // with exact file+line diagnostics; the add_build_string +5 offset is
@@ -130,26 +131,21 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     // -------------------------------------------------------------
     // 5. Generate the compile metaprogram (sharing the Metaprogram generator
     //    with the Build command) and spawn a child jai to compile. The
-    //    child's output passes through in real time (this metaprogram's
-    //    prints are collected by jai and flushed only on normal exit — so
-    //    the 🚀/✅ lines appear after the compile output; the failure path's
-    //    exit(1) swallows this metaprogram's ❌ lines, but the exit code and
-    //    the child's error output stay intact). Failures propagate the exit
+    //    options assembly is the shared generator's pure function
+    //    (bootstrap_compiler_metaprogram_options): output_path and
+    //    intermediate_path derive from the root as absolute paths — the
+    //    generated metaprogram's child jai switches its #run working
+    //    directory to the metaprogram's own directory (target/), so a
+    //    relative "target" would resolve one layer deeper into
+    //    target/target/ (058 deviation ④, fixed here). The child's output
+    //    passes through in real time (this metaprogram's prints are
+    //    collected by jai and flushed only on normal exit — so the 🚀/✅
+    //    lines appear after the compile output; the failure path's exit(1)
+    //    swallows this metaprogram's ❌ lines, but the exit code and the
+    //    child's error output stay intact). Failures propagate the exit
     //    code with exit(1), keeping the three-path seam.
     // -------------------------------------------------------------
-    meta: Compiler_Metaprogram_Options;
-    meta.workspace_name    = "Juice Build";
-    meta.executable_name   = "juice";
-    meta.output_path       = "target";
-    meta.intermediate_path = "target";
-    import_dirs: [..] string;
-    array_add(*import_dirs, tprint("%1/src", root));
-    array_add(*import_dirs, tprint("%1/modules", root));
-    array_add(*import_dirs, root);
-    meta.import_dirs       = import_dirs;
-    meta.build_file        = entry;
-    meta.testing_view_dir  = testing_view_dir;
-    meta.very_optimized    = is_release;
+    meta := bootstrap_compiler_metaprogram_options(root, entry, testing_view_dir, is_release);
 
     // Key: make sure the target directory exists so the linker does not
     // error with LNK1104

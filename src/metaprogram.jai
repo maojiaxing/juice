@@ -11,6 +11,14 @@
 // (its tests live in tests/metaprogram_tests.jai, following the
 // tests/transpile_tests.jai precedent and the test organization rule).
 //
+// Bootstrap's options assembly also lives here as the pure function
+// bootstrap_compiler_metaprogram_options (build.jai's #run is the call
+// site): output_path and intermediate_path derive from the root as absolute
+// paths — the generated metaprogram's child jai switches its #run working
+// directory to the metaprogram's own directory (target/), so a relative
+// "target" would resolve one layer deeper into target/target/ (058
+// deviation ④, fixed here).
+//
 // Byte-identity invariant: both output shapes are byte-identical to their
 // pre-consolidation forms —
 //   executable shape (no_output = false): the output_executable_name/
@@ -113,8 +121,39 @@ generate_compiler_metaprogram :: (options: Compiler_Metaprogram_Options) -> stri
     return builder_to_string(*builder);
 }
 
+// The bootstrap options assembly (the mirror of the Build command's inline
+// options assembly): a pure function — input (root, entry, testing_view_dir,
+// is_release), output the ready Compiler_Metaprogram_Options; bootstrap
+// build.jai's #run is the assembly call site. output_path and
+// intermediate_path derive from the root as absolute paths ("<root>/target"):
+// the generated metaprogram's child jai switches its #run working directory
+// to the metaprogram's own directory (target/), so a relative "target" would
+// resolve one layer deeper — target/target/ (058 deviation ④; the fix mirrors
+// the Build command's absolute plan.target_dir). front_slashes keeps the
+// contract shape regardless of the caller's path separator style.
+bootstrap_compiler_metaprogram_options :: (root: string, entry: string, testing_view_dir: string, is_release: bool) -> Compiler_Metaprogram_Options {
+    r := front_slashes(root);
+    target_dir := tprint("%1/target", r);
+
+    options: Compiler_Metaprogram_Options;
+    options.workspace_name    = "Juice Build";
+    options.executable_name   = "juice";
+    options.output_path       = target_dir;
+    options.intermediate_path = target_dir;
+    import_dirs: [..] string;
+    array_add(*import_dirs, tprint("%1/src", r));
+    array_add(*import_dirs, tprint("%1/modules", r));
+    array_add(*import_dirs, r);
+    options.import_dirs       = import_dirs;
+    options.build_file        = entry;
+    options.testing_view_dir  = testing_view_dir;
+    options.very_optimized    = is_release;
+    return options;
+}
+
 // Byte-shape tests of the generated text (the executable shape is
 // byte-locked, the test shape's key lines, the sentinel switch and the
-// very_optimized emission) live in tests/metaprogram_tests.jai — this file
+// very_optimized emission) and the bootstrap options assembly's
+// absolute-path contract live in tests/metaprogram_tests.jai — this file
 // is bootstrap's #load target and must stay test-free (per the test
 // organization rule).

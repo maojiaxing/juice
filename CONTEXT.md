@@ -130,7 +130,7 @@ Juice 当前可执行 command 的目录。它让 command 的名称、说明、�
 根据用户输入在 command registry 中选择 command，按其前置关系执行所需 command，并把最终成功/失败结果交给 CLI 进程。Dispatcher 在执行任何 prerequisite 之前用目标 command 自身的参数规则验证用户参数；参数无效时任何 command 都不执行。
 
 **Metaprogram generator（metaprogram 生成器）**:
-Juice 进程内生成编译 metaprogram 源文本的模块（src/metaprogram.jai）：Build、Test 与 bootstrap（票 0052）共用同一生成器，产出驱动 jai 编译器的一次性 workspace、拦截与消息循环骨架；各消费方各自组装 options（workspace 名、输出形状、import 目录、入口文件）后调用，Testing 模块编译视图的 "" 哨兵约定在生成器内单点成立。bootstrap 生成后 spawn 子进程 jai 编译（与 Build command 同形状）；release 验证路径经 very_optimized 字段发射 set_optimization（默认零发射，既有消费方输出逐字节不变）。
+Juice 进程内生成编译 metaprogram 源文本的模块（src/metaprogram.jai）：Build、Test 与 bootstrap（票 0052）共用同一生成器，产出驱动 jai 编译器的一次性 workspace、拦截与消息循环骨架；各消费方各自组装 options（workspace 名、输出形状、import 目录、入口文件）后调用，Testing 模块编译视图的 "" 哨兵约定在生成器内单点成立。bootstrap 的 options 组装自票 0055 起亦驻生成器（bootstrap_compiler_metaprogram_options 纯函数——output_path/intermediate_path 以 root 派生绝对路径，根治子进程 jai #run 期工作目录切换导致的 target/target/ 落点缺陷）。bootstrap 生成后 spawn 子进程 jai 编译（与 Build command 同形状）；release 验证路径经 very_optimized 字段发射 set_optimization（默认零发射，既有消费方输出逐字节不变）。
 _Avoid_: 各 command 自持 metaprogram 骨架（会复制消息循环与哨兵约定）。
 
 ## Relationships

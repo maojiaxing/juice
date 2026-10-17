@@ -100,3 +100,47 @@ test "Metaprogram generator: very_optimized emits one line, default emits none" 
         slice(off_text, find_index_from_left(off_text, "    set_build_options(options, workspace);"),
             off_text.count - find_index_from_left(off_text, "    set_build_options(options, workspace);"))));
 }
+
+// ---------------------------------------------------------------------------
+// Bootstrap options assembly (bootstrap_compiler_metaprogram_options, the
+// shared generator's pure function): output_path and intermediate_path are
+// absolute, derived from the root — the generated metaprogram's child jai
+// switches its #run working directory to the metaprogram's own directory,
+// so a relative "target" would land one layer deeper (058 deviation ④).
+// The function is pure (no filesystem access), so the "temp root" is a path
+// string.
+// ---------------------------------------------------------------------------
+
+test "Bootstrap options: output and intermediate paths are root-derived absolute" {
+    root := "C:/temp/juice-meta-root";
+    entry := "C:/temp/juice-meta-root/src/main.jai";
+    options := bootstrap_compiler_metaprogram_options(root, entry, "", false);
+    expect(options.output_path == "C:/temp/juice-meta-root/target");
+    expect(options.intermediate_path == "C:/temp/juice-meta-root/target");
+    expect(options.workspace_name == "Juice Build");
+    expect(options.executable_name == "juice");
+    expect(!options.no_output);
+    expect(!options.very_optimized);
+    expect(options.testing_view_dir == "");
+    expect(options.build_file == entry);
+    expect(options.import_dirs.count == 3);
+    expect(options.import_dirs[0] == "C:/temp/juice-meta-root/src");
+    expect(options.import_dirs[1] == "C:/temp/juice-meta-root/modules");
+    expect(options.import_dirs[2] == "C:/temp/juice-meta-root");
+}
+
+test "Bootstrap options: a backslash root derives forward-slashed paths" {
+    options := bootstrap_compiler_metaprogram_options("C:\\temp\\juice-meta-root", "C:/temp/juice-meta-root/src/main.jai", "", false);
+    expect(options.output_path == "C:/temp/juice-meta-root/target");
+    expect(options.intermediate_path == "C:/temp/juice-meta-root/target");
+    expect(options.import_dirs[0] == "C:/temp/juice-meta-root/src");
+    expect(options.import_dirs[2] == "C:/temp/juice-meta-root");
+}
+
+test "Bootstrap options: release flag and testing view dir pass through" {
+    options := bootstrap_compiler_metaprogram_options("C:/temp/juice-meta-root", "C:/temp/juice-meta-root/src/main.jai", "C:/temp/juice-meta-root/target/testing-module", true);
+    expect(options.very_optimized);
+    expect(options.testing_view_dir == "C:/temp/juice-meta-root/target/testing-module");
+    expect(options.output_path == "C:/temp/juice-meta-root/target");
+    expect(options.intermediate_path == "C:/temp/juice-meta-root/target");
+}
