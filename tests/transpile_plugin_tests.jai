@@ -1,12 +1,14 @@
 // ---------------------------------------------------------------------------
-// Transpile pipeline tests (spec 0060 Testing Decisions 接缝 3, tickets
-// 0061/0062): the plugin interface and runner mechanics, proven with a
+// Transpile pipeline tests (spec 0060 Testing Decisions 接缝 3/4, tickets
+// 0061/0062/0063): the plugin interface and runner mechanics, proven with a
 // synthetic third plugin — dispatch through the three output channels (edits
 // / manifest entries / diagnostics), cross-file state continuation, mode
-// applicability, probe aggregation, the runner's ADR 0005 rejection and the
+// applicability, probe aggregation, the runner's ADR 0005 rejection, the
 // cache key's pipeline description component (name/version/order
-// sensitivity) — without touching the two built-in plugins' locked outputs
-// (those stay locked by tests/transpile_tests.jai).
+// sensitivity) and the package configuration surface's equality guarantee
+// (an explicit built-in declaration in the default order equals the
+// undeclared default) — without touching the two built-in plugins' locked
+// outputs (those stay locked by tests/transpile_tests.jai).
 //
 // Key constraint (same as tests/transpile_tests.jai): src/transpile_plugin.jai
 // is a build.jai #load target / entry closure member — test blocks would be
@@ -358,4 +360,46 @@ test "Cache key: omitted pipeline means the default pipeline" {
     array_add(*reversed, test_block_plugin());
     array_add(*reversed, load_plugin());
     expect(key != transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], JUICE_VERSION, reversed));
+}
+
+// ---------------------------------------------------------------------------
+// Package configuration surface (spec 0060 decision 6, ticket 0063, Testing
+// Decisions 接缝 4): an explicit declaration of the two built-in plugins in
+// the default order goes through the production seams and produces exactly
+// the same views and cache keys as the undeclared default. The manifest
+// protocol / gate matrices live in src/manifest.jai's inline tests; the
+// registry sync lock lives in src/transpile_config.jai's inline tests; the
+// real-exe E2E lives in src/commands/build.jai.
+// ---------------------------------------------------------------------------
+
+test "Config: explicit built-in declaration equals the default pipeline" {
+    root := tprint("%1/target/config-fixture", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(make_directory_if_it_does_not_exist(tprint("%1/src", root), recursive = true));
+    expect(write_entire_file(tprint("%1/src/a.jai", root), "#load \"math.jai\";\n\ntest \"t\" {\n    expect(1 < 2);\n}\n"));
+
+    build_file: Build_Source_File = .{rel_path = "src/a.jai", abs_path = tprint("%1/src/a.jai", root)};
+    declared := resolve_transpile_pipeline(.[
+        .{id = "load", version = "1.0.0"},
+        .{id = "test-block", version = "1.0.0"},
+    ]);
+    expect(declared.count == 2);
+
+    // STRIP path: the production build seam yields the same view and key
+    // with or without the explicit declaration.
+    default_output := transpile_build_file(build_file, Load_Target.[]);
+    declared_output := transpile_build_file(build_file, Load_Target.[], declared);
+    expect(declared_output.view == default_output.view);
+    expect(declared_output.key == default_output.key);
+    expect(declared_output.diagnostics.count == default_output.diagnostics.count);
+
+    // EXPAND path: the same equality through the production test seam.
+    test_file: Test_Source_File = .{rel_path = "src/a.jai", abs_path = tprint("%1/src/a.jai", root)};
+    default_test := transpile_test_file(test_file, 1);
+    declared_test := transpile_test_file(test_file, 1, declared);
+    expect(declared_test.view == default_test.view);
+    expect(declared_test.key == default_test.key);
+    expect(declared_test.tests.count == default_test.tests.count);
+    expect(declared_test.diagnostics.count == default_test.diagnostics.count);
 }

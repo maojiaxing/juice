@@ -49,6 +49,15 @@ build_eval_code :: (manifest_path: string, output_path: string) -> string {
     append(*builder, "    print_to_builder(*builder, \"JAIX_CONFIG=%\\n\", PACKAGE.jaix.config);\n");
     append(*builder, "    print_to_builder(*builder, \"JAIX_EXE=%\\n\", PACKAGE.jaix.exe);\n\n");
 
+    // Repeatable pipeline records in declaration order (spec 0060 decision
+    // 6): zero declarations print zero records — the parser then sees an
+    // empty pipeline, which means the default. Options never cross the
+    // protocol (id+version only — the jaix "options don't cross the process
+    // boundary" stance).
+    append(*builder, "    for decl: PACKAGE.transpile.plugins {\n");
+    append(*builder, "        print_to_builder(*builder, \"TRANSPILE_PLUGIN=%1|%2\\n\", decl.id, decl.version);\n");
+    append(*builder, "    }\n\n");
+
     append(*builder, "    for target: PACKAGE.targets {\n");
     append(*builder, "        print_to_builder(*builder, \"TARGET=%1|%2\\n\", target.name, target.main_file);\n");
     append(*builder, "    }\n\n");
@@ -100,6 +109,7 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
     members: [..] string;
     excluded: [..] string;
     deps: [..] Dependency;
+    transpile_plugins: [..] Transpile_Plugin_Declaration;
 
     lines := split(content, "\n");
     for line, line_index: lines {
@@ -190,6 +200,17 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
                 dep.package = copy_string(parts[3]);
                 array_add(*deps, dep);
 
+            case "TRANSPILE_PLUGIN";
+                parts := split(value, "|");
+                if parts.count != 2 return manifest_parse_failure(line_index + 1, "TRANSPILE_PLUGIN record must contain id|version.");
+                for decl: transpile_plugins {
+                    if decl.id == parts[0] return manifest_parse_failure(line_index + 1, "Duplicate TRANSPILE_PLUGIN record.");
+                }
+                decl: Transpile_Plugin_Declaration;
+                decl.id = copy_string(parts[0]);
+                decl.version = copy_string(parts[1]);
+                array_add(*transpile_plugins, decl);
+
             case;
                 return manifest_parse_failure(line_index + 1, tprint("Unknown manifest record: %1", key));
         }
@@ -199,6 +220,7 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
     result.package.workspace.members = members;
     result.package.workspace.exclude = excluded;
     result.package.dependencies = deps;
+    result.package.transpile.plugins = transpile_plugins;
     result.success = true;
     return result;
 }
@@ -222,6 +244,34 @@ parse_manifest_data :: (content: string) -> Package {
 validate_jaix_marker :: (pkg: Package) -> (bool, string) {
     if pkg.jaix.exe != "" && pkg.jaix.config == "" {
         return false, "JAIX_EXE set without JAIX_CONFIG.";
+    }
+    return true, "";
+}
+
+// Transpile pipeline validation (the validate_jaix_marker sibling — spec
+// 0060 decision 6): the declared plugin list must contain only built-in
+// plugin ids, no id may repeat, and no options may be declared (v1: both
+// built-in plugins' option sets are empty — the typed slot exists, no
+// legal option rows). The gate is standalone so the load path's check is
+// testable in-process (load_package_manifest itself needs a real jai
+// child; same split as the jaix marker gate). The duplicate-id check here
+// overlaps the strict parser's "Duplicate TRANSPILE_PLUGIN record."
+// rejection on purpose: the parser covers the protocol text with line
+// numbers, this gate stays the single validation function for
+// programmatically constructed packages.
+validate_transpile_pipeline :: (pkg: Package) -> (bool, string) {
+    seen: [..] string;
+    for decl: pkg.transpile.plugins {
+        if decl.id != TRANSPILE_PLUGIN_LOAD_ID && decl.id != TRANSPILE_PLUGIN_TEST_BLOCK_ID {
+            return false, tprint("Unknown transpile plugin id: %1", decl.id);
+        }
+        for id: seen {
+            if id == decl.id return false, tprint("Duplicate transpile plugin id: %1", decl.id);
+        }
+        array_add(*seen, copy_string(decl.id));
+        if decl.options.count > 0 {
+            return false, tprint("Invalid transpile plugin options for %1: the option set is empty.", decl.id);
+        }
     }
     return true, "";
 }
@@ -314,15 +364,21 @@ load_package_manifest :: (cache_dir: string, pkg_dir: string) -> Package, bool {
         print("[juice ERROR] Invalid jaix marker at %: %\n", manifest_path, jaix_error);
         return .{}, false;
     }
+    pipeline_ok, pipeline_error := validate_transpile_pipeline(parsed.package);
+    if !pipeline_ok {
+        print("[juice ERROR] Invalid transpile pipeline at %: %\n", manifest_path, pipeline_error);
+        return .{}, false;
+    }
     parsed.package.dir = copy_string(pkg_dir);
     return parsed.package, true;
 }
 
 // ---------------------------------------------------------------------------
-// Inline tests: the jaix marker validation matrix. The parse faces are pure
-// protocol; the marker cross-record check lives in validate_jaix_marker (the
-// load path's testable seam — load_package_manifest needs a real jai child,
-// so its branches stay covered by E2E message assertions elsewhere).
+// Inline tests: the jaix marker and transpile pipeline validation matrices.
+// The parse faces are pure protocol; the cross-record checks live in
+// validate_jaix_marker / validate_transpile_pipeline (the load path's
+// testable seams — load_package_manifest needs a real jai child, so its
+// branches stay covered by E2E message assertions elsewhere).
 // ---------------------------------------------------------------------------
 
 test "Jaix marker parses a config and exe pair" {
@@ -365,5 +421,90 @@ test "Jaix marker accepts a config with or without an exe override" {
     ok, _ = validate_jaix_marker(.{name = "demo", version = "1", jaix = .{config = "jaix.config.jai", exe = "jaix.exe"}});
     expect(ok);
     ok, _ = validate_jaix_marker(.{name = "demo", version = "1"});
+    expect(ok);
+}
+
+test "Transpile pipeline records parse in declaration order" {
+    parsed := parse_manifest_data_strict("NAME=demo\nVERSION=1\nTRANSPILE_PLUGIN=load|1.0.0\nTRANSPILE_PLUGIN=test-block|1.0.0\n");
+    expect(parsed.success);
+    expect(parsed.package.transpile.plugins.count == 2);
+    expect(parsed.package.transpile.plugins[0].id == "load");
+    expect(parsed.package.transpile.plugins[0].version == "1.0.0");
+    expect(parsed.package.transpile.plugins[1].id == "test-block");
+    expect(parsed.package.transpile.plugins[1].version == "1.0.0");
+    expect(parsed.package.transpile.plugins[0].options.count == 0);
+}
+
+test "Transpile pipeline records default to empty when absent" {
+    parsed := parse_manifest_data_strict("NAME=demo\nVERSION=1\n");
+    expect(parsed.success);
+    expect(parsed.package.transpile.plugins.count == 0);
+}
+
+// The evaluator codegen locks the protocol record shape at the generation
+// level (the full child-process loop is covered by the E2E child scenarios
+// in commands/build.jai): the repeatable TRANSPILE_PLUGIN=<id>|<version>
+// record is printed per declaration, in declaration order.
+test "Evaluator codegen prints TRANSPILE_PLUGIN records in declaration order" {
+    code := build_eval_code("C:/pkg/package.jai", "C:/out/data.txt");
+    expect(find_index_from_left(code, "PACKAGE.transpile.plugins") >= 0);
+    expect(find_index_from_left(code, "TRANSPILE_PLUGIN=%1|%2") >= 0);
+    expect(find_index_from_left(code, "decl.id, decl.version") >= 0);
+}
+
+test "Transpile pipeline rejects a record without id|version" {
+    parsed := parse_manifest_data_strict("NAME=demo\nVERSION=1\nTRANSPILE_PLUGIN=load\n");
+    expect(!parsed.success);
+    expect(parsed.line_number == 3);
+    expect(parsed.error_message == "TRANSPILE_PLUGIN record must contain id|version.");
+}
+
+test "Transpile pipeline rejects a duplicate plugin id" {
+    parsed := parse_manifest_data_strict("NAME=demo\nVERSION=1\nTRANSPILE_PLUGIN=load|1.0.0\nTRANSPILE_PLUGIN=load|1.0.0\n");
+    expect(!parsed.success);
+    expect(parsed.line_number == 4);
+    expect(parsed.error_message == "Duplicate TRANSPILE_PLUGIN record.");
+}
+
+test "Transpile pipeline validation rejects an unknown plugin id" {
+    pkg: Package = .{name = "demo", version = "1", transpile = .{plugins = .[.{id = "mystery", version = "1.0.0"}]}};
+    ok, message := validate_transpile_pipeline(pkg);
+    expect(!ok);
+    expect(message == "Unknown transpile plugin id: mystery");
+}
+
+test "Transpile pipeline validation rejects a duplicate plugin id" {
+    pkg: Package = .{name = "demo", version = "1", transpile = .{plugins = .[
+        .{id = "load", version = "1.0.0"},
+        .{id = "load", version = "1.0.0"},
+    ]}};
+    ok, message := validate_transpile_pipeline(pkg);
+    expect(!ok);
+    expect(message == "Duplicate transpile plugin id: load");
+}
+
+test "Transpile pipeline validation rejects options on a built-in plugin" {
+    pkg: Package = .{name = "demo", version = "1", transpile = .{plugins = .[
+        .{id = "load", version = "1.0.0", options = .[.{key = "mode", value = "fast"}]},
+    ]}};
+    ok, message := validate_transpile_pipeline(pkg);
+    expect(!ok);
+    expect(message == "Invalid transpile plugin options for load: the option set is empty.");
+}
+
+test "Transpile pipeline validation accepts the built-in plugins" {
+    pkg: Package = .{name = "demo", version = "1", transpile = .{plugins = .[
+        .{id = "load", version = "1.0.0"},
+        .{id = "test-block", version = "1.0.0"},
+    ]}};
+    ok, _ := validate_transpile_pipeline(pkg);
+    expect(ok);
+    ok, _ = validate_transpile_pipeline(.{name = "demo", version = "1"});
+    expect(ok);
+    reversed: Package = .{name = "demo", version = "1", transpile = .{plugins = .[
+        .{id = "test-block", version = "1.0.0"},
+        .{id = "load", version = "1.0.0"},
+    ]}};
+    ok, _ = validate_transpile_pipeline(reversed);
     expect(ok);
 }

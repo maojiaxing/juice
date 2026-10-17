@@ -237,9 +237,13 @@ collect_shim_names :: (packages_dir: string) -> [..] string, bool {
 // regenerated pointing at the entry's strip view. Test-free dependencies,
 // missing entries and hand-written shims stay untouched (zero transpile,
 // zero cache; the compiler's own error reports whatever is wrong with them).
+// The strip views always use the default pipeline: dependency packages'
+// manifests are not retained past preparation (spec 0060 decision 6 wires
+// the root package's declaration surface), so their closures resolve the
+// empty pipeline to the default — today's behavior exactly.
 prepare_dependency_strip_views :: (
     root_dir: string,
-    transpile: #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output
+    transpile: #type (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin = .[]) -> Build_File_Output
 ) -> bool {
     packages := packages_dir(root_dir);
     if !is_directory(packages) return true;

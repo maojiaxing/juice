@@ -80,11 +80,15 @@ probe_visited :: (visited: [] string, rel_path: string) -> bool {
 // probe_build_closure), dependency closures (dependency.jai's dependency
 // strip front) and the bootstrap closure (build.jai) share this probe.
 // error_prefix is injected by the consumer (bootstrap uses
-// "[Build System] ❌ ").
-probe_package_closure :: (package_root: string, entry_rel: string, error_prefix: string = "[juice ERROR] ") -> [..] Build_Closure_File, bool {
+// "[Build System] ❌ "); pipeline is the configured pipeline the probe
+// aggregates over (spec 0060 decision 4/6) — an empty pipeline means the
+// default, so every existing caller keeps its behavior unchanged.
+probe_package_closure :: (package_root: string, entry_rel: string, error_prefix: string = "[juice ERROR] ", pipeline: [] Transpile_Plugin = .[]) -> [..] Build_Closure_File, bool {
     entry: Build_Source_File;
     entry.rel_path = entry_rel;
     entry.abs_path = front_slashes(tprint("%1/%2", package_root, entry_rel));
+
+    resolved := resolve_pipeline(pipeline);
 
     files: [..] Build_Closure_File;
     visited: [..] string;
@@ -107,9 +111,10 @@ probe_package_closure :: (package_root: string, entry_rel: string, error_prefix:
         cf.file = file;
         // Probe aggregation (spec 0060 decision 4): the closure decisions
         // ask the pipeline's plugin hooks instead of hardcoding the two
-        // transforms (the default registry for now).
-        cf.has_tests = pipeline_has_anchors(default_transpile_pipeline(), source, file.rel_path);
-        cf.loads = pipeline_load_edges(default_transpile_pipeline(), source, file.rel_path);
+        // transforms (the configured pipeline for a declared package, the
+        // default registry otherwise).
+        cf.has_tests = pipeline_has_anchors(resolved, source, file.rel_path);
+        cf.loads = pipeline_load_edges(resolved, source, file.rel_path);
         array_add(*files, cf);
 
         // Push in reverse so targets pop in statement order.
@@ -172,7 +177,16 @@ Strip_View_Layout :: enum {
 // (dependency.jai); generalized and moved here.
 Strip_View_State :: struct {
     closure:       [] Build_Closure_File;
-    transpile:     #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output;
+    // The transpile seam: a function from one closure file (+ its load
+    // rewrite table) to the strip view. The third parameter is the pipeline
+    // (empty = the default — every existing caller keeps its behavior);
+    // view_of_file passes state.pipeline below.
+    transpile:     #type (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin = .[]) -> Build_File_Output;
+    // The pipeline the closure is transpiled with (spec 0060 decision 6):
+    // the caller's configured pipeline for a declared package; empty (the
+    // default) for bootstrap and dependency closures, which have no
+    // package declaration surface.
+    pipeline:      [] Transpile_Plugin;
     transpile_dir: string;   // CONTENT_ADDRESSED: transpile tree root; PLAIN: view base dir (absolute)
     dep_name:      string;   // CONTENT_ADDRESSED non-empty -> deps/<name> subtree
     layout:        Strip_View_Layout;
@@ -222,7 +236,7 @@ view_of_file :: (state: *Strip_View_State, index: s64) -> string, bool {
         array_add(*load_targets, target);
     }
 
-    output := state.transpile(state.closure[index].file, load_targets);
+    output := state.transpile(state.closure[index].file, load_targets, state.pipeline);
     if output.diagnostics.count > 0 {
         for diagnostic: output.diagnostics {
             print("%1%2:%3,%4: %5\n", state.error_prefix, state.closure[index].file.rel_path, diagnostic.line, diagnostic.column, diagnostic.message);
@@ -265,10 +279,12 @@ view_of_file :: (state: *Strip_View_State, index: s64) -> string, bool {
 // pipeline description + load targets — the pipeline is the context's
 // registry, so the key always reflects the pipeline that produced the
 // view). The load rewrite table embeds the target views' hash directories,
-// so keys form a Merkle chain computable in dependency order. Originally
-// lived in commands/build.jai; moved here so bootstrap and the Build
-// command share one production step.
-transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output {
+// so keys form a Merkle chain computable in dependency order. pipeline is
+// the configured pipeline (spec 0060 decision 6); an empty pipeline means
+// the default — every existing caller keeps its behavior unchanged.
+// Originally lived in commands/build.jai; moved here so bootstrap and the
+// Build command share one production step.
+transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin = .[]) -> Build_File_Output {
     output: Build_File_Output;
     source, ok := read_entire_file(file.abs_path);
     if !ok {
@@ -279,6 +295,9 @@ transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target) 
     ctx.mode = .STRIP;
     ctx.path = file.rel_path;
     ctx.load_targets = load_targets;
+    // ctx.plugins is a resizable array; copy the slice in so the context
+    // owns its pipeline view.
+    for plugin: pipeline array_add(*ctx.plugins, plugin);
     result := transpile_source(source, ctx);
     output.view = result.view;
     output.key = transpile_view_key(file.rel_path, source, .STRIP, load_targets, JUICE_VERSION, ctx.plugins);

@@ -58,7 +58,10 @@ Test_File_Output :: struct {
 // The compile seam mirrors build's compile seam: production handlers use the
 // default (real jai invocation of the generated metaprogram); tests cross the
 // same interface with a recording adapter instead of invoking the compiler.
-transpile_test_file :: (file: Test_Source_File, next_test_number: s64) -> Test_File_Output {
+// pipeline is the configured pipeline (spec 0060 decision 6); an empty
+// pipeline means the default — every existing caller keeps its behavior
+// unchanged.
+transpile_test_file :: (file: Test_Source_File, next_test_number: s64, pipeline: [] Transpile_Plugin = .[]) -> Test_File_Output {
     output: Test_File_Output;
     source, ok := read_entire_file(file.abs_path);
     if !ok {
@@ -69,6 +72,9 @@ transpile_test_file :: (file: Test_Source_File, next_test_number: s64) -> Test_F
     ctx.mode = .EXPAND;
     ctx.path = file.rel_path;
     ctx.next_test_number = next_test_number;
+    // ctx.plugins is a resizable array; copy the slice in so the context
+    // owns its pipeline view.
+    for plugin: pipeline array_add(*ctx.plugins, plugin);
     result := transpile_source(source, ctx);
     output.view = result.view;
     output.key = transpile_view_key(file.rel_path, source, .EXPAND, Load_Target.[], JUICE_VERSION, ctx.plugins);
@@ -100,9 +106,9 @@ test_prepared_workspace :: (
     prepared: *Prepared_Workspace,
     pattern: string,
     files: [] Test_Source_File,
-    transpile: #type (file: Test_Source_File, next_test_number: s64) -> Test_File_Output = transpile_test_file,
+    transpile: #type (file: Test_Source_File, next_test_number: s64, pipeline: [] Transpile_Plugin = .[]) -> Test_File_Output = transpile_test_file,
     compile: #type (transpile_dir: string, driver_path: string, metaprogram_path: string) -> bool = compile_test_program,
-    dep_transpile: #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output = transpile_build_file,
+    dep_transpile: #type (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin = .[]) -> Build_File_Output = transpile_build_file,
     prestep: #type (prepared: *Prepared_Workspace, transpile: #type (exe: string, input: string, output: string, config: string) -> (exit_code: s64, stderr: string) = spawn_jaix_transpile) -> bool = run_jaix_prestep
 ) -> bool {
     // 0. jaix pre-step (spec 055 decision 8): the root package's jaix marker
@@ -145,12 +151,17 @@ test_prepared_workspace :: (
     }
 
     // 1. Transpile every file in list order, numbering tests globally.
-    //    Diagnostics are rejected with the original file coordinates.
+    //    Diagnostics are rejected with the original file coordinates. The
+    //    root package's declared pipeline applies (spec 0060 decision 6):
+    //    declaration order = pipeline order; an undeclared package resolves
+    //    to the default inside the seam (empty pipeline), zero behavior
+    //    change.
+    pipeline := resolve_transpile_pipeline(prepared.discovery.root_package.transpile.plugins);
     outputs: [..] Test_File_Output;
     matches: [..] Test_Entry;
     next_number: s64 = 1;
     for file: compile_files {
-        output := transpile(file, next_number);
+        output := transpile(file, next_number, pipeline);
         if output.diagnostics.count > 0 {
             for diagnostic: output.diagnostics {
                 print("[juice ERROR] %1:%2,%3: %4\n", file.rel_path, diagnostic.line, diagnostic.column, diagnostic.message);
@@ -704,6 +715,33 @@ test "Seam: compile failure propagates" {
     result := test_prepared_workspace(*prepared, "", seam_files(), fake_transpile, fake_compile);
     delete_directory_full(tprint("%1/target/seam-root", juice_root()));
     expect(!result && test_compile_calls == 1);
+}
+
+// The root package's declared transpile pipeline reaches the EXPAND seam in
+// declaration order (spec 0060 decision 6); an undeclared package hands the
+// seam an empty pipeline, which the production seam resolves to the default
+// (zero behavior change).
+test "Seam: the declared pipeline reaches the transpile step in declaration order" {
+    reset_seam_test();
+    prepared := seam_prepared();
+    prepared.discovery.root_package = .{name = "demo", version = "1", transpile = .{plugins = .[
+        .{id = "load", version = "1.0.0"},
+        .{id = "test-block", version = "1.0.0"},
+    ]}};
+    expect(test_prepared_workspace(*prepared, "", seam_files(), fake_transpile, fake_compile));
+    expect(test_transpiled_pipelines.count == 2);
+    expect(test_transpiled_pipelines[0] == "load,test-block");
+    expect(test_transpiled_pipelines[1] == "load,test-block");
+    delete_directory_full(tprint("%1/target/seam-root", juice_root()));
+
+    // An undeclared package hands the seam an empty pipeline.
+    reset_seam_test();
+    prepared = seam_prepared();
+    expect(test_prepared_workspace(*prepared, "", seam_files(), fake_transpile, fake_compile));
+    expect(test_transpiled_pipelines.count == 2);
+    expect(test_transpiled_pipelines[0] == "");
+    expect(test_transpiled_pipelines[1] == "");
+    delete_directory_full(tprint("%1/target/seam-root", juice_root()));
 }
 
 // ---------------------------------------------------------------------------

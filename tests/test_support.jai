@@ -287,14 +287,28 @@ fake_key :: (rel: string) -> string {
 test_build_transpile_calls: s64;
 test_build_transpiled_files: [..] string;
 test_build_transpiled_rewrites: [..] string;
+test_build_transpiled_pipelines: [..] string;
 test_build_fake_diagnostic: string;
 
-fake_build_transpile :: (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output {
+// One recorded pipeline summary: the plugin names in declaration order,
+// comma-joined ("" for an empty pipeline). Lets the assembly wiring tests
+// assert exactly which pipeline the orchestration handed the seam.
+pipeline_summary :: (pipeline: [] Transpile_Plugin) -> string {
+    builder: String_Builder;
+    for plugin, i: pipeline {
+        if i > 0 print_to_builder(*builder, ",");
+        print_to_builder(*builder, "%", plugin.name);
+    }
+    return builder_to_string(*builder);
+}
+
+fake_build_transpile :: (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin) -> Build_File_Output {
     test_build_transpile_calls += 1;
     array_add(*test_build_transpiled_files, file.rel_path);
     for target: load_targets {
         array_add(*test_build_transpiled_rewrites, tprint("%1 -> %2", target.from, target.to));
     }
+    array_add(*test_build_transpiled_pipelines, pipeline_summary(pipeline));
     output: Build_File_Output;
     output.view = tprint("// fake build view of %1\n", file.rel_path);
     output.key = fake_key(file.rel_path);
@@ -320,6 +334,7 @@ reset_build_seam :: () {
     test_build_transpile_calls = 0;
     array_reset(*test_build_transpiled_files);
     array_reset(*test_build_transpiled_rewrites);
+    array_reset(*test_build_transpiled_pipelines);
     test_build_fake_diagnostic = "";
     test_build_compile_calls = 0;
     array_reset(*test_build_compiled_entries);
@@ -545,16 +560,19 @@ library_fixture_package :: () -> Package {
 
 test_transpiled_files: [..] Test_Source_File;
 test_transpiled_numbers: [..] s64;
+test_transpiled_pipelines: [..] string;
 test_fake_tests_per_file: s64 = 1;
 test_fake_diagnostic: string = "";
 
 // Each file yields test_count tests named "<rel> test <n>" plus, optionally,
 // one canned diagnostic (for the rejection path). The key is canned too (flat
 // by construction): the orchestration only feeds it through the pure path
-// function.
-fake_transpile :: (file: Test_Source_File, next_test_number: s64) -> Test_File_Output {
+// function. The pipeline is recorded as a name summary (pipeline_summary) so
+// the assembly wiring tests can assert what the orchestration handed over.
+fake_transpile :: (file: Test_Source_File, next_test_number: s64, pipeline: [] Transpile_Plugin) -> Test_File_Output {
     array_add(*test_transpiled_files, file);
     array_add(*test_transpiled_numbers, next_test_number);
+    array_add(*test_transpiled_pipelines, pipeline_summary(pipeline));
     output: Test_File_Output;
     output.view = tprint("// fake view of %1\n", file.rel_path);
     output.key = fake_key(file.rel_path);
@@ -603,6 +621,7 @@ reset_seam_test :: () {
     delete_directory_full(tprint("%1/target/seam-root", juice_root()));
     array_reset(*test_transpiled_files);
     array_reset(*test_transpiled_numbers);
+    array_reset(*test_transpiled_pipelines);
     test_fake_tests_per_file = 1;
     test_fake_diagnostic = "";
     test_compile_calls = 0;

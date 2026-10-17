@@ -142,8 +142,12 @@ compile_artifact_plan :: (root_dir: string, plan: Artifact_Plan, entry: string) 
 // Probe one target's closure: the entry's literal in-package #load closure
 // within the package root. Dependency closures enter through import shims
 // and are probed separately by the dependency strip front (dependency.jai).
+// The probe aggregates over the root package's declared pipeline (spec 0060
+// decision 6): a declared package's closure decisions follow its pipeline,
+// an undeclared package resolves to the default (zero behavior change).
 probe_build_closure :: (prepared: *Prepared_Workspace, plan: Artifact_Plan) -> [..] Build_Closure_File, bool {
-    files, ok := probe_package_closure(prepared.discovery.root_dir, path_slashes(plan.target.main_file));
+    pipeline := resolve_transpile_pipeline(prepared.discovery.root_package.transpile.plugins);
+    files, ok := probe_package_closure(prepared.discovery.root_dir, path_slashes(plan.target.main_file), pipeline = pipeline);
     return files, ok;
 }
 
@@ -162,7 +166,7 @@ probe_build_closure :: (prepared: *Prepared_Workspace, plan: Artifact_Plan) -> [
 build_plan_entry :: (
     prepared: *Prepared_Workspace,
     plan: Artifact_Plan,
-    transpile: #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output
+    transpile: #type (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin = .[]) -> Build_File_Output
 ) -> (string, bool) {
     if prepared.discovery.root_package.jaix.config != "" {
         return jaix_mirror_view_path(prepared.discovery.root_dir, path_slashes(plan.target.main_file)), true;
@@ -177,6 +181,11 @@ build_plan_entry :: (
     state.layout = .CONTENT_ADDRESSED;
     state.closure = closure;
     state.transpile = transpile;
+    // The root package's declared pipeline (spec 0060 decision 6):
+    // declaration order = pipeline order; an undeclared package resolves
+    // to the default inside the seam (empty pipeline), zero behavior
+    // change.
+    state.pipeline = resolve_transpile_pipeline(prepared.discovery.root_package.transpile.plugins);
     for _: closure {
         array_add(*state.states, 0);
         array_add(*state.view_paths, "");
@@ -198,7 +207,7 @@ build_plan_entry :: (
 // pre-step; tests cross the interface with a recording fake.
 build_prepared_workspace :: (
     prepared: *Prepared_Workspace,
-    transpile: #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output = transpile_build_file,
+    transpile: #type (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin = .[]) -> Build_File_Output = transpile_build_file,
     compile: #type (root_dir: string, plan: Artifact_Plan, entry: string) -> bool = compile_artifact_plan,
     prestep: #type (prepared: *Prepared_Workspace, transpile: #type (exe: string, input: string, output: string, config: string) -> (exit_code: s64, stderr: string) = spawn_jaix_transpile) -> bool = run_jaix_prestep
 ) -> bool {
@@ -451,6 +460,50 @@ test "Build front: a load cycle cannot be rewritten" {
     expect(test_build_compile_calls == 0);
 }
 
+// The root package's declared transpile pipeline reaches the strip seam in
+// declaration order (spec 0060 decision 6): declaration order = pipeline
+// order; an undeclared package hands the seam an empty pipeline, which the
+// production seam resolves to the default (zero behavior change).
+test "Build front: the declared pipeline reaches the transpile seam in declaration order" {
+    root := tprint("%1/target/build-seam-pipeline", juice_root());
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "src/main.jai", "#load \"math.jai\";\n\nmain :: () { print(\"hi\\n\"); }\n"));
+    expect(build_seam_write(root, "src/math.jai", "add :: (a: s32, b: s32) -> s32 { return a + b; }\n\ntest \"addition\" {\n}\n"));
+
+    plan := build_seam_plan(root, "src/main.jai");
+    prepared := build_seam_prepared(root, plan);
+    prepared.discovery.root_package = .{name = "demo", version = "1", transpile = .{plugins = .[
+        .{id = "load", version = "1.0.0"},
+        .{id = "test-block", version = "1.0.0"},
+    ]}};
+    reset_build_seam();
+    expect(build_prepared_workspace(*prepared, fake_build_transpile, fake_build_compile));
+    expect(test_build_transpiled_pipelines.count == 2);
+    expect(test_build_transpiled_pipelines[0] == "load,test-block");
+    expect(test_build_transpiled_pipelines[1] == "load,test-block");
+
+    // Declaration order is the pipeline order: the reversed declaration
+    // reaches the seam reversed.
+    prepared.discovery.root_package = .{name = "demo", version = "1", transpile = .{plugins = .[
+        .{id = "test-block", version = "1.0.0"},
+        .{id = "load", version = "1.0.0"},
+    ]}};
+    reset_build_seam();
+    expect(build_prepared_workspace(*prepared, fake_build_transpile, fake_build_compile));
+    expect(test_build_transpiled_pipelines.count == 2);
+    expect(test_build_transpiled_pipelines[0] == "test-block,load");
+
+    // An undeclared package hands the seam an empty pipeline (the default
+    // resolution stays the seam's job — zero behavior change).
+    prepared.discovery.root_package = .{name = "demo", version = "1"};
+    reset_build_seam();
+    expect(build_prepared_workspace(*prepared, fake_build_transpile, fake_build_compile));
+    expect(test_build_transpiled_pipelines.count == 2);
+    expect(test_build_transpiled_pipelines[0] == "");
+    expect(test_build_transpiled_pipelines[1] == "");
+}
+
 // ---------------------------------------------------------------------------
 // jaix pre-step wiring (spec 055 decision 8): the marker routes the build
 // through the shared front — the pre-step runs once before the entry loop,
@@ -621,6 +674,85 @@ test "E2E: test-free package builds with zero transpile" {
     result, output, _ := run_juice_child("build-empty", "build");
     expect(expect_exit("build-empty", result, 0, "build child"));
     expect(file_exists(tprint("%1/target/build-empty.exe", fixture_root)));
+    expect(!file_exists(tprint("%1/target/transpile", fixture_root)));
+}
+
+// Count one tree's regular files recursively (visit_files with
+// visit_directories = false never reports directories).
+Transpile_File_Count :: struct {
+    count: s64;
+}
+
+transpile_file_counter :: (info: *File_Visit_Info, user_data: *Transpile_File_Count) {
+    user_data.count += 1;
+}
+
+// A package that explicitly declares the two built-in plugins in the
+// default order produces exactly the same views and cache keys as an
+// undeclared package (spec 0060 story 29): the views land at the
+// pure-contract paths computed with the DEFAULT pipeline description, and
+// no other view files exist (a differing pipeline description would change
+// the keys — the hash directory names — and leave extra files behind).
+test "E2E: explicit built-in pipeline declaration equals the default pipeline" {
+    fixture_root := tprint("%1/tests/data/pipeline-explicit", juice_root());
+    defer delete_directory_full(tprint("%1/target", fixture_root));
+
+    result, output, _ := run_juice_child("pipeline-explicit", "build");
+    expect(expect_exit("pipeline-explicit", result, 0, "build child"));
+    expect(child_output_contains("pipeline-explicit", output, "[juice Build] Compiling Target 'pipeline-explicit' (src/main.jai) -> target/..."));
+
+    // The artifact behaves like the original program.
+    artifact := tprint("%1/target/pipeline-explicit.exe", fixture_root);
+    expect(file_exists(artifact));
+    run_result, run_output, _, _ := run_command(artifact, capture_and_return_output = true);
+    expect(expect_exit("pipeline-explicit artifact", run_result, 0, "build child"));
+    expect(child_output_contains("pipeline-explicit artifact", run_output, "hello from pipeline-explicit"));
+
+    // Both closure views exist at the pure-contract paths computed with the
+    // default pipeline (an explicit built-in declaration changes nothing),
+    // byte for byte equal to the default pipeline's output.
+    transpile_dir := tprint("%1/target/transpile", fixture_root);
+    math_source, ok := read_entire_file(tprint("%1/src/math.jai", fixture_root));
+    expect(ok);
+    math_key := transpile_view_key("src/math.jai", math_source, .STRIP, Load_Target.[], JUICE_VERSION);
+    math_view := transpile_view_path(transpile_dir, math_key, "src/math.jai");
+    expect(path_exists_as_regular_file(math_view));
+    math_result := transpile_source(math_source, .{mode = .STRIP, path = "src/math.jai"});
+    math_view_text, ok2 := read_entire_file(math_view);
+    expect(ok2 && math_view_text == math_result.view);
+
+    main_source, ok3 := read_entire_file(tprint("%1/src/main.jai", fixture_root));
+    expect(ok3);
+    main_key := transpile_view_key("src/main.jai", main_source, .STRIP, Load_Target.[.{from = "src/math.jai", to = math_view}], JUICE_VERSION);
+    main_view := transpile_view_path(transpile_dir, main_key, "src/main.jai");
+    expect(path_exists_as_regular_file(main_view));
+    main_result := transpile_source(main_source, .{mode = .STRIP, path = "src/main.jai", load_targets = Load_Target.[.{from = "src/math.jai", to = math_view}]});
+    main_view_text, ok4 := read_entire_file(main_view);
+    expect(ok4 && main_view_text == main_result.view);
+
+    // Exactly these two views exist: no extra hash directories from a
+    // differing key.
+    counter: Transpile_File_Count;
+    visit_files(transpile_dir, true, *counter, transpile_file_counter, visit_directories = false);
+    expect(counter.count == 2);
+
+    // The test path sees the same equality through the real exe.
+    defer delete_directory_full(tprint("%1/target/transpile", fixture_root));
+    test_result, test_output, _ := run_juice_test("pipeline-explicit");
+    expect(expect_exit("pipeline-explicit test", test_result, 0));
+    expect(output_matches("pipeline-explicit test", test_output, string.["[test] explicit pipeline addition", "1 passed, 0 failed"]));
+}
+
+// Declaring an unknown plugin id fails the manifest load with a clear
+// diagnostic before anything is built.
+test "E2E: an unknown transpile plugin id is rejected with a clear diagnostic" {
+    fixture_root := tprint("%1/tests/data/pipeline-unknown", juice_root());
+    defer delete_directory_full(tprint("%1/target", fixture_root));
+
+    result, output, _ := run_juice_child("pipeline-unknown", "build");
+    expect(expect_exit("pipeline-unknown", result, 1, "build child"));
+    expect(child_output_contains("pipeline-unknown", output, "[juice ERROR] Invalid transpile pipeline at "));
+    expect(child_output_contains("pipeline-unknown", output, "Unknown transpile plugin id: mystery-plugin"));
     expect(!file_exists(tprint("%1/target/transpile", fixture_root)));
 }
 
