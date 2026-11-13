@@ -80,10 +80,9 @@
 // transpiler and view contract with the Build command; the line-fidelity
 // invariant is identical (ADR 0005).
 //
-// The otter root's entry closure carries test blocks since ticket 030
-// (src/module.jai's self-test segment), so the bootstrap takes the strip
-// path today — the test-free direct-compile branch stays for packages
-// without inline tests.
+// The otter root's entry closure is test-free after the self-test migration
+// to tests/, so its bootstrap compiles the original sources. The bootstrap
+// regression fixtures exercise the inline-test STRIP path explicitly.
 // ---------------------------------------------------------------------------
 bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     root := front_slashes(get_working_directory());
@@ -165,7 +164,7 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     //    read the definition source and land the module artifacts under
     //    target/modules — Juice/module.jai (the Package compatibility
     //    directory module), Testing.jai (the prefix-stripped flat module,
-    //    self-test blocks included) and juice_core.jai (the generated
+    //    self-tests excluded) and juice_core.jai (the generated
     //    plugin face). Ticket 037 adds the fourth, non-module-face artifact:
     //    modules/juice_internal/test_discovery.jai, a verbatim copy of
     //    src/test_discovery.jai that the generated test metaprogram #loads
@@ -345,13 +344,11 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     //    shared testing_module_strip_view_dir's return value.
     //
     //    The module source is the PUBLISHED face (target/modules/
-    //    Testing.jai — the step 3 product, self-test blocks included): the
-    //    ticket 031 seed consumption at the same path now reads the
-    //    published content, so the special case keeps triggering and the
-    //    compile consumes the published bare-name face (the ticket 032
-    //    publish-before-compile sequencing). A missing module degrades to
-    //    "" (zero change) — but step 3 just wrote it, so that is a
-    //    defensive branch only.
+    //    Testing.jai — the step 3 product). Publication cuts its self-tests,
+    //    so the current consumer face compiles directly and the special
+    //    case stays disabled. The shared helper still handles sources with
+    //    inline test blocks. A missing module degrades to "" (zero change)
+    //    — but step 3 just wrote it, so that is a defensive branch only.
     // -------------------------------------------------------------
     testing_view_dir := testing_module_strip_view_dir(root, testing_module_path(target_dir), "[Build System] ❌ ");
 

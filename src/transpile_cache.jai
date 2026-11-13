@@ -3,7 +3,8 @@
 // the mode (build/test), the pipeline output contract version, the pipeline
 // description (the ordered name+version sequence of the plugins that
 // produce the view — a plugin rename, a version bump or a pipeline reorder
-// changes the key precisely) and the build mode's #load rewrite targets.
+// changes the key precisely), the test mode's starting test number, and
+// the build mode's #load rewrite targets.
 // Because a strip view's rewrite strings embed the target views' hash
 // directories, the keys form a Merkle chain — a parent's key depends on its
 // children's keys and stays deterministically computable in dependency
@@ -40,7 +41,7 @@
 // abandoned in place and disappear with `clean` (no active cleanup). Bump
 // the numeric part when that contract changes in a way no plugin version
 // expresses.
-VIEW_CONTRACT_VERSION :: "otter-0.1.0";
+VIEW_CONTRACT_VERSION :: "otter-0.1.1";
 
 // Normalize backslashes to forward slashes (local to keep this module
 // self-contained; the repo-wide helper lives in path_safety.jai).
@@ -74,14 +75,18 @@ hash_hex :: (s: string) -> string {
 // joins the key, so a plugin rename, a version bump or a pipeline reorder
 // invalidates the view precisely. An omitted or empty pipeline means the
 // default pipeline (resolve_pipeline — the runner's own convention), and an
-// omitted version means the otter contract version constant.
+// omitted version means the otter contract version constant. EXPAND views
+// also depend on next_test_number: changing an earlier file's test count
+// must invalidate later views even when their own source is unchanged.
+// STRIP views do not number tests and ignore this component.
 transpile_view_key :: (
     rel_path: string,
     source: string,
     mode: Transpile_Mode,
     load_targets: [] Load_Target,
     version := VIEW_CONTRACT_VERSION,
-    pipeline: [] Transpile_Plugin = .[]
+    pipeline: [] Transpile_Plugin = .[],
+    next_test_number: s64 = 1
 ) -> string {
     resolved := resolve_pipeline(pipeline);
     builder: String_Builder;
@@ -90,6 +95,9 @@ transpile_view_key :: (
         source,
         ifx mode == .EXPAND then "test" else "build",
         version);
+    if mode == .EXPAND {
+        print_to_builder(*builder, "%1\0", next_test_number);
+    }
     print_to_builder(*builder, "%1\0", resolved.count);
     for plugin: resolved {
         print_to_builder(*builder, "%1\0%2\0", plugin.name, plugin.version);

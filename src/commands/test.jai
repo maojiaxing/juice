@@ -153,7 +153,8 @@ collect_file_is_excluded :: (info: *File_Visit_Info, collect: *Test_Collect_Cont
 // ---------------------------------------------------------------------------
 // t3: the per-file EXPAND step. The transpile step's output for one file:
 // the expand-mode view text, the content-addressed cache key (pure function
-// over path + source + mode + version + pipeline description) and the test
+// over path + source + mode + version + pipeline description + starting
+// test number) and the test
 // entries found in it (the transpile bookkeeping — the numbering
 // continuation; discovery itself runs on the note enumeration). The shared
 // scan record (Scan_File: package-relative path + absolute path) is the
@@ -186,7 +187,7 @@ transpile_test_file :: (file: Scan_File, next_test_number: s64, pipeline: [] Tra
     for plugin: pipeline array_add(*ctx.plugins, plugin);
     result := transpile_source(source, ctx);
     output.view = result.view;
-    output.key = transpile_view_key(file.rel_path, source, .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION, ctx.plugins);
+    output.key = transpile_view_key(file.rel_path, source, .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION, ctx.plugins, next_test_number);
     output.tests = result.tests;
     output.diagnostics = result.diagnostics;
     return output;

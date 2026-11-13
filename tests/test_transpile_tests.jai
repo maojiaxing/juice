@@ -389,7 +389,7 @@ test "Test front: views land content-addressed with global numbering" {
     expect(file_contains(a_view, "} @test"));
     b_source, ok2 := read_entire_file(tprint("%1/src/b.jai", root));
     expect(ok2);
-    b_key := transpile_view_key("src/b.jai", b_source, .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION);
+    b_key := transpile_view_key("src/b.jai", b_source, .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION, .[], 2);
     b_view := transpile_view_path(transpile_dir, b_key, "src/b.jai");
     expect(file_contains(b_view, "juice_test_2 :: () -> () {"));
     expect(file_contains(b_view, "juice_test_3 :: () -> () {"));
@@ -454,7 +454,7 @@ test "Test front: the generated products embed the view isolation and mapping" {
     a_view := transpile_view_path(transpile_dir, a_key, "src/a.jai");
     b_source, ok2 := read_entire_file(tprint("%1/src/b.jai", root));
     expect(ok2);
-    b_key := transpile_view_key("src/b.jai", b_source, .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION);
+    b_key := transpile_view_key("src/b.jai", b_source, .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION, .[], 2);
     b_view := transpile_view_path(transpile_dir, b_key, "src/b.jai");
 
     // The metaprogram embeds the isolation set (the compiled views exactly
@@ -645,7 +645,7 @@ test "Test front: a substituted file expands the replacement source under the or
     expect(file_contains(a_view, "juice_test_1 :: () -> () {"));
     b_source, ok2 := read_entire_file(tprint("%1/src/b.jai", root));
     expect(ok2);
-    b_key := transpile_view_key("src/b.jai", b_source, .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION);
+    b_key := transpile_view_key("src/b.jai", b_source, .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION, .[], 2);
     b_view := transpile_view_path(transpile_dir, b_key, "src/b.jai");
     expect(path_exists_as_regular_file(b_view));
     expect(file_contains(b_view, "juice_test_2 :: () -> () {"));

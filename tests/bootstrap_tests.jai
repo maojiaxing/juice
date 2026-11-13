@@ -69,6 +69,37 @@ test "The release flag switches the bootstrap options to very optimized" {
 }
 
 // ---------------------------------------------------------------------------
+// The bootstrap entry selection uses explicit fixtures for both closure
+// shapes; the production sources no longer carry inline test blocks.
+// ---------------------------------------------------------------------------
+
+test "Bootstrap entry: a test-free closure compiles its original entry" {
+    entry_relative_path := "tests/data/build-ok/src/main.jai";
+    entry_path, ok := bootstrap_build_entry(entry_relative_path);
+    expect(ok);
+    expect(entry_path == path_slashes(tprint("%1/%2", otter_root(), entry_relative_path)));
+}
+
+test "Bootstrap entry: inline tests land the whole closure in PLAIN views" {
+    view_root := path_slashes(tprint("%1/bootstrap/tests/data/build-with-tests", target_transpile_dir(otter_target_dir())));
+    expect(delete_directory_full(view_root));
+    defer delete_directory_full(view_root);
+
+    entry_path, ok := bootstrap_build_entry("tests/data/build-with-tests/src/main.jai");
+    expect(ok);
+    expect(entry_path == tprint("%1/src/main.jai", view_root));
+
+    dependency_path := tprint("%1/src/math.jai", view_root);
+    entry_view, entry_read_ok := read_entire_file(entry_path);
+    dependency_view, dependency_read_ok := read_entire_file(dependency_path);
+    expect(entry_read_ok && dependency_read_ok);
+    expect(find_index_from_left(entry_view, tprint("#load %1;", quote_jai_string(dependency_path))) >= 0);
+    expect(find_index_from_left(dependency_view, "add ::") >= 0);
+    expect(find_index_from_left(dependency_view, "// juice: test stripped: test \"addition\"") >= 0);
+    expect(find_index_from_left(dependency_view, "assert(add(2, 3)") < 0);
+}
+
+// ---------------------------------------------------------------------------
 // The very_optimized emission (the ticket 011 handover point).
 // ---------------------------------------------------------------------------
 
@@ -152,7 +183,7 @@ bootstrap_e2e_self_locked :: () -> bool {
     return true;
 }
 
-test "E2E: jai build.jai self-builds the otter root in debug and publishes the module faces" {
+test "E2E: jai build.jai self-builds a test-free root in debug and publishes the module faces" {
     if bootstrap_e2e_self_locked() return;
 
     // Plant a stale flat Juice.jai seed before the build: the publish step
@@ -203,22 +234,23 @@ test "E2E: jai build.jai self-builds the otter root in debug and publishes the m
     // The flat seed retired — zero residue.
     expect(!file_exists(flat_seed), "the stale flat Juice.jai seed must be retired by the publish step");
 
-    // The PLAIN-layout views landed under the bootstrap-exclusive tree —
-    // the whole closure including the entry (never the content-addressed
-    // cache).
-    expect(file_exists(path_slashes(tprint("%1/bootstrap/src/main.jai", target_transpile_dir(otter_target_dir())))));
-    expect(file_exists(path_slashes(tprint("%1/bootstrap/src/module.jai", target_transpile_dir(otter_target_dir())))));
-    // The Testing module special case wrote the STRIP view of the
-    // PUBLISHED face: the bare published names (not the seed's prefixed
-    // ones) prove the special case consumed the publication.
-    expect(file_exists(path_slashes(tprint("%1/Testing.jai", target_testing_module_dir(otter_target_dir())))));
-    testing_view, view_ok := read_entire_file(path_slashes(tprint("%1/Testing.jai", target_testing_module_dir(otter_target_dir()))));
-    expect(view_ok);
-    expect(find_index_from_left(testing_view, "run :: (name: string") >= 0, "the Testing special case must consume the published bare-name face");
-    expect(find_index_from_left(testing_view, "Testing_run") < 0);
-    // ...and the compile metaprogram session product landed under
-    // target/build/.
-    expect(file_exists(path_slashes(target_session_driver_path(target_build_dir(otter_target_dir()), "bootstrap-meta.jai"))));
+    // The production closure is test-free after the self-test migration,
+    // so the generated compile driver must use the original entry. Inspect
+    // this run's driver rather than stale views left by an earlier build.
+    compile_driver_path := target_session_driver_path(target_build_dir(otter_target_dir()), "bootstrap-meta.jai");
+    compile_driver, compile_driver_read_ok := read_entire_file(compile_driver_path);
+    expect(compile_driver_read_ok);
+    source_entry_path := path_slashes(tprint("%1/src/main.jai", otter_root()));
+    expect(find_index_from_left(compile_driver, tprint("add_build_file(%1, workspace);", quote_jai_string(source_entry_path))) >= 0,
+           "a test-free bootstrap must compile the original entry");
+
+    // Publication cuts the Testing self-tests from the consumer face. It
+    // compiles directly with bare exported names and needs no STRIP import
+    // override; the explicit inline-test fixture above covers view landing.
+    expect(find_index_from_left(compile_driver, quote_jai_string(target_testing_module_dir(otter_target_dir()))) < 0,
+           "a test-free Testing publication must not select a STRIP view");
+    expect(find_index_from_left(actual_testing, "run :: (name: string") >= 0, "the published Testing face must export bare names");
+    expect(find_index_from_left(actual_testing, "Testing_run") < 0);
 
     // The self-built artifact replaces the suite's exe; the version smoke
     // proves the product is complete (the version command's output

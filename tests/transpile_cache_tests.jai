@@ -4,9 +4,9 @@
 // functions" + transpile_plugin_tests.jai "cache-key pipeline description"
 // semantics, rewritten not copied). Pinned behavior: the key is a
 // deterministic 16-lowercase-hex hash; every component (relative path,
-// source, mode, contract version, pipeline description, load rewrite table)
-// participates; the rewrite table makes the key a Merkle chain; the otter
-// contract version keeps otter keys out of the old juice key space; the
+// source, mode, contract version, pipeline description, EXPAND starting test
+// number and load rewrite table) participates in it.
+// The contract version keeps otter keys out of the old juice key space; the
 // path helpers mirror the package-relative structure and keep the dependency
 // subtree distinct.
 //
@@ -29,8 +29,8 @@
 // ===========================================================================
 
 // The key is a deterministic 16-hex-char hash; every component (relative
-// path, source content, mode, contract version, pipeline description)
-// participates in it.
+// path, source content, mode, contract version, pipeline description and the
+// EXPAND starting test number) participates in it.
 test "Cache key is deterministic and component-sensitive" {
     key := transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION);
     expect(key == transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION));
@@ -41,9 +41,13 @@ test "Cache key is deterministic and component-sensitive" {
     expect(key != transpile_view_key("src/b.jai", "x := 1;\n", .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION));
     expect(key != transpile_view_key("src/a.jai", "x := 2;\n", .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION));
     expect(key != transpile_view_key("src/a.jai", "x := 1;\n", .STRIP, Load_Target.[], VIEW_CONTRACT_VERSION));
-    expect(key != transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], "otter-0.1.1"));
+    expect(key != transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], "otter-0.1.2"));
     // A different pipeline description changes the key.
     expect(key != transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION, .[test_block_plugin()]));
+    expect(key != transpile_view_key("src/a.jai", "x := 1;\n", .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION, default_transpile_pipeline(), 2));
+    // STRIP views do not number generated tests.
+    expect(transpile_view_key("src/a.jai", "x := 1;\n", .STRIP, Load_Target.[], VIEW_CONTRACT_VERSION, .[], 1)
+        == transpile_view_key("src/a.jai", "x := 1;\n", .STRIP, Load_Target.[], VIEW_CONTRACT_VERSION, .[], 2));
     // The omitted version defaults to the otter contract version constant;
     // the omitted (or empty) pipeline defaults to the default pipeline
     // description.
