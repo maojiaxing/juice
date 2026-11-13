@@ -2,7 +2,7 @@
 title: "Spec: Juice 包声明语义优化与迁移"
 status: open
 labels: [ready-for-agent]
-assignee:
+assignee: maojiaxing
 ---
 
 ## Problem Statement
