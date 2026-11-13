@@ -4,7 +4,7 @@ status: open
 labels: [ready-for-agent]
 assignee: maojiaxing
 parent: "0087"
-blocked-by: []
+blocked-by: ["0088"]
 ---
 
 ## Goal
