@@ -1,8 +1,19 @@
 #import "Basic";
-#import "File";
+#import "File_Utilities";
 #import "Process";
-#import "Juice";
-#import "Testing";
+
+// The run command (spec section 4.3/4.6, the old juice commands/run.jai
+// semantics): the thin prerequisite client of build — the dispatcher plans
+// build before run (the only prerequisite edge) and a build failure stops
+// run with PREREQUISITE_FAILED. The handler then prepares the workspace
+// (idempotent: build's prerequisite run already drove the phase machine to
+// PREPARED, so the prepared state is returned untouched), selects the
+// artifact plan and launches it; the artifact inherits the process cwd (the
+// package root — juice never chdirs) and its output and exit code pass
+// through.
+//
+// The Package face is consumed through the namespaced Juice binding
+// (src/juice_module.jai), as in the workspace/target layers.
 
 RUN_COMMAND :: Command.{
     name          = "run",
@@ -27,7 +38,7 @@ run_command_handler :: (ctx: *Command_Context, arguments: [] string) -> bool {
 
 // Selection is deliberately case-sensitive: target declaration uniqueness is
 // case-insensitive, while the command-line spelling is exact.
-select_artifact_plan :: (plans: [] Artifact_Plan, package_name: string, requested_target: string) -> Artifact_Plan, bool {
+select_artifact_plan :: (plans: [] Juice.Artifact_Plan, package_name: string, requested_target: string) -> Juice.Artifact_Plan, bool {
     if plans.count == 0 return .{}, false;
 
     if requested_target != "" {
@@ -44,7 +55,7 @@ select_artifact_plan :: (plans: [] Artifact_Plan, package_name: string, requeste
     return .{}, false;
 }
 
-run_artifact_plan :: (plan: Artifact_Plan, package_root: string) -> bool {
+run_artifact_plan :: (plan: Juice.Artifact_Plan, package_root: string) -> bool {
     if !revalidate_artifact_plan(plan, package_root) {
         print("[juice ERROR] Refusing unsafe artifact path: %\n", plan.artifact_path);
         return false;
@@ -59,10 +70,13 @@ run_artifact_plan :: (plan: Artifact_Plan, package_root: string) -> bool {
     return result.exit_code == 0;
 }
 
+// The launch seam keeps the old juice shape (#type (plan, package_root) ->
+// bool with production default run_artifact_plan) — the at_EXECUTE mount
+// point (spec section 6.3).
 run_prepared_workspace :: (
-    prepared: *Prepared_Workspace,
+    prepared: *Juice.Prepared_Workspace,
     requested_target: string,
-    launch: #type (plan: Artifact_Plan, package_root: string) -> bool = run_artifact_plan
+    launch: #type (plan: Juice.Artifact_Plan, package_root: string) -> bool = run_artifact_plan
 ) -> bool {
     plan, found := select_artifact_plan(prepared.artifact_plans, prepared.discovery.root_package.name, requested_target);
     if !found {
@@ -76,79 +90,4 @@ run_prepared_workspace :: (
         return false;
     }
     return launch(plan, prepared.discovery.root_dir);
-}
-
-// ---------------------------------------------------------------------------
-// Inline tests: Run's target selection and launch
-// seam; the E2E child scenario verifies that run inherits the strip
-// semantics through its build prerequisite. Shared helpers (the
-// test_launch_* record globals, run_juice_child and the other child
-// scenario helpers) live in tests/test_support.jai.
-// ---------------------------------------------------------------------------
-
-test "Run launches the selected prepared artifact" {
-    plans := Artifact_Plan.[
-        .{target = .{name = "alpha"}, target_dir = "root/target", artifact_path = "root/target/alpha.exe"},
-        .{target = .{name = "demo"}, target_dir = "root/target", artifact_path = "root/target/demo.exe"},
-    ];
-    prepared: Prepared_Workspace;
-    prepared.discovery.root_dir = "root";
-    prepared.discovery.root_package.name = "demo";
-    prepared.artifact_plans = plans;
-    test_launch_count = 0;
-    test_launch_success = true;
-
-    expect(run_prepared_workspace(*prepared, "", test_launch_artifact));
-    expect(test_launch_count == 1 && test_launched_plan.artifact_path == plans[1].artifact_path);
-    expect(test_launched_root == "root" && test_launched_plan.target_dir == plans[1].target_dir);
-    expect(run_prepared_workspace(*prepared, "alpha", test_launch_artifact));
-    expect(test_launch_count == 2 && test_launched_plan.artifact_path == plans[0].artifact_path);
-}
-
-test "Run defaults to the only target" {
-    plans := Artifact_Plan.[.{target = .{name = "only"}, artifact_path = "root/target/only.exe"}];
-    prepared: Prepared_Workspace;
-    prepared.discovery.root_package.name = "different-package-name";
-    prepared.artifact_plans = plans;
-    test_launch_count = 0;
-    test_launch_success = true;
-    expect(run_prepared_workspace(*prepared, "", test_launch_artifact));
-    expect(test_launch_count == 1 && test_launched_plan.artifact_path == plans[0].artifact_path);
-}
-
-test "Invalid Run selection never launches" {
-    plans := Artifact_Plan.[.{target = .{name = "alpha"}}, .{target = .{name = "beta"}}];
-    prepared: Prepared_Workspace;
-    prepared.discovery.root_package.name = "demo";
-    prepared.artifact_plans = plans;
-    test_launch_count = 0;
-    test_launch_success = true;
-    expect(!run_prepared_workspace(*prepared, "", test_launch_artifact));
-    expect(!run_prepared_workspace(*prepared, "missing", test_launch_artifact));
-    expect(!run_prepared_workspace(*prepared, "Alpha", test_launch_artifact));
-    prepared.artifact_plans = Artifact_Plan.[];
-    expect(!run_prepared_workspace(*prepared, "", test_launch_artifact));
-    expect(test_launch_count == 0);
-}
-
-test "Run propagates launch failure" {
-    plans := Artifact_Plan.[.{target = .{name = "demo"}}];
-    prepared: Prepared_Workspace;
-    prepared.artifact_plans = plans;
-    test_launch_count = 0;
-    test_launch_success = false;
-    expect(!run_prepared_workspace(*prepared, "", test_launch_artifact));
-    expect(test_launch_count == 1);
-}
-
-// run inherits the strip semantics through its build prerequisite: the
-// embedded-tests package builds via views and the artifact launches.
-test "E2E: run inherits strip semantics through build" {
-    fixture_root := tprint("%1/tests/data/test-package", juice_root());
-    defer delete_directory_full(tprint("%1/target", fixture_root));
-
-    result, output, _ := run_juice_child("test-package", "run");
-    expect(expect_exit("run", result, 0, "build child"));
-    expect(child_output_contains("run", output, "[juice Run] Launching"));
-    expect(child_output_contains("run", output, "hello from test-package"));
 }

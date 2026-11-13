@@ -1,7 +1,20 @@
 #import "Basic";
+#import "File";
 #import "File_Utilities";
-#import "Juice";
-#import "Testing";
+
+// The clean command (spec section 4.6 clean sequence, the old juice
+// commands/clean.jai semantics): discovery without preparation (clean needs
+// no dependency or plan resolution) -> path collection (the root package's
+// and every member's target/ directory, spec section 3.5) -> validate every
+// path first, then delete. Clean never touches legacy result/ and .packages
+// directories. The command obtains a fresh discovery snapshot directly:
+// the state machine's ensure entry rejects the manifest-less root that
+// clean deliberately supports (old juice inline test "Clean without a
+// manifest uses the current root") and prints a "Package discovered" line
+// old juice clean never emits.
+//
+// The Package face is consumed through the namespaced Juice binding
+// (src/juice_module.jai), as in the other command layers.
 
 CLEAN_COMMAND :: Command.{
     name          = "clean",
@@ -32,24 +45,31 @@ clean_path_is_safe :: (path: string) -> bool {
     return entry.is_directory;
 }
 
+// The two seams keep the old juice shapes (#type (path: string) -> bool
+// each): the validation gate and the deletion step cross the real
+// filesystem in production, and tests cross the same interface with
+// recording fakes. Validation runs over every collected path before any
+// deletion — one unsafe path deletes nothing. The delete loop does not
+// abort on a failure: it reports "Could not delete" and keeps deleting the
+// remaining paths (old juice semantics).
 clean_discovered_workspace :: (
     root_dir: string,
-    discovery: Workspace_Discovery,
+    discovery: Juice.Workspace_Discovery,
     validate_path: #type (path: string) -> bool = clean_path_is_safe,
     delete_path: #type (path: string) -> bool = delete_directory_full
 ) -> bool {
     paths: [..] string;
-    paths.allocator = temp;
 
-    // Clean deletes the whole target/ directory of the root package and every
-    // validated workspace member. Legacy result/ and .packages directories are
-    // no longer managed and are never touched.
+    // Clean deletes the whole target/ directory of the root package and
+    // every validated workspace member (spec section 3.5: each package owns
+    // its own target/). Legacy result/ and .packages directories are no
+    // longer managed and are never touched.
     if discovery.has_package {
         for member: discovery.member_packages {
-            array_add(*paths, tprint("%1/target", member.dir));
+            array_add(*paths, package_target_dir(member.dir));
         }
     } else {
-        array_add(*paths, tprint("%1/target", root_dir));
+        array_add(*paths, package_target_dir(root_dir));
     }
 
     // Validate every deletion target before deleting any of them.
@@ -67,52 +87,4 @@ clean_discovered_workspace :: (
     }
     if all_ok print("[juice Clean] Workspace cleaned.\n");
     return all_ok;
-}
-
-// ---------------------------------------------------------------------------
-// Inline tests: Clean's scope validation and
-// validate-before-delete orchestration. Shared helpers (the test_clean_*
-// record globals and reset_clean_test) live in tests/test_support.jai.
-// ---------------------------------------------------------------------------
-
-test "Clean validates workspace scope before deletion" {
-    discovery: Workspace_Discovery;
-    discovery.has_package = true;
-    discovery.root_dir = "root";
-    discovery.member_packages = Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
-    reset_clean_test(2);
-    expect(clean_discovered_workspace("", discovery, test_validate_clean_path, test_delete_clean_path));
-    expect(!test_clean_deleted_too_early && test_clean_deleted.count == 2);
-    expect(test_clean_deleted[0] == "root/target" && test_clean_deleted[1] == "root/member/target");
-}
-
-test "Clean without a manifest uses the current root" {
-    discovery: Workspace_Discovery;
-    reset_clean_test(1);
-    expect(clean_discovered_workspace("root", discovery, test_validate_clean_path, test_delete_clean_path));
-    expect(!test_clean_deleted_too_early && test_clean_deleted.count == 1);
-    expect(test_clean_deleted[0] == "root/target");
-}
-
-test "Unsafe Clean path prevents every deletion" {
-    discovery: Workspace_Discovery;
-    discovery.has_package = true;
-    discovery.root_dir = "root";
-    discovery.member_packages = Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
-    reset_clean_test(2);
-    test_clean_invalid_path = "root/member/target";
-    expect(!clean_discovered_workspace("", discovery, test_validate_clean_path, test_delete_clean_path));
-    expect(test_clean_validated.count == 2 && test_clean_deleted.count == 0);
-}
-
-test "Clean continues after a deletion fails" {
-    discovery: Workspace_Discovery;
-    discovery.has_package = true;
-    discovery.root_dir = "root";
-    discovery.member_packages = Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
-    reset_clean_test(2);
-    test_clean_failed_delete = "root/target";
-    expect(!clean_discovered_workspace("", discovery, test_validate_clean_path, test_delete_clean_path));
-    expect(!test_clean_deleted_too_early && test_clean_deleted.count == 2);
-    expect(test_clean_deleted[0] == "root/target" && test_clean_deleted[1] == "root/member/target");
 }

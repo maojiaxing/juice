@@ -29,27 +29,22 @@
 }
 
 get_user_home_directory :: () -> string {
-	#if OS == .WINDOWS {
-		user_profile := get_env("USERPROFILE");
-
-		if user_profile && user_profile != "" {
-			return user_profile;
-		}
-
+    #if OS == .WINDOWS {
+        user_profile := get_env("USERPROFILE");
+        if user_profile && user_profile != "" return user_profile;
         return "C:/";
-	} else {
+    } else {
         home := get_env("HOME");
         if home && home != "" return home;
         return "/tmp";
     }
 }
 
-// get_config_home/get_data_home once served only the Build_Driver's
-// config_dir/data_dir dead fields and were deleted with that teardown
-// (get_cache_home stays — the manifest evaluator and the git cache use it).
-
+// The caches juice manages (manifest evaluator temp files, git repo caches)
+// live in the XDG cache home; the other derived paths (packages_dir etc.)
+// are derived from root_dir by their respective owners.
 get_cache_home :: () -> string {
-	#if OS == .WINDOWS {
+    #if OS == .WINDOWS {
         local_app_data := get_env("LOCALAPPDATA");
         if local_app_data && local_app_data != "" return local_app_data;
         return tprint("%1/AppData/Local", get_user_home_directory());

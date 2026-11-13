@@ -1,0 +1,1 @@
+// scan fixture: .hidden.jai

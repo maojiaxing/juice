@@ -1,22 +1,46 @@
-// Content-addressed view cache for transpiled products (ADR
-// 0003). Pure key/path computation, no IO: the key
-// is a hash of the package-relative path, the source content, the mode
-// (build/test) and the juice version, plus the build mode's #load rewrite
-// targets. Because a strip view's rewrite strings embed the target views'
-// hash directories, the keys form a Merkle chain — a parent's key depends on
-// its children's keys and stays deterministically computable in dependency
+// Content-addressed view cache (ticket 026): pure key/path computation, no
+// IO — the key is a hash of the package-relative path, the source content,
+// the mode (build/test), the pipeline output contract version, the pipeline
+// description (the ordered name+version sequence of the plugins that
+// produce the view — a plugin rename, a version bump or a pipeline reorder
+// changes the key precisely) and the build mode's #load rewrite targets.
+// Because a strip view's rewrite strings embed the target views' hash
+// directories, the keys form a Merkle chain — a parent's key depends on its
+// children's keys and stays deterministically computable in dependency
 // order. Views live at <transpile_dir>/<hash>/<rel_path>: the package-relative
 // structure is mirrored inside the hash directory so distinct files can never
 // collide by name ("src/a/x.jai" vs "src/a_x.jai").
+//
+// The pipeline description comes from src/transpile_plugin.jai:
+// Transpile_Plugin identity + resolve_pipeline (an empty registry resolves
+// to the default pipeline, the same convention the runner applies — a view
+// and its key always reflect the same pipeline). An omitted or empty
+// pipeline means the default.
+//
+// Old juice src/transpile_cache.jai semantics (the reference face, rewritten
+// not copied). This module is a bootstrap #load target and must stay
+// test-free; its unit tests live in tests/transpile_cache_tests.jai (0053
+// rule). main.jai stays untouched — the first production consumers are the
+// command wiring tickets (027/028).
 
 #import "Basic";
 #import "Hash";
-#import "String";
 
-// Version component of the cache key. Bump whenever the transpiler's output
-// contract changes (view layout, driver format); old hash directories are
-// abandoned in place and disappear with `clean` (no active cleanup).
-JUICE_VERSION :: "0.1.0";
+// Version component of the cache key: the pipeline output contract version
+// (spec 004 decision 19 — old juice's JUICE_VERSION semantic). The name
+// JUICE_VERSION stays with the product version constant
+// (src/commands/version.jai, ticket 013 — the `juice version` contract);
+// this module defines its own contract version, and the two are free to
+// diverge: per-plugin output contracts are expressed by the pipeline
+// description component (name+version) — a plugin version bump invalidates
+// precisely; this constant covers the runner-level contract (view layout,
+// driver format, the key's own serialization shape). The "otter-" prefix is
+// deliberate: otter keys never share the old juice key space (spec §11.9 —
+// no mixing with the existing view trees); old hash directories are
+// abandoned in place and disappear with `clean` (no active cleanup). Bump
+// the numeric part when that contract changes in a way no plugin version
+// expresses.
+VIEW_CONTRACT_VERSION :: "otter-0.1.0";
 
 // Normalize backslashes to forward slashes (local to keep this module
 // self-contained; the repo-wide helper lives in path_safety.jai).
@@ -41,23 +65,35 @@ hash_hex :: (s: string) -> string {
     return copy_string(to_string(out.data, 16));
 }
 
-// Content-addressed cache key. `load_targets` is the build-mode rewrite table
-// (empty for test-mode views and for build-mode files without in-package
-// loads). Its `to` strings embed the target views' hash directories, so the
-// parent key changes whenever a loaded view's key changes (Merkle chain).
+// Content-addressed cache key. `load_targets` is the build-mode rewrite
+// table (empty for test-mode views and for build-mode files without
+// in-package loads). Its `to` strings embed the target views' hash
+// directories, so the parent key changes whenever a loaded view's key
+// changes (Merkle chain). `pipeline` is the registry that produces the view:
+// its description (the ordered name+version sequence, in declaration order)
+// joins the key, so a plugin rename, a version bump or a pipeline reorder
+// invalidates the view precisely. An omitted or empty pipeline means the
+// default pipeline (resolve_pipeline — the runner's own convention), and an
+// omitted version means the otter contract version constant.
 transpile_view_key :: (
     rel_path: string,
     source: string,
     mode: Transpile_Mode,
     load_targets: [] Load_Target,
-    version := JUICE_VERSION
+    version := VIEW_CONTRACT_VERSION,
+    pipeline: [] Transpile_Plugin = .[]
 ) -> string {
+    resolved := resolve_pipeline(pipeline);
     builder: String_Builder;
     print_to_builder(*builder, "%1\0%2\0%3\0%4\0",
         rel_path,
         source,
         ifx mode == .EXPAND then "test" else "build",
         version);
+    print_to_builder(*builder, "%1\0", resolved.count);
+    for plugin: resolved {
+        print_to_builder(*builder, "%1\0%2\0", plugin.name, plugin.version);
+    }
     print_to_builder(*builder, "%1\0", load_targets.count);
     for target: load_targets {
         print_to_builder(*builder, "%1\0%2\0", target.from, target.to);
@@ -89,8 +125,8 @@ transpile_dependency_view_path :: (transpile_dir: string, key: string, name: str
 // The transpile subtree root: <package root>/target/transpile/. Views, the
 // test driver and the test metaprogram products all live under it (Target
 // directory, CONTEXT.md). Build and Test derive it from the same package
-// root (build_transpile_dir/test_transpile_dir were verbatim duplicates,
-// consolidated here).
+// root (old juice's build_transpile_dir/test_transpile_dir were verbatim
+// duplicates, consolidated here).
 transpile_tree_dir :: (package_root: string) -> string {
-    return tprint("%1/target/transpile", cache_slashes(package_root));
+    return target_transpile_dir(package_target_dir(package_root));
 }

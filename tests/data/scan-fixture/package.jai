@@ -1,0 +1,1 @@
+// scan fixture: package.jai

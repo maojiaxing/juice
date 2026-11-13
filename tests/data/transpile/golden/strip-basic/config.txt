@@ -1,3 +1,0 @@
-mode=strip
-path=src/main.jai
-load_target=src/helper.jai=<abs>/target/transpile/hash0001/src/helper.jai

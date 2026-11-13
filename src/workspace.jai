@@ -2,8 +2,20 @@
 #import "File";
 #import "File_Utilities";
 #import "String";
-#import "Juice";
-#import "Testing";
+
+// The workspace layer: member validation at discovery and the
+// EMPTY -> DISCOVERED -> PREPARED phase machine (spec section 4.5, old
+// juice workspace.jai semantics). Discovery loads only manifests and
+// validates member roots — it deliberately never fetches dependencies
+// (preparation is a separate command prerequisite). Members are referenced
+// only through declared DEP records: discovery loads every member's
+// manifest (dependency declarations included) into the snapshot, and the
+// dependency layer (ticket 009) links a member only when a package declares
+// the DEP by name — an undeclared member directory is simply not a member.
+//
+// The Package face is consumed through the namespaced Juice binding
+// (src/juice_module.jai); the load-bearing "Juice" module name constraint
+// applies as in the manifest layer.
 
 workspace_relative_path_is_valid :: (path: string) -> bool {
     if path == "" || path_is_absolute_portable(path) return false;
@@ -12,7 +24,7 @@ workspace_relative_path_is_valid :: (path: string) -> bool {
 }
 
 workspace_member_path :: (root_dir: string, relative_path: string) -> string {
-    return to_forward_slashes(tprint("%1/%2", root_dir, path_slashes(relative_path)));
+    return path_slashes(tprint("%1/%2", root_dir, path_slashes(relative_path)));
 }
 
 workspace_path_already_seen :: (paths: [] string, candidate: string) -> bool {
@@ -23,11 +35,18 @@ workspace_path_already_seen :: (paths: [] string, candidate: string) -> bool {
 }
 
 // Discovery loads only manifests and validates member roots. It deliberately
-// does not fetch dependencies; preparation is a separate command prerequisite.
-// After the Build_Driver teardown, discovery takes only the two paths it
-// owns.
-discover_workspace :: (root_dir: string, cache_dir: string) -> Workspace_Discovery, bool {
-    discovery: Workspace_Discovery;
+// does not fetch dependencies; preparation is a separate command
+// prerequisite. After the Build_Driver teardown, discovery takes only the
+// two paths it owns.
+//
+// modules_dir is the seam-injected modules directory (ticket 007
+// convention): the production default derives next to the running
+// executable (path_safety.juice_modules_dir), the published modules
+// directory otter lands every build — tests and the generated driver child
+// inject that same published directory. The default kicks in for the
+// two-argument production call shape.
+discover_workspace :: (root_dir: string, cache_dir: string, modules_dir: string = "") -> Juice.Workspace_Discovery, bool {
+    discovery: Juice.Workspace_Discovery;
     root_spelling_entry := inspect_path_entry(root_dir);
     if !root_spelling_entry.exists || !root_spelling_entry.is_directory || root_spelling_entry.is_symlink || root_spelling_entry.is_junction {
         print("[juice ERROR] Workspace root is not a safe real directory: %\n", root_dir);
@@ -49,7 +68,7 @@ discover_workspace :: (root_dir: string, cache_dir: string) -> Workspace_Discove
         return .{root_dir = root_abs, has_package = false}, true;
     }
 
-    root_package, package_ok := load_package_manifest(cache_dir, root_abs);
+    root_package, package_ok := load_package_manifest(cache_dir, root_abs, modules_dir);
     if !package_ok {
         print("[juice ERROR] Existing package.jai is invalid.\n");
         return discovery, false;
@@ -57,9 +76,12 @@ discover_workspace :: (root_dir: string, cache_dir: string) -> Workspace_Discove
 
     members: [..] string;
     array_add(*members, copy_string(root_abs));
-    packages: [..] Package;
+    packages: [..] Juice.Package;
     array_add(*packages, root_package);
 
+    // Only the root package's members list is iterated: a member's own
+    // workspace.members declaration is silently ignored (pinned by the old
+    // juice test_monorepo nested-member edge case).
     for relative_path: root_package.workspace.members {
         if !workspace_relative_path_is_valid(relative_path) {
             print("[juice ERROR] Invalid workspace member path: %\n", relative_path);
@@ -89,7 +111,7 @@ discover_workspace :: (root_dir: string, cache_dir: string) -> Workspace_Discove
             print("[juice ERROR] Workspace member lacks package.jai: %\n", member_abs);
             return discovery, false;
         }
-        member_package, member_ok := load_package_manifest(cache_dir, member_abs);
+        member_package, member_ok := load_package_manifest(cache_dir, member_abs, modules_dir);
         if !member_ok {
             print("[juice ERROR] Workspace member manifest is invalid: %\n", member_abs);
             return discovery, false;
@@ -113,18 +135,18 @@ Workspace_Phase :: enum {
 
 Workspace_State :: struct {
     phase:     Workspace_Phase;
-    discovery: Workspace_Discovery;
-    prepared:  Prepared_Workspace;
+    discovery: Juice.Workspace_Discovery;
+    prepared:  Juice.Prepared_Workspace;
 }
 
 ensure_workspace_discovered :: (
     root_dir: string,
     cache_dir: string,
     state: *Workspace_State,
-    discover: #type (root_dir: string, cache_dir: string) -> (Workspace_Discovery, bool) = discover_workspace
+    discover: #type (root_dir: string, cache_dir: string, modules_dir: string) -> (Juice.Workspace_Discovery, bool) = discover_workspace
 ) -> bool {
     if state.phase != .EMPTY return true;
-    discovery, ok := discover(root_dir, cache_dir);
+    discovery, ok := discover(root_dir, cache_dir, "");
     if !ok || !discovery.has_package {
         if ok print("[juice ERROR] No package.jai found in current directory.\n");
         return false;
@@ -136,17 +158,25 @@ ensure_workspace_discovered :: (
 }
 
 // Publish a prepared result only after every required step succeeds. A failed
-// attempt leaves discovery reusable and exposes no partial prepared workspace.
-// force_dependencies: Test must prepare dependencies even with no effective
-// target (LIB) — its test program references dependencies through import
-// shims; Build/Clean semantics are unchanged (0 plans still skip
+// attempt leaves discovery reusable and exposes no partial prepared
+// workspace. force_dependencies: Test must prepare dependencies even with no
+// effective target (LIB) — its test program references dependencies through
+// import shims; Build/Clean semantics are unchanged (0 plans still skip
 // preparation).
+//
+// The resolve and prepare_dependencies seams keep the old juice shapes
+// (#type (pkg: Package) -> Artifact_Plan_Result / #type (root_dir,
+// cache_dir, member_packages: [] Package) -> bool) with their production
+// defaults resolve_artifact_plans / resolve_and_fetch_dependencies
+// (ticket 009's target.jai / dependency.jai — cross-file default references,
+// the old juice workspace.jai:148 precedent; both #load after this file in
+// main.jai).
 prepare_workspace :: (
     root_dir: string,
     cache_dir: string,
     state: *Workspace_State,
-    resolve: #type (pkg: Package) -> Artifact_Plan_Result = resolve_artifact_plans,
-    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Package) -> (bool) = resolve_and_fetch_dependencies,
+    resolve: #type (pkg: Juice.Package) -> Artifact_Plan_Result = resolve_artifact_plans,
+    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Juice.Package) -> (bool) = resolve_and_fetch_dependencies,
     force_dependencies := false
 ) -> bool {
     if state.phase == .PREPARED return true;
@@ -159,7 +189,7 @@ prepare_workspace :: (
         print("[juice ERROR] %\n", plans_result.error_message);
         return false;
     }
-    prepared: Prepared_Workspace;
+    prepared: Juice.Prepared_Workspace;
     prepared.discovery = state.discovery;
     prepared.artifact_plans = plans_result.plans;
     prepared.package_type = plans_result.package_type;
@@ -176,313 +206,32 @@ prepare_workspace :: (
     return true;
 }
 
-get_prepared_workspace :: (state: *Workspace_State) -> *Prepared_Workspace {
+get_prepared_workspace :: (state: *Workspace_State) -> *Juice.Prepared_Workspace {
     if state.phase != .PREPARED return null;
     return *state.prepared;
 }
 
-// Command-side preparation entry: one idempotent call chains the
-// two phases — discovery then preparation — and hands back the prepared
-// workspace (null = failure, already reported by the phase that failed).
-// The phase machine makes repeats free: an already prepared state is
-// returned untouched, so run's handler can call this after build's
-// prerequisite run has prepared the state. The two phases stay injectable
-// as internal seams for this module's own tests, mirroring
-// prepare_workspace's production defaults. The command-specific guard is
-// absorbed: the failure message now names the concrete
-// discovery/preparation error instead of a generic requirement.
+// Command-side preparation entry: one idempotent call chains the two phases
+// — discovery then preparation — and hands back the prepared workspace
+// (null = failure, already reported by the phase that failed). The phase
+// machine makes repeats free: an already prepared state is returned
+// untouched, so run's handler can call this after build's prerequisite run
+// has prepared the state. The two phases stay injectable as internal seams
+// for this module's own tests, mirroring prepare_workspace's production
+// defaults. The command-specific guard is absorbed: the failure message
+// names the concrete discovery/preparation error instead of a generic
+// requirement.
 ensure_workspace_prepared :: (
     root_dir: string,
     cache_dir: string,
     state: *Workspace_State,
-    discover: #type (root_dir: string, cache_dir: string) -> (Workspace_Discovery, bool) = discover_workspace,
-    resolve: #type (pkg: Package) -> Artifact_Plan_Result = resolve_artifact_plans,
-    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Package) -> (bool) = resolve_and_fetch_dependencies,
+    discover: #type (root_dir: string, cache_dir: string, modules_dir: string) -> (Juice.Workspace_Discovery, bool) = discover_workspace,
+    resolve: #type (pkg: Juice.Package) -> Artifact_Plan_Result = resolve_artifact_plans,
+    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Juice.Package) -> (bool) = resolve_and_fetch_dependencies,
     force_dependencies := false
-) -> *Prepared_Workspace {
+) -> *Juice.Prepared_Workspace {
     if state.phase == .PREPARED return *state.prepared;
     if !ensure_workspace_discovered(root_dir, cache_dir, state, discover) return null;
     if !prepare_workspace(root_dir, cache_dir, state, resolve, prepare_dependencies, force_dependencies) return null;
     return *state.prepared;
-}
-
-// ---------------------------------------------------------------------------
-// Inline tests: the workspace state machine,
-// dependency snapshot consumption and import shims. Shared helpers (the
-// discovery/resolution/dependency recording fakes and record globals,
-// shim_content_for) live in tests/test_support.jai.
-// ---------------------------------------------------------------------------
-
-test "Discovery publishes workspace state once" {
-    reset_preparation_test();
-    test_fake_discovery_ok = true;
-    test_fake_discovery.has_package = true;
-    test_fake_discovery.root_package.name = "demo";
-    test_fake_discovery.root_package.version = "1";
-    state: Workspace_State;
-    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
-    expect(state.phase == .DISCOVERED && test_discovery_attempts == 1);
-    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
-    expect(state.phase == .DISCOVERED && test_discovery_attempts == 1);
-}
-
-test "Discovery without a package stays empty" {
-    reset_preparation_test();
-    test_fake_discovery_ok = true;
-    test_fake_discovery.has_package = false;
-    state: Workspace_State;
-    expect(!ensure_workspace_discovered("", "", *state, test_fake_discover));
-    expect(state.phase == .EMPTY && test_discovery_attempts == 1);
-}
-
-test "Preparation without targets skips dependencies" {
-    reset_preparation_test();
-    test_fake_discovery_ok = true;
-    test_fake_discovery.has_package = true;
-    test_fake_discovery.root_package.name = "demo";
-    test_fake_discovery.root_package.version = "1";
-    test_plan_resolution_success = true;
-    test_resolved_plans = Artifact_Plan.[];
-    state: Workspace_State;
-    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
-    expect(prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies));
-    expect(state.phase == .PREPARED && test_dependency_attempts == 0);
-    prepared := get_prepared_workspace(*state);
-    expect(prepared != null && !prepared.dependencies_prepared && prepared.artifact_plans.count == 0);
-}
-
-test "Preparation with targets prepares dependencies" {
-    reset_preparation_test();
-    test_fake_discovery_ok = true;
-    test_fake_discovery.has_package = true;
-    test_fake_discovery.root_package.name = "demo";
-    test_fake_discovery.root_package.version = "1";
-    test_fake_discovery.member_packages = Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
-    test_plan_resolution_success = true;
-    test_resolved_plans = Artifact_Plan.[.{target = .{name = "demo"}}];
-    test_dependency_ok = true;
-    state: Workspace_State;
-    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
-    expect(prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies));
-    expect(state.phase == .PREPARED && test_dependency_attempts == 1);
-    expect(test_dependency_snapshot.count == 2 && test_dependency_snapshot[1].name == "member");
-    prepared := get_prepared_workspace(*state);
-    expect(prepared != null && prepared.dependencies_prepared);
-}
-
-// force_dependencies makes a 0-plans (LIB) package prepare dependencies too
-// — Test's test program references dependencies through import shims; the
-// default (false) semantics are unchanged (pinned by "Preparation without
-// targets skips dependencies" above).
-test "Preparation without targets forces dependencies on request" {
-    reset_preparation_test();
-    test_fake_discovery_ok = true;
-    test_fake_discovery.has_package = true;
-    test_fake_discovery.root_package.name = "demo";
-    test_fake_discovery.root_package.version = "1";
-    test_fake_discovery.member_packages = Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
-    test_plan_resolution_success = true;
-    test_resolved_plans = Artifact_Plan.[];
-    test_dependency_ok = true;
-    state: Workspace_State;
-    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
-    expect(prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies, true));
-    expect(state.phase == .PREPARED && test_dependency_attempts == 1);
-    prepared := get_prepared_workspace(*state);
-    expect(prepared != null && prepared.dependencies_prepared);
-    expect(prepared.artifact_plans.count == 0);
-}
-
-test "Resolution failure publishes no prepared workspace" {
-    reset_preparation_test();
-    test_fake_discovery_ok = true;
-    test_fake_discovery.has_package = true;
-    test_fake_discovery.root_package.name = "demo";
-    test_fake_discovery.root_package.version = "1";
-    test_plan_resolution_success = false;
-    state: Workspace_State;
-    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
-    expect(!prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies));
-    expect(state.phase == .DISCOVERED && get_prepared_workspace(*state) == null);
-    test_plan_resolution_success = true;
-    test_resolved_plans = Artifact_Plan.[];
-    expect(prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies) && state.phase == .PREPARED);
-}
-
-test "Dependency failure publishes no prepared workspace" {
-    reset_preparation_test();
-    test_fake_discovery_ok = true;
-    test_fake_discovery.has_package = true;
-    test_fake_discovery.root_package.name = "demo";
-    test_fake_discovery.root_package.version = "1";
-    test_plan_resolution_success = true;
-    test_resolved_plans = Artifact_Plan.[.{target = .{name = "demo"}}];
-    test_dependency_ok = false;
-    state: Workspace_State;
-    expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
-    expect(!prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies));
-    expect(state.phase == .DISCOVERED && test_dependency_attempts == 1 && get_prepared_workspace(*state) == null);
-}
-
-test "Preparation requires discovery" {
-    reset_preparation_test();
-    state: Workspace_State;
-    expect(!prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies));
-    expect(state.phase == .EMPTY && test_dependency_attempts == 0);
-}
-
-// The command-side preparation entry: one idempotent call chains the two
-// phases and hands back the prepared result directly, null = failure already
-// printed. The guard duty is absorbed by this entry — failures print the
-// concrete error (e.g. "No package.jai found"), not a generic "requires
-// workspace preparation".
-test "Prepared workspace ensure fails on an empty state" {
-    reset_preparation_test();
-    test_fake_discovery_ok = true;
-    test_fake_discovery.has_package = false;
-    state: Workspace_State;
-    expect(ensure_workspace_prepared("", "", *state, test_fake_discover, test_fake_resolve, test_fake_prepare_dependencies) == null);
-    expect(state.phase == .EMPTY && test_discovery_attempts == 1);
-}
-
-test "Prepared workspace ensure hands back the prepared result" {
-    reset_preparation_test();
-    test_fake_discovery_ok = true;
-    test_fake_discovery.has_package = true;
-    test_fake_discovery.root_package.name = "demo";
-    test_fake_discovery.root_package.version = "1";
-    test_plan_resolution_success = true;
-    test_resolved_plans = Artifact_Plan.[];
-    state: Workspace_State;
-    prepared := ensure_workspace_prepared("", "", *state, test_fake_discover, test_fake_resolve, test_fake_prepare_dependencies);
-    expect(prepared != null && state.phase == .PREPARED);
-    expect(!prepared.dependencies_prepared && prepared.artifact_plans.count == 0);
-}
-
-test "Prepared workspace ensure is idempotent" {
-    reset_preparation_test();
-    test_fake_discovery_ok = true;
-    test_fake_discovery.has_package = true;
-    test_fake_discovery.root_package.name = "demo";
-    test_fake_discovery.root_package.version = "1";
-    test_plan_resolution_success = true;
-    test_resolved_plans = Artifact_Plan.[];
-    state: Workspace_State;
-    first := ensure_workspace_prepared("", "", *state, test_fake_discover, test_fake_resolve, test_fake_prepare_dependencies);
-    expect(first != null);
-    second := ensure_workspace_prepared("", "", *state, test_fake_discover, test_fake_resolve, test_fake_prepare_dependencies);
-    expect(second == first && test_discovery_attempts == 1);
-}
-
-// test_fake_fetch/test_fake_link_member and the record globals live in tests/test_support.jai.
-
-test "Workspace member dependencies are linked not fetched" {
-    array_reset(*test_fetched_dependency_names);
-    array_reset(*test_linked_member_names);
-    test_fetch_result = true;
-    test_link_result = true;
-    packages := Package.[
-        .{name = "root", dependencies = Dependency.[.{name = "member-lib"}, .{name = "external"}]},
-        .{name = "member-lib", dependencies = Dependency.[.{name = "external2"}]},
-    ];
-    expect(fetch_workspace_dependencies("", "", packages, test_fake_fetch, test_fake_link_member));
-    expect(test_fetched_dependency_names.count == 2);
-    expect(test_fetched_dependency_names[0] == "external" && test_fetched_dependency_names[1] == "external2");
-    expect(test_linked_member_names.count == 1 && test_linked_member_names[0] == "member-lib");
-}
-
-test "Member link failure propagates" {
-    array_reset(*test_fetched_dependency_names);
-    array_reset(*test_linked_member_names);
-    test_fetch_result = true;
-    test_link_result = false;
-    packages := Package.[
-        .{name = "root", dependencies = Dependency.[.{name = "member-lib"}, .{name = "external"}]},
-        .{name = "member-lib"},
-    ];
-    expect(!fetch_workspace_dependencies("", "", packages, test_fake_fetch, test_fake_link_member));
-    expect(test_linked_member_names.count == 1 && test_fetched_dependency_names.count == 0);
-}
-
-test "Dependency fetch failure propagates" {
-    array_reset(*test_fetched_dependency_names);
-    array_reset(*test_linked_member_names);
-    test_fetch_result = false;
-    test_link_result = true;
-    packages := Package.[.{name = "root", dependencies = Dependency.[.{name = "external"}]}];
-    expect(!fetch_workspace_dependencies("", "", packages, test_fake_fetch, test_fake_link_member));
-    expect(test_fetched_dependency_names.count == 1);
-}
-
-// Consumers resolve "#import <name>" through a generated shim in the
-// dependency directory; the shim loads the dependency's real entry by path,
-// so any source directory name and any of the three layouts work
-// (shim_content_for lives in tests/test_support.jai).
-
-test "Import shim generated for a src/module.jai entry" {
-    packages_dir := tprint("%1/tests/data/shim-fixture/packages-src", juice_root());
-    delete_directory_full(packages_dir);
-    make_directory_if_it_does_not_exist(packages_dir, recursive = true);
-    defer delete_directory_full(packages_dir);
-    expect(ensure_import_shim(packages_dir, "shim-pkg", tprint("%1/tests/data/shim-fixture/shim-pkg", juice_root())));
-    content, ok := shim_content_for(packages_dir, "shim-pkg");
-    expect(ok);
-    expect(contains(content, "#load ") && contains(content, "src/module.jai\";"));
-}
-
-test "Import shim generated for a single-file layout" {
-    packages_dir := tprint("%1/tests/data/shim-fixture/packages-file", juice_root());
-    delete_directory_full(packages_dir);
-    make_directory_if_it_does_not_exist(packages_dir, recursive = true);
-    defer delete_directory_full(packages_dir);
-    expect(ensure_import_shim(packages_dir, "file-pkg", tprint("%1/tests/data/shim-fixture/file-pkg", juice_root())));
-    content, ok := shim_content_for(packages_dir, "file-pkg");
-    expect(ok);
-    expect(contains(content, "#load ") && contains(content, "file-pkg.jai\";"));
-}
-
-test "Import shim generated for a root module.jai entry" {
-    packages_dir := tprint("%1/tests/data/shim-fixture/packages-root", juice_root());
-    delete_directory_full(packages_dir);
-    make_directory_if_it_does_not_exist(packages_dir, recursive = true);
-    defer delete_directory_full(packages_dir);
-    expect(ensure_import_shim(packages_dir, "root-pkg", tprint("%1/tests/data/shim-fixture/root-pkg", juice_root())));
-    content, ok := shim_content_for(packages_dir, "root-pkg");
-    expect(ok);
-    expect(contains(content, "#load ") && contains(content, "module.jai\";"));
-}
-
-test "Import shim skipped without any layout" {
-    packages_dir := tprint("%1/tests/data/shim-fixture/packages-none", juice_root());
-    delete_directory_full(packages_dir);
-    make_directory_if_it_does_not_exist(packages_dir, recursive = true);
-    defer delete_directory_full(packages_dir);
-    expect(ensure_import_shim(packages_dir, "empty-pkg", tprint("%1/tests/data/shim-fixture/empty-pkg", juice_root())));
-    _, shim_written := shim_content_for(packages_dir, "empty-pkg");
-    expect(!shim_written);
-}
-
-// ---------------------------------------------------------------------------
-// Validation matrix: the member path validity gate is testable in-process —
-// empty, absolute (including volume designators) and ".."-escaping
-// components are rejected, "." components and plain relative paths pass
-// (passing "." lets workspace-bad-duplicate's "member_lib/." spelling reach
-// the duplicate branch). Discovery's other failure branches are covered by
-// E2E message assertions through the real juice.exe (see
-// tests/test_monorepo.jai; moved there by user revision on 2026-10-14) —
-// load_package_manifest's module directory derives from the running
-// executable, which points at the jai compiler inside the test program, so a
-// direct test cannot load a real manifest.
-// ---------------------------------------------------------------------------
-
-test "Workspace member path validity gate" {
-    expect(!workspace_relative_path_is_valid(""));
-    expect(!workspace_relative_path_is_valid("/abs"));
-    expect(!workspace_relative_path_is_valid("C:/abs"));
-    expect(!workspace_relative_path_is_valid("../escape"));
-    expect(!workspace_relative_path_is_valid("a/../b"));
-    expect(workspace_relative_path_is_valid("."));
-    expect(workspace_relative_path_is_valid("member_lib"));
-    expect(workspace_relative_path_is_valid("member_lib/."));
-    expect(workspace_relative_path_is_valid("a/b"));
 }

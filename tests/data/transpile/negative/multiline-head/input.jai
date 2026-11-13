@@ -1,8 +1,0 @@
-test
-    "name" {
-    body();
-}
-
-test
-{
-}

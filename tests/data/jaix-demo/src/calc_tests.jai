@@ -1,11 +1,11 @@
 // The juice test block file (the mixed-package surface): juice's own test
-// mechanism handles it — the jaix pre-step leaves it out of the mirror (jaix
-// cannot parse test blocks without its test block plugin, which the marker
-// config excludes), and `juice test` discovers it from the original. The
-// double() tests below execute the try/catch lowering: the test program
-// compiles calc.jai's mirror view (the lowered code), and program-level
-// scope makes the procs visible here without a #load (juice test compiles
-// every discovered file into one program; the EXPAND views strip in-package
+// mechanism handles it — the jaix pre-step leaves it out of the mirror
+// (jaix cannot parse test blocks without its test block plugin, which the
+// config excludes), and juice test discovers it from the original. The
+// double() tests execute the try/catch lowering: the test program compiles
+// calc.jai's mirror view (the lowered code), and program-level scope makes
+// the procs visible here without a #load (juice test compiles every
+// discovered file into one program; the EXPAND views strip in-package
 // #loads).
 #import "Testing";
 

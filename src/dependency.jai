@@ -1,11 +1,35 @@
 #import "Basic";
 #import "File";
 #import "File_Utilities";
-#import "String";
 #import "Process";
-#import "Testing";
+#import "String";
 
-#import "Juice";
+// The dependency layer: import shims and workspace dependency preparation
+// (spec section 3.3/3.6, old juice dependency.jai semantics). Dependencies
+// are consumed only through generated import shims under
+// <root>/target/packages — never by linking the source directory (the
+// compiler canonicalizes junctions and rejects an import whose name
+// mismatches the real directory name, and a directory next to its shim
+// collides as "both single-file and directory form"). Every dependency gets
+// exactly one shim that #loads the real entry by path.
+//
+// Closure discipline (spec section 3.6): there is no transitive closure —
+// every package declares its full dependency closure explicitly. A workspace
+// member is consumed only when a package declares it as a DEP by name; the
+// declaration links the member directory directly (member link, never a
+// fetch). Relative DEP sources anchor at the process cwd, which is the
+// package root (juice never chdirs), so relative sources must point at
+// members (which link by name instead) or at root-relative paths.
+//
+// DEP.name is used verbatim and never validated: a hetero-name DEP
+// ({name = "juice_core", source = ...} + #import "juice_core") is the
+// official cross-package form. The shim lands under the declared name.
+//
+// The Package face is consumed through the namespaced Juice binding
+// (src/juice_module.jai), as in the workspace/target layers. The dependency
+// strip front (shim rewriting for test-bearing closures, ticket 027's b5
+// wiring over ticket 026's view layer) lives at the end of this file — the
+// build and test commands share it.
 
 Source_Type :: enum {
     LOCAL_PATH;
@@ -51,31 +75,26 @@ find_files_recursive :: (dir: string, filename: string) -> [..] string {
     return ctx.results;
 }
 
-// Local dependency directory (CONTEXT): <package root>/target/packages/.
-// A pure derivation of root_dir (after the Build_Driver teardown,
-// packages_dir is no longer a struct field — the dependency module, its
-// owner, derives it uniformly).
+// Local dependency directory: <package root>/target/packages/. A pure
+// derivation of root_dir; the dependency module owns it uniformly.
 packages_dir :: (root_dir: string) -> string {
-    return to_forward_slashes(tprint("%1/target/packages", root_dir));
+    return target_packages_dir(package_target_dir(root_dir));
 }
 
 // Import directories every compile gets beyond jai's own defaults: the
 // juice module directory (adjacent to the running executable, holds
 // Testing.jai/Juice.jai) and the package's dependency shim directory when it
-// exists. juice_modules_dir is the shared derivation (src/path_safety.jai).
-// Moved here from build.jai — this module owns the packages_dir derivation
-// and build/test share it; previously test only injected the modules
-// directory, so the root test program's "#import <dependency name>"
-// (including workspace members) always failed to resolve.
+// exists. Build and test share this derivation — the test program's
+// "#import <dependency name>" (including workspace members) resolves through
+// the shim directory exactly like a build does.
 compiler_import_directories :: (packages_dir: string) -> [..] string {
     dirs: [..] string;
-    dirs.allocator = temp;
 
     global_modules_dir := juice_modules_dir();
     if is_directory(global_modules_dir) array_add(*dirs, global_modules_dir);
 
     if is_directory(packages_dir) {
-        array_add(*dirs, to_forward_slashes(packages_dir));
+        array_add(*dirs, path_slashes(packages_dir));
     }
     return dirs;
 }
@@ -93,7 +112,7 @@ find_package_in_repo :: (cache_dir: string, repo_dir: string, target_pkg_name: s
 }
 
 // Consume the discovery snapshot; never re-execute workspace manifests.
-resolve_and_fetch_dependencies :: (root_dir: string, cache_dir: string, member_packages: [] Package) -> bool {
+resolve_and_fetch_dependencies :: (root_dir: string, cache_dir: string, member_packages: [] Juice.Package) -> bool {
     if !make_directory_if_it_does_not_exist(packages_dir(root_dir), recursive = true) return false;
     return fetch_workspace_dependencies(root_dir, cache_dir, member_packages);
 }
@@ -101,14 +120,12 @@ resolve_and_fetch_dependencies :: (root_dir: string, cache_dir: string, member_p
 // A workspace member is consumed through the local dependency directory: the
 // declaring package lists it as a dependency, and preparation registers an
 // import shim so consumers resolve it with a plain "#import <name>".
-link_workspace_member_dependency :: (root_dir: string, member: Package) -> bool {
+link_workspace_member_dependency :: (root_dir: string, member: Juice.Package) -> bool {
     return ensure_import_shim(packages_dir(root_dir), member.name, member.dir);
 }
 
 // One import shim's generated content: a comment line plus a single #load of
-// the dependency entry (the source entry or, after the dependency strip
-// front views the dependency, the entry's strip view). Single source of the
-// shim format (dependency_shim_content), shared by preparation and rewrite.
+// the dependency entry. Single source of the shim format.
 dependency_shim_content :: (name: string, entry: string) -> string {
     return tprint("// Generated by juice: import shim for package '%1'.\n#load \"%2\";\n", name, entry);
 }
@@ -118,8 +135,11 @@ dependency_shim_content :: (name: string, entry: string) -> string {
 // canonicalizes junctions and rejects imports whose name mismatches the real
 // directory, and a directory next to its shim collides as "both single-file
 // and directory form". So every dependency gets exactly one generated shim
-// that loads the real entry by path. No manifest is required, so plain Jai
-// modules work as dependencies too.
+// that loads the real entry by path — any of the three entry layouts
+// (module.jai at the root, src/module.jai, or a single <name>.jai file). No
+// manifest is required, so plain Jai modules work as dependencies too; a
+// directory with none of the layouts writes no shim and leaves resolution to
+// the compiler's own error.
 ensure_import_shim :: (packages_dir: string, name: string, source_dir: string) -> bool {
     abs_source, ok := normalize_existing_path(source_dir);
     if !ok return false;
@@ -141,252 +161,7 @@ ensure_import_shim :: (packages_dir: string, name: string, source_dir: string) -
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Dependency strip front: the import shim is the entry into a dependency
-// closure — when a consumer references a dependency via `#import <name>`,
-// the compiler #loads the dependency's import entry directly through the
-// shim under target/packages (the ADR 0004 strip guarantee = the entry's
-// in-package closure; dependency sources used to be passed to jai raw).
-// Dependency sources with inlined test blocks cannot be compiled by jai
-// directly, so this front handles each shim: parse the entry path -> probe
-// the entry's literal in-package #load closure with the dependency package
-// as root (probe_package_closure, lives in src/transpile_front.jai) -> when
-// the closure contains test blocks, view the whole closure with STRIP (the
-// ADR 0004 all-or-nothing semantics), landing under
-// target/transpile/deps/<name>/..., and rewrite the shim's #load to the
-// entry view. Test-free dependencies get zero transpile and their shims
-// stay untouched. Build and Test share this front; test blocks inside
-// dependencies are neither discovered nor executed (Test discovery never
-// scans dependency packages) — both paths only make them compilable.
-// ---------------------------------------------------------------------------
-
-// The #load target literal of a generated import shim: the dependency entry's
-// absolute path. Returns false when the shim does not match the generated
-// shape (a hand-written shim stays untouched; the compiler's own error
-// reports whatever is wrong with it).
-shim_load_target :: (source: string) -> string, bool {
-    tokens := lex_source(source);
-    i := 0;
-    while i < tokens.count {
-        tok := tokens[i];
-        if tok.kind == .DIRECTIVE && token_text(source, tok) == "#load" && i + 2 < tokens.count
-            && tokens[i+1].kind == .STRING && token_text(source, tokens[i+2]) == ";" {
-            target := tokens[i+1];
-            return decode_jai_string(slice(source, target.start + 1, target.end - target.start - 2)), true;
-        }
-        i += 1;
-    }
-    return "", false;
-}
-
-// File name (with extension) of a path; the complement of get_directory_path.
-get_filename :: (file_path: string) -> string {
-    last_slash := -1;
-    for i: 0..file_path.count-1 {
-        if file_path[i] == #char "/" || file_path[i] == #char "\\" last_slash = i;
-    }
-    return slice(file_path, last_slash + 1, file_path.count - last_slash - 1);
-}
-
-// Deterministic shim enumeration: every *.jai file directly under the
-// dependency directory, minus its extension, in lexicographic order.
-Shim_Scan_Context :: struct {
-    names: [..] string;
-}
-
-shim_scan_visitor :: (info: *File_Visit_Info, ctx: *Shim_Scan_Context) {
-    if info.is_directory return;
-    if info.short_name.count == 0 || info.short_name[0] == #char "." return;
-    if !ends_with(info.short_name, ".jai") return;
-    array_add(*ctx.names, copy_string(slice(info.short_name, 0, info.short_name.count - 4)));
-}
-
-sort_shim_names :: (names: [] string) {
-    for i: 1..names.count-1 {
-        if i >= names.count break;
-        key := names[i];
-        j := i - 1;
-        while j >= 0 && compare(names[j], key) > 0 {
-            names[j+1] = names[j];
-            j -= 1;
-        }
-        names[j+1] = key;
-    }
-}
-
-collect_shim_names :: (packages_dir: string) -> [..] string, bool {
-    ctx: Shim_Scan_Context;
-    visited := visit_files(packages_dir, false, *ctx, shim_scan_visitor, visit_directories = false);
-    if !visited return ctx.names, false;
-    sort_shim_names(ctx.names);
-    return ctx.names, true;
-}
-
-// The closure probe and view computation machinery (Build_Source_File /
-// Build_Closure_File / Build_File_Output / probe_package_closure /
-// Strip_View_State / closure_index / view_of_file / transpile_build_file)
-// lives in src/transpile_front.jai — the test-free shared strip front
-// (bootstrap build.jai reuses it via #load, so it must stay test-free; its
-// tests live in tests/transpile_front_tests.jai per the test organization
-// rule). This file's dependency strip front (below) consumes the same
-// machinery.
-
-// The dependency strip front shared by build and test: for every import shim
-// in the dependency directory, probe the dependency entry's closure; a
-// closure containing test blocks is viewed wholesale and the shim is
-// regenerated pointing at the entry's strip view. Test-free dependencies,
-// missing entries and hand-written shims stay untouched (zero transpile,
-// zero cache; the compiler's own error reports whatever is wrong with them).
-prepare_dependency_strip_views :: (
-    root_dir: string,
-    transpile: #type (file: Build_Source_File, load_targets: [] Load_Target) -> Build_File_Output
-) -> bool {
-    packages := packages_dir(root_dir);
-    if !is_directory(packages) return true;
-
-    shims, ok := collect_shim_names(packages);
-    if !ok {
-        print("[juice ERROR] Could not scan the dependency shim directory: %\n", packages);
-        return false;
-    }
-    for name: shims {
-        shim_path := tprint("%1/%2.jai", packages, name);
-        source, read_ok := read_entire_file(shim_path);
-        if !read_ok continue;
-        entry_abs, parsed := shim_load_target(source);
-        if !parsed || !path_exists_as_regular_file(entry_abs) continue;
-
-        closure, probe_ok := probe_package_closure(get_directory_path(entry_abs), get_filename(entry_abs));
-        if !probe_ok return false;
-        if !closure_has_tests(closure) continue;
-
-        state: Strip_View_State;
-        state.transpile_dir = transpile_tree_dir(root_dir);
-        state.dep_name = name;
-        state.layout = .CONTENT_ADDRESSED;
-        state.closure = closure;
-        state.transpile = transpile;
-        for _: closure {
-            array_add(*state.states, 0);
-            array_add(*state.view_paths, "");
-        }
-        entry_view, view_ok := view_of_file(*state, 0);   // DFS preorder: entry first
-        if !view_ok return false;
-
-        if !write_entire_file(shim_path, dependency_shim_content(name, entry_view)) {
-            print("[juice ERROR] Could not rewrite import shim for dependency '%'.\n", name);
-            return false;
-        }
-    }
-    return true;
-}
-
-// ---------------------------------------------------------------------------
-// Inline tests: the dependency strip front — shim parsing, zero action for
-// test-free dependencies, view generation and shim rewriting for closures
-// containing tests, `..`-escaping #loads staying verbatim, bad shims left to
-// the compiler. Shared fakes (fake_build_transpile, the record globals,
-// build_seam_write, reset_build_seam) live in tests/test_support.jai.
-// ---------------------------------------------------------------------------
-
-test "Dependency strip: shim load target parses the generated shape" {
-    entry, ok := shim_load_target(dependency_shim_content("packrat", "C:/repo/src/module.jai"));
-    expect(ok && entry == "C:/repo/src/module.jai");
-    _, parsed := shim_load_target("// hand-written\nsome_decl :: 1;\n");
-    expect(!parsed);
-}
-
-test "Dependency strip: a test-free dependency stays untouched" {
-    root := tprint("%1/target/dep-strip-clean", juice_root());
-    delete_directory_full(root);
-    defer delete_directory_full(root);
-    dep := tprint("%1/dep", root);
-    expect(build_seam_write(dep, "src/module.jai", "#load \"extra.jai\";\nmain_decl :: () -> s32 { return 1; }\n"));
-    expect(build_seam_write(dep, "src/extra.jai", "extra_decl :: () -> s32 { return 2; }\n"));
-    expect(build_seam_write(root, "target/packages/depx.jai", dependency_shim_content("depx", tprint("%1/src/module.jai", dep))));
-
-    reset_build_seam();
-    expect(prepare_dependency_strip_views(root, fake_build_transpile));
-    expect(test_build_transpile_calls == 0);
-    // The shim stays byte-identical (no strip, no rewrite).
-    shim, ok := read_entire_file(tprint("%1/target/packages/depx.jai", root));
-    expect(ok && shim == dependency_shim_content("depx", tprint("%1/src/module.jai", dep)));
-    expect(!file_exists(tprint("%1/target/transpile", root)));
-}
-
-test "Dependency strip: a test closure is viewed and the shim rewritten" {
-    root := tprint("%1/target/dep-strip-view", juice_root());
-    delete_directory_full(root);
-    defer delete_directory_full(root);
-    dep := tprint("%1/dep", root);
-    expect(build_seam_write(dep, "src/module.jai", "#load \"extra.jai\";\nmain_decl :: () -> s32 { return 1; }\n"));
-    expect(build_seam_write(dep, "src/extra.jai", "extra_decl :: () -> s32 { return 2; }\n\ntest \"dep test\" {\n}\n"));
-    expect(build_seam_write(root, "target/packages/depx.jai", dependency_shim_content("depx", tprint("%1/src/module.jai", dep))));
-
-    reset_build_seam();
-    expect(prepare_dependency_strip_views(root, fake_build_transpile));
-
-    // The whole closure is viewed, children before parents (Merkle chain):
-    // extra.jai before module.jai. rel is relative to the dependency package
-    // root (the entry's directory, <dep>/src).
-    expect(test_build_transpile_calls == 2);
-    expect(test_build_transpiled_files.count == 2);
-    expect(test_build_transpiled_files[0] == "extra.jai" && test_build_transpiled_files[1] == "module.jai");
-    // The entry's load rewrite points at the child view (deps/<name> subtree).
-    extra_view := tprint("%1/target/transpile/deps/depx/%2/extra.jai", root, fake_key("extra.jai"));
-    expect(test_build_transpiled_rewrites.count == 1);
-    expect(test_build_transpiled_rewrites[0] == tprint("extra.jai -> %1", extra_view));
-    // Views land in the deps/depx subtree; the shim is rewritten to the entry view.
-    entry_view := tprint("%1/target/transpile/deps/depx/%2/module.jai", root, fake_key("module.jai"));
-    expect(file_exists(entry_view) && file_exists(extra_view));
-    shim, ok := read_entire_file(tprint("%1/target/packages/depx.jai", root));
-    expect(ok && shim == dependency_shim_content("depx", entry_view));
-}
-
-test "Dependency strip: an escaping load stays verbatim and unviewed" {
-    root := tprint("%1/target/dep-strip-escape", juice_root());
-    delete_directory_full(root);
-    defer delete_directory_full(root);
-    dep := tprint("%1/dep", root);
-    expect(build_seam_write(dep, "src/module.jai", "#load \"extra.jai\";\nmain_decl :: () -> s32 { return 1; }\n"));
-    // `..` escapes the dependency package root (above src/): out-of-package,
-    // never followed, never rewritten.
-    expect(build_seam_write(dep, "src/extra.jai", "#load \"../../outside.jai\";\nextra_decl :: () -> s32 { return 2; }\n\ntest \"dep test\" {\n}\n"));
-    expect(build_seam_write(dep, "outside.jai", "outside_decl :: () -> s32 { return 3; }\n"));
-    expect(build_seam_write(root, "target/packages/depx.jai", dependency_shim_content("depx", tprint("%1/src/module.jai", dep))));
-
-    reset_build_seam();
-    expect(prepare_dependency_strip_views(root, fake_build_transpile));
-    expect(test_build_transpile_calls == 2);
-    expect(test_build_transpiled_files.count == 2);
-    expect(test_build_transpiled_files[0] == "extra.jai" && test_build_transpiled_files[1] == "module.jai");
-    // outside.jai is outside the closure and never viewed: no third
-    // transpile call.
-    expect(!file_exists(tprint("%1/target/transpile/deps/depx/%2/outside.jai", root, fake_key("outside.jai"))));
-}
-
-test "Dependency strip: missing entry or bad shim is left to the compiler" {
-    root := tprint("%1/target/dep-strip-bad", juice_root());
-    delete_directory_full(root);
-    defer delete_directory_full(root);
-    expect(build_seam_write(root, "target/packages/missing.jai", dependency_shim_content("missing", tprint("%1/nope/src/module.jai", root))));
-    expect(build_seam_write(root, "target/packages/handwritten.jai", "// not generated\nsome_decl :: 1;\n"));
-
-    reset_build_seam();
-    expect(prepare_dependency_strip_views(root, fake_build_transpile));
-    expect(test_build_transpile_calls == 0);
-    // Both shims stay byte-identical.
-    shim, ok := read_entire_file(tprint("%1/target/packages/missing.jai", root));
-    expect(ok && shim == dependency_shim_content("missing", tprint("%1/nope/src/module.jai", root)));
-}
-
-test "Dependency strip: no shim directory is a no-op" {
-    reset_build_seam();
-    expect(prepare_dependency_strip_views(tprint("%1/target/dep-strip-nodir", juice_root()), fake_build_transpile));
-    expect(test_build_transpile_calls == 0);
-}
-
-find_workspace_member :: (member_packages: [] Package, name: string) -> Package, bool {
+find_workspace_member :: (member_packages: [] Juice.Package, name: string) -> Juice.Package, bool {
     for pkg: member_packages {
         if pkg.name == name return pkg, true;
     }
@@ -396,14 +171,17 @@ find_workspace_member :: (member_packages: [] Package, name: string) -> Package,
 fetch_workspace_dependencies :: (
     root_dir: string,
     cache_dir: string,
-    member_packages: [] Package,
-    fetch: #type (root_dir: string, cache_dir: string, dep: Dependency) -> bool = fetch_dependency,
-    link_member: #type (root_dir: string, member: Package) -> bool = link_workspace_member_dependency
+    member_packages: [] Juice.Package,
+    fetch: #type (root_dir: string, cache_dir: string, dep: Juice.Dependency) -> bool = fetch_dependency,
+    link_member: #type (root_dir: string, member: Juice.Package) -> bool = link_workspace_member_dependency
 ) -> bool {
     for pkg: member_packages {
         for dep: pkg.dependencies {
             member, is_member := find_workspace_member(member_packages, dep.name);
             if is_member {
+                // Members link by declared name; the DEP source is ignored,
+                // so a member-relative source never misresolves against the
+                // root's cwd.
                 if !link_member(root_dir, member) {
                     print("[juice ERROR] Failed to link workspace member: %1\n", dep.name);
                     return false;
@@ -419,12 +197,14 @@ fetch_workspace_dependencies :: (
     return true;
 }
 
-fetch_dependency :: (root_dir: string, cache_dir: string, dep: Dependency) -> bool {
+fetch_dependency :: (root_dir: string, cache_dir: string, dep: Juice.Dependency) -> bool {
     source_type := detect_source_type(dep.source);
 
     if source_type == {
         case .LOCAL_PATH;
             clean_path := clean_local_path(dep.source);
+            // Relative sources anchor at the process cwd — the package root,
+            // since juice never chdirs (root_dir equals the invocation cwd).
             return ensure_import_shim(packages_dir(root_dir), dep.name, clean_path);
 
         case .GIT_URL;
@@ -510,4 +290,140 @@ delete_directory_full :: (path: string) -> bool {
         res := run_command("rm", "-rf", path);
         return res.exit_code == 0;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Dependency strip front (ticket 027, the b5 wiring over ticket 026's view
+// layer; old juice prepare_dependency_strip_views semantics — the reference
+// face, rewritten not copied): the import shim is the entry into a
+// dependency closure — when a consumer references a dependency via
+// `#import <name>`, the compiler #loads the dependency's import entry
+// directly through the shim under target/packages. Dependency sources with
+// inlined test blocks cannot be compiled by jai directly, so this front
+// handles each shim: parse the entry path -> probe the entry's literal
+// in-package #load closure with the dependency package as root
+// (probe_package_closure, lives in src/transpile_front.jai) -> when the
+// closure contains test blocks, view the whole closure with STRIP (the
+// all-or-nothing semantics), landing under
+// target/transpile/deps/<name>/..., and rewrite the shim's #load to the
+// entry view. Test-free dependencies get zero transpile and their shims
+// stay untouched. Build and Test share this front; test blocks inside
+// dependencies are neither discovered nor executed (Test discovery never
+// scans dependency packages) — both paths only make them compilable.
+// ---------------------------------------------------------------------------
+
+// File name (with extension) of a path; the complement of get_directory_path.
+get_filename :: (file_path: string) -> string {
+    last_slash := -1;
+    for i: 0..file_path.count-1 {
+        if file_path[i] == #char "/" || file_path[i] == #char "\\" last_slash = i;
+    }
+    return slice(file_path, last_slash + 1, file_path.count - last_slash - 1);
+}
+
+// Deterministic shim enumeration: every *.jai file directly under the
+// dependency directory, minus its extension, in lexicographic order.
+Shim_Scan_Context :: struct {
+    names: [..] string;
+}
+
+shim_scan_visitor :: (info: *File_Visit_Info, ctx: *Shim_Scan_Context) {
+    if info.is_directory return;
+    if info.short_name.count == 0 || info.short_name[0] == #char "." return;
+    if !ends_with(info.short_name, ".jai") return;
+    array_add(*ctx.names, copy_string(slice(info.short_name, 0, info.short_name.count - 4)));
+}
+
+sort_shim_names :: (names: [] string) {
+    for i: 1..names.count-1 {
+        if i >= names.count break;
+        key := names[i];
+        j := i - 1;
+        while j >= 0 && compare(names[j], key) > 0 {
+            names[j+1] = names[j];
+            j -= 1;
+        }
+        names[j+1] = key;
+    }
+}
+
+collect_shim_names :: (packages_dir: string) -> [..] string, bool {
+    ctx: Shim_Scan_Context;
+    visited := visit_files(packages_dir, false, *ctx, shim_scan_visitor, visit_directories = false);
+    if !visited return ctx.names, false;
+    sort_shim_names(ctx.names);
+    return ctx.names, true;
+}
+
+// The #load target literal of a generated import shim: the dependency entry's
+// absolute path. Returns false when the shim does not match the generated
+// shape (a hand-written shim stays untouched; the compiler's own error
+// reports whatever is wrong with it).
+shim_load_target :: (source: string) -> string, bool {
+    tokens := lex_source(source);
+    i := 0;
+    while i < tokens.count {
+        tok := tokens[i];
+        if tok.kind == .DIRECTIVE && token_text(source, tok) == "#load" && i + 2 < tokens.count
+            && tokens[i+1].kind == .STRING && token_text(source, tokens[i+2]) == ";" {
+            target := tokens[i+1];
+            return decode_jai_string(slice(source, target.start + 1, target.end - target.start - 2)), true;
+        }
+        i += 1;
+    }
+    return "", false;
+}
+
+// The dependency strip front shared by build and test: for every import shim
+// in the dependency directory, probe the dependency entry's closure; a
+// closure containing test blocks is viewed wholesale and the shim is
+// regenerated pointing at the entry's strip view. Test-free dependencies,
+// missing entries and hand-written shims stay untouched (zero transpile,
+// zero cache; the compiler's own error reports whatever is wrong with
+// them). The strip views always use the default pipeline: dependency
+// packages' manifests are not retained past preparation, so their closures
+// resolve the empty pipeline to the default (spec 0060 decision 6 — today's
+// behavior exactly). The per-file transpile step is the built-in
+// transpile_build_file: the transpile seam is the TRANSPILE at mount's
+// replacement surface at the stage level (ticket 027), not a parameter
+// here.
+prepare_dependency_strip_views :: (root_dir: string) -> bool {
+    packages := packages_dir(root_dir);
+    if !is_directory(packages) return true;
+
+    shims, ok := collect_shim_names(packages);
+    if !ok {
+        print("[juice ERROR] Could not scan the dependency shim directory: %\n", packages);
+        return false;
+    }
+    for name: shims {
+        shim_path := tprint("%1/%2.jai", packages, name);
+        source, read_ok := read_entire_file(shim_path);
+        if !read_ok continue;
+        entry_abs, parsed := shim_load_target(source);
+        if !parsed || !path_exists_as_regular_file(entry_abs) continue;
+
+        closure, probe_ok := probe_package_closure(get_directory_path(entry_abs), get_filename(entry_abs));
+        if !probe_ok return false;
+        if !closure_has_tests(closure) continue;
+
+        state: Strip_View_State;
+        state.transpile_dir = transpile_tree_dir(root_dir);
+        state.dep_name = name;
+        state.layout = .CONTENT_ADDRESSED;
+        state.closure = closure;
+        state.transpile = transpile_build_file;
+        for _: closure {
+            array_add(*state.states, 0);
+            array_add(*state.view_paths, "");
+        }
+        entry_view, view_ok := view_of_file(*state, 0);   // DFS preorder: entry first
+        if !view_ok return false;
+
+        if !write_entire_file(shim_path, dependency_shim_content(name, entry_view)) {
+            print("[juice ERROR] Could not rewrite import shim for dependency '%'.\n", name);
+            return false;
+        }
+    }
+    return true;
 }

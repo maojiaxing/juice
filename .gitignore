@@ -2,6 +2,8 @@
 target/
 !tests/data/scan-fixture/src/target/
 !tests/data/scan-fixture/src/target/c.jai
+!tests/data/scan-fixture/target/
+!tests/data/scan-fixture/target/h.jai
 !tests/data/scan-package/src/target/
 !tests/data/scan-package/src/target/shadow.jai
 .claude/

@@ -1,5 +1,4 @@
 #import "Hash_Table";
-#import "Testing";
 
 Dispatch_Error :: enum {
     NONE;
@@ -120,98 +119,19 @@ dispatch_command :: (registry: [] Command, command_name: string, ctx: *Command_C
     return .{success = true};
 }
 
+// The registry overview in declaration order — shared by the dispatcher's
+// unknown-command path and the help command's no-argument form. The name
+// column is padded explicitly: the print format language has no
+// minimum-width flag (old juice's "%-12" spec leaks a literal "-12" into
+// the output — a latent bug its unknown-command path never locked by test).
 print_usage :: (registry: [] Command) {
     print("Usage: juice [command] [args]\n\n");
     print("Available commands:\n");
     for cmd: registry {
-        print("  %-12  %\n", cmd.name, cmd.description);
+        print("  %", cmd.name);
+        for 1..(12 - cmd.name.count) {
+            print(" ");
+        }
+        print("  %\n", cmd.description);
     }
-}
-
-// ---------------------------------------------------------------------------
-// Inline tests: registry validation, command
-// lookup, cycle detection, diamond dedup, argument pre-checks and failure
-// propagation (plus the manifest strict protocol and the case-sensitive
-// target selection blocks, which moved here whole-file per the migration
-// map). Shared helpers (the recording handlers, the TEST_REGISTRY_*
-// constants and reset_dispatch_counters) live in tests/test_support.jai.
-// ---------------------------------------------------------------------------
-
-test "Production registry validation" {
-    expect(validate_registry(COMMAND_REGISTRY).success);
-}
-
-test "Duplicate command detection" {
-    result := validate_registry(TEST_REGISTRY_DUPLICATE);
-    expect(!result.success && result.error == .DUPLICATE_COMMAND_NAME);
-}
-
-test "Missing prerequisite detection" {
-    result := validate_registry(TEST_REGISTRY_MISSING_PREREQ);
-    expect(!result.success && result.error == .MISSING_PREREQUISITE);
-}
-
-test "Unknown command rejected" {
-    ctx: Command_Context;
-    result := dispatch_command(TEST_REGISTRY_SIMPLE, "missing", *ctx, string.[]);
-    expect(!result.success && result.error == .UNKNOWN_COMMAND);
-}
-
-test "Cycle rejected before execution" {
-    reset_dispatch_counters();
-    ctx: Command_Context;
-    result := dispatch_command(TEST_REGISTRY_CYCLE, "a", *ctx, string.[]);
-    expect(!result.success && result.error == .CYCLE_DETECTED && test_a_calls == 0 && test_b_calls == 0);
-}
-
-test "Diamond executes each command once" {
-    reset_dispatch_counters();
-    ctx: Command_Context;
-    result := dispatch_command(TEST_REGISTRY_DIAMOND, "d", *ctx, string.[]);
-    expect(result.success && test_a_calls == 1 && test_b_calls == 1 && test_c_calls == 1 && test_d_calls == 1);
-}
-
-test "Invalid arguments rejected before prerequisites" {
-    reset_dispatch_counters();
-    ctx: Command_Context;
-    result := dispatch_command(TEST_REGISTRY_ARGUMENTS, "strict", *ctx, string.["unexpected"]);
-    expect(!result.success && result.error == .INVALID_ARGUMENTS && test_a_calls == 0 && test_b_calls == 0);
-}
-
-test "Prerequisite failure propagates" {
-    reset_dispatch_counters();
-    ctx: Command_Context;
-    result := dispatch_command(TEST_REGISTRY_FAILURE, "target", *ctx, string.[]);
-    expect(!result.success && result.error == .PREREQUISITE_FAILED && test_fail_calls == 1 && test_b_calls == 0);
-}
-
-test "Handler failure reported" {
-    reset_dispatch_counters();
-    ctx: Command_Context;
-    result := dispatch_command(TEST_REGISTRY_FAILURE, "failing", *ctx, string.[]);
-    expect(!result.success && result.error == .HANDLER_FAILED && result.command == "failing" && test_fail_calls == 1);
-}
-
-test "Strict manifest protocol" {
-    valid := parse_manifest_data_strict("NAME=demo\nVERSION=1\nTYPE=1\nTARGET=app|src/main.jai\n");
-    expect(valid.success && valid.package.targets.count == 1);
-    expect(valid.package.targets[0].name == "app");
-
-    unknown := parse_manifest_data_strict("NAME=demo\nVERSION=1\nNOPE=x\n");
-    expect(!unknown.success);
-    malformed := parse_manifest_data_strict("TARGET=app|src/main.jai|result\n");
-    expect(!malformed.success);
-}
-
-test "Case-sensitive target selection" {
-    plans := Artifact_Plan.[
-        .{target = .{name = "alpha"}, target_dir = "root/target", artifact_path = "root/target/alpha.exe"},
-        .{target = .{name = "demo"}, target_dir = "root/target", artifact_path = "root/target/demo.exe"},
-    ];
-    selected, found := select_artifact_plan(plans, "demo", "");
-    expect(found && selected.target.name == "demo");
-    selected, found = select_artifact_plan(plans, "demo", "alpha");
-    expect(found && selected.target.name == "alpha");
-    _, found = select_artifact_plan(plans, "demo", "Alpha");
-    expect(!found);
 }

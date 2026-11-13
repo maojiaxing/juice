@@ -3,18 +3,11 @@
 #import "File_Utilities";
 #import "Process";
 #import "String";
+#import "System";
 
 #if OS == .WINDOWS {
     #import "Windows";
     #import "Windows_Utf8";
-}
-
-Path_Entry_Check :: struct {
-    exists:       bool;
-    is_directory: bool;
-    is_symlink:   bool;
-    is_junction:  bool;
-    had_error:    bool;
 }
 
 path_slashes :: (path: string) -> string {
@@ -33,15 +26,26 @@ path_backslashes :: (path: string) -> string {
     return result;
 }
 
-// Directory holding Juice's modules (Testing.jai/Juice.jai), adjacent to the
-// running executable. Shared by the build/test commands (compiler import
-// directories, Testing module source lookup) and the manifest evaluator child
-// (-import_dir) — one derivation, three call sites.
+// Directory holding the published juice modules (the Juice module face and
+// Testing), adjacent to the running executable. Spec section 9.3 derives
+// <exe>/modules on purpose: the modules are generated products published
+// into target/, not hand-maintained sources as in old juice (whose
+// <exe>/../modules points at the repository's modules/). The LNK1104
+// self-build copy stays inside target/, so the derivation keeps working for
+// it. Shared by the build/test commands (compiler import directories) and
+// the manifest evaluator child (-import_dir).
 juice_modules_dir :: () -> string {
     exe_path := get_path_of_running_executable();
     bin_dir := path_strip_filename(exe_path);
     if bin_dir.count > 0 && bin_dir[bin_dir.count - 1] == #char "/" bin_dir.count -= 1;
-    return path_slashes(tprint("%1/../modules", bin_dir));
+    return path_slashes(tprint("%1/modules", bin_dir));
+}
+
+Path_Entry_Check :: struct {
+    exists:       bool;
+    is_directory: bool;
+    is_symlink:   bool;
+    is_junction:  bool;
 }
 
 paths_equal :: (left: string, right: string) -> bool {
@@ -52,12 +56,6 @@ paths_equal :: (left: string, right: string) -> bool {
     } else {
         return a == b;
     }
-}
-
-path_entry_visitor :: (info: *File_Visit_Info, user_data: *Path_Entry_Check) {
-    user_data.exists = true;
-    user_data.is_directory = info.is_directory;
-    user_data.is_symlink = info.is_symlink;
 }
 
 // File_Utilities exposes symlinks while enumerating a parent directory. This
@@ -100,8 +98,7 @@ inspect_path_entry :: (path: string) -> Path_Entry_Check {
         }
     }
 
-    visited := visit_files(parent, false, *scan, visit, visit_files = true, visit_directories = true, visit_symlinks = true, follow_directory_symlinks = false);
-    if !visited && !result.exists result.had_error = true;
+    _ := visit_files(parent, false, *scan, visit, visit_files = true, visit_directories = true, visit_symlinks = true, follow_directory_symlinks = false);
 
     #if OS == .WINDOWS {
         if result.exists {
@@ -113,21 +110,6 @@ inspect_path_entry :: (path: string) -> Path_Entry_Check {
     }
 
     return result;
-}
-
-path_is_symlink :: (path: string) -> bool {
-    entry := inspect_path_entry(path);
-    return entry.is_symlink || entry.is_junction;
-}
-
-path_exists_as_directory :: (path: string) -> bool {
-    entry := inspect_path_entry(path);
-    return entry.exists && entry.is_directory && !entry.is_symlink && !entry.is_junction;
-}
-
-path_exists_as_regular_file :: (path: string) -> bool {
-    entry := inspect_path_entry(path);
-    return entry.exists && !entry.is_directory && !entry.is_symlink && !entry.is_junction;
 }
 
 path_is_absolute_portable :: (path: string) -> bool {
@@ -147,6 +129,51 @@ path_has_escape_component :: (path: string) -> bool {
         if part == ".." return true;
     }
     return false;
+}
+
+path_is_within :: (root: string, candidate: string) -> bool {
+    root_abs, root_ok := get_absolute_path(root);
+    if !root_ok return false;
+    candidate_abs, candidate_ok := get_absolute_path(candidate);
+    if !candidate_ok candidate_abs = lexical_absolute_path(candidate);
+    root_norm := path_slashes(root_abs);
+    candidate_norm := path_slashes(candidate_abs);
+    if root_norm == "" || candidate_norm == "" return false;
+    if paths_equal(root_norm, candidate_norm) return true;
+    if !ends_with(root_norm, "/") root_norm = tprint("%1/", root_norm);
+    if candidate_norm.count <= root_norm.count return false;
+    prefix := slice(candidate_norm, 0, root_norm.count);
+    return paths_equal(prefix, root_norm);
+}
+
+normalize_existing_path :: (path: string) -> string, bool {
+    absolute, ok := get_absolute_path(path);
+    if !ok return "", false;
+    return path_slashes(absolute), true;
+}
+
+// ---------------------------------------------------------------------------
+// Portable path face (target/dependency layers, ticket 009): near-direct
+// ports of the old juice path_safety.jai predicates (002 decision 7 allows
+// near-direct ports for generic low-level code). path_is_portable_filename
+// and path_is_portable_relative_jai gate target names and entry paths;
+// path_exists_as_* give the target layer real-directory/regular-file
+// checks; path_is_symlink backs delete_directory_full's empty check.
+// ---------------------------------------------------------------------------
+
+path_is_symlink :: (path: string) -> bool {
+    entry := inspect_path_entry(path);
+    return entry.is_symlink || entry.is_junction;
+}
+
+path_exists_as_directory :: (path: string) -> bool {
+    entry := inspect_path_entry(path);
+    return entry.exists && entry.is_directory && !entry.is_symlink && !entry.is_junction;
+}
+
+path_exists_as_regular_file :: (path: string) -> bool {
+    entry := inspect_path_entry(path);
+    return entry.exists && !entry.is_directory && !entry.is_symlink && !entry.is_junction;
 }
 
 path_is_portable_filename :: (name: string) -> bool {
@@ -172,25 +199,4 @@ path_is_portable_relative_jai :: (path: string) -> bool {
     if path_has_escape_component(path) return false;
     if !ends_with_nocase(path, ".jai") return false;
     return true;
-}
-
-path_is_within :: (root: string, candidate: string) -> bool {
-    root_abs, root_ok := get_absolute_path(root);
-    if !root_ok return false;
-    candidate_abs, candidate_ok := get_absolute_path(candidate);
-    if !candidate_ok candidate_abs = lexical_absolute_path(candidate);
-    root_norm := path_slashes(root_abs);
-    candidate_norm := path_slashes(candidate_abs);
-    if root_norm == "" || candidate_norm == "" return false;
-    if paths_equal(root_norm, candidate_norm) return true;
-    if !ends_with(root_norm, "/") root_norm = tprint("%1/", root_norm);
-    if candidate_norm.count <= root_norm.count return false;
-    prefix := slice(candidate_norm, 0, root_norm.count);
-    return paths_equal(prefix, root_norm);
-}
-
-normalize_existing_path :: (path: string) -> string, bool {
-    absolute, ok := get_absolute_path(path);
-    if !ok return "", false;
-    return path_slashes(absolute), true;
 }

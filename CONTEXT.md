@@ -1,167 +1,131 @@
-# Juice CLI Context
+# juice 重构版（otter）
 
-Juice 是一个面向 Jai  的命令行构建工具；本上下文统一描述其命令、workspace 准备、命令执行语言与测试语言。
+juice 重构版的领域词汇表：包声明、插件、转译与测试的共享语言。每个会话开工前先读。
 
-## Command language
+## 包与工作区
 
-**Command**:
-用户通过 Juice 请求的一项可命名操作，例如 `build`、`run` 或 `clean`。一个 command 具有自己的参数语义、前置条件和成功/失败结果。
+**Package declaration（包声明）**：
+`package.jai` 里 `PACKAGE :: Package.{...}` 的声明，描述包的身份、目标、依赖、工作区成员与插件。模块名 `"Juice"` 是 load-bearing 的。
+_Avoid_: manifest（指求值器的 KEY=VALUE 协议）、config
 
-**Prerequisite command（前置 command）**:
-在目标 command 之前必须成功完成的另一个 command。前置关系表达命令之间的执行依赖，而不是把两个 command 合并为一个 command。当前唯一实例是 `run` 依赖 `build`。Workspace 准备不作为 command、不参与前置关系（见 Workspace preparation）。
+**Package root（包根）**：
+一个包的目录根；workspace 成员与依赖都以包根为边界。
 
-**Build**:
-根据当前 workspace 的 package 与 target 定义，产生可执行输出的 command。Build 从入口闭包探测 test block：闭包含之则以剥离视图编译，不含则原样直编。Package 声明 jaix 标记（见 jaix 标记）时，Build 前置执行前置转译（pre-step）——零 effective target 早退先于前置：标记在但零 target（如 LIB 包）→ 不跑前置、照常成功「无构建目标」（前置随编译面存在；Test 无此门——测试程序编译为全包面、无 target 门，见 Test 词条）——编译入口改为镜像目录内的入口视图（不再探测/剥离——扫描已排除 test block 文件，#load 链在镜像内自然解析）；标记缺席 = 既有语义零变化。依赖（含 workspace member）源码经 import shim 被编译时，依赖剥离前端（票 0049）以同一全有全无语义处理其闭包：含 test block 的依赖闭包整闭包 STRIP 视图落 `target/transpile/deps/<依赖名>/...`，shim 改写指向入口视图；test-free 依赖零转译。Testing 断言模块源码含 test block 时不可被 jai 直接编译，Build 以该模块的 STRIP 视图替代 `#import "Testing"` 解析，视图落 `target/testing-module/`（与 Test 的 EXPAND 编译视图同路径、与 Bootstrap build 的 STRIP 视图同语义，三路径的特例，各自运行前重写；STRIP 侧自票 0051 起驻 Strip front 共享模块，bootstrap 与 Build command 共用一份；模块 test-free 或不存在时无此行为）。Build 构建 root package 的全部 effective target，但不会在每次构建前自动清空 target directory。没有 effective target 时，Build 无需准备 dependencies，也不创建 target directory 或 artifact，但仍成功完成并明确说明没有可构建目标。对 LIB package，Build 仅验证导入入口，不调用编译器。
+**Workspace member（工作区成员）**：
+根包声明在 `workspace.members` 里的另一个包；成员测试以自身为根，不从根包聚合。
 
-**Run**:
-选择一个 target，先通过 `build` 构建 root package 的全部 effective target，再启动所选 target 的 artifact。只有一个 effective target 时默认选择它；有多个时优先选择与 package 同名的 target，否则必须以大小写完全一致的名称明确指定 target。
+**Dependency（依赖）**：
+包编译时导入的包；只影响导入解析，不激活插件。
+_Avoid_: dev dependency（本模型没有独立的 devDependencies；插件声明承担工具面）
 
-**Clean**:
-递归删除 root package 与 workspace member 的 target directory 整目录（含依赖 shim 与转译产物）。Clean 通过 workspace discovery 确定 member，但不解析、获取或更新 dependencies。所有清理路径先完成验证；单个删除失败不阻止其他已验证路径的清理，但会使 Clean 整体失败。
+**Plugin declaration（插件声明）**：
+`Package.plugins` 的一项：`id` + `version` + `options`。声明即让插件可用、激活、配置，并按声明序参与管线、钩子与 lint。成员插件的 id 是成员包名；内置插件用保留 id。
+_Avoid_: plugin config file、transpile declaration、devDependency
 
-**Test**:
-执行当前 package 单元测试的 command。Test 经一次幂等的 workspace 准备调用消费 prepared workspace，不依赖 build；不消费 artifact plan——LIB package 没有 effective target 时依然可测，且以 force_dependencies 照常准备 dependencies（票 0049 缺陷修正：测试程序经 import shim 引用依赖需要；Build 的「0 plans 不准备」语义不变）。Package 声明 jaix 标记时，Test 前置执行前置转译（先于既有 test block 转译）：发现不变（原文）；镜像文件（test-free）abs_path 改指镜像视图、EXPAND 于镜像视图（二级视图——镜像内 in-package #load 被剥离，避免重复收录）；test block 文件保持原文路径（EXPAND 照常）；marker 的 config 文件从测试程序剔除（jaix 编译期输入）。Test_Entry/报告名/path_mapping 语义不变；标记缺席 = 零变化。Test 接受至多一个 pattern 参数，对最终报告名做大小写敏感子串匹配。没有发现任何 test block 或 pattern 零命中时，Test 成功完成并明确说明，不进入测试构建；测试失败使 command 失败，与编译失败共用非零退出码。
+**Plugin id**：
+插件的身份。内置插件用保留 id（`load`、`test-block`）；成员插件用成员包名。
+_Avoid_: rule name（lint 规则名是插件内部的另一层身份）
 
-**Bootstrap build（自举构建）**:
-仓库根 `build.jai` metaprogram 直接构建 juice 自身的路径，独立于 Build command。src 原文件内联 test block 后，Bootstrap build 的构建输入是剥离视图——与 Build command 共用同一转译器与视图契约（[ADR 0006](docs/adr/0006-bootstrap-build-strips-inline-test-blocks.md)）；行号与诊断经视图映射对应原文件。闭包探测与视图计算机器自票 0050 起驻共享剥离前端（Strip front，见下）——bootstrap 以 `#load` 复用、PLAIN 布局：含入口的全闭包视图恒写 `target/transpile/bootstrap/`。票 0052 起 bootstrap 与 Build command 同形状：经共享 Metaprogram generator 生成编译 metaprogram（`target/bootstrap-meta.jai`）后 spawn 子进程 jai，入口视图经 `add_build_file` 编译、诊断精确文件+行号（`add_build_string` 的 +5 偏移已退役）；release 验证路径经生成器的 very_optimized 字段保留。Test support 文件不在其构建输入内。
-_Avoid_: 发布视图树（预生成剥离源码树作为构建输入的方案，已被 ADR 0006 排除）。
+## Target 目录
 
-## Workspace language
+**Target layout（目标布局）**：
+包根下 `target/` 目录的布局契约：区根（`build/`、`modules/`、`transpile/`（含 `testing-module/`）、`plugins/`、`packages/`、`tests/`、`recovery/`、`evidence/`）与落点由 `Target_Layout` 模块（`src/target_layout.jai`）单一拥有；artifact 根、发布 modules 树与 transpile 视图树是 spec 钉死的字面量。`build/` 同时收生成的构建驱动与 build/test 程序的编译中间件（`.obj/.lib/.exp/.pdb/.added_strings`）；测试 scratch 在 `tests/`，崩溃恢复备份在 `recovery/`，证据日志在 `evidence/`；clean 整棵删除。
+_Avoid_: build directory、输出目录（不区分区根与落点）
 
-**Workspace preparation**:
-为需要 package、target 和依赖信息的 command 准备当前 workspace 状态的过程。它包含读取 root package、发现 workspace member、解析 effective target，以及按 command 需要解析或获取 dependencies。对 command 表现为 workspace 模块的一次幂等调用；不作为 command 注册，不可被用户直接调用。
+**Target scratch（测试临时区）**：
+测试在 `target/tests/` 下的临时根，经 `target_scratch_dir` 派生；每次 test 命令启动先整区 prune，运行期测试自行重建。
+_Avoid_: test cache、临时目录
 
-**Workspace discovery**:
-通过执行 root package manifest 来发现并验证位于 package root 内的 workspace member 的过程。Workspace discovery 产生独立的 discovery 结果，不解析、获取或更新 dependencies；因 manifest 本身是可执行的 Jai 声明，所以它不承诺没有 manifest 自身产生的副作用。Discovery 保留已评估的 member declaration；dependency preparation 消费同一快照，不重新执行 workspace manifest。没有 package declaration 时，当前目录仍可产生仅包含自身的最小 discovery，供 Clean 使用；已有但无效的 package declaration 不产生可清理的 workspace。
+**Test package root（测试包根常量）**：
+生成的 test driver 顶层声明的 `JUICE_TEST_PACKAGE_ROOT`：测试程序的 intermediate_path 是 `target/build/`，包根不能从 Build_Options 剥离，测试助手直接消费该常量。
+_Avoid_: juice_root（旧 juice 从 intermediate_path 推导的形态）
 
-**Workspace member**:
-由 root package 声明、位于 root package 目录之内的另一个 package。每个 member 路径必须唯一、可移植并解析到包含 package manifest 的目录；不同文本路径不得指向同一个 member。Workspace 的成员集合只由 root package 的声明决定：member 自身 manifest 中再声明的 members 不产生 workspace member，嵌套声明被静默忽略（测试钉住的事实，[票 0043](issues/0043-discovery-validation-matrix.md)）。
+**Target recovery（恢复区）**：
+`target/recovery/` 下的崩溃恢复备份：missing-source 测试在删除源文件前先落盘备份。test 命令的 scratch prune 刻意排除该区（崩溃后备份是唯一副本）；只有 clean 删除整个 target/。
+_Avoid_: backup 目录、missing-source-backups（旧名）
 
-**Prepared workspace（已准备 workspace）**:
-由成功的 workspace discovery 继续完成 effective target 解析后交给 command 的完整状态，聚合 package declaration、已验证的 workspace member 和 root package 的 artifact plan。它要求存在有效 package declaration；消费它的 command 不再重新解释 target 缺省值或 workspace member。artifact plan 为空或未被消费不妨碍其成立——Test 消费 prepared workspace 但不消费 artifact plan，LIB package 无 effective target 时仍可测。
+**Target evidence（证据区）**：
+`target/evidence/` 下的会话证据/日志，由开发工作流人工写入，工具不写；与所有 target 产物一样是易失的（clean 删除）。需要持久保留的验收证据仍入 `docs/implementation/`。
+_Avoid_: audit 目录（旧的一次性文件散落形态）
 
-**Package root**:
-包含当前 package manifest、作为 package-relative path 基准的目录。Juice 将启动时的工作目录视为 package root，不向父目录搜索 manifest。
+## 插件
 
-**Package declaration**:
-Package manifest 对 package 的显式描述。它保留作者声明的 target 信息，而不把约定产生的默认 target 混入声明本身。每个 package 都具有非空、可作为 portable filename 的稳定名称以及明确版本；名称不从目录名推导。无效或不完整的 package declaration 不产生 prepared workspace。
+**Plugin（插件）**：
+定义 `get_juice_plugin` 并以 `@juice_plugin` 尾注标记的模块；可贡献 transpile、lint、hooks 与 options schema 面。
+_Avoid_: extension、addon
 
-**jaix 标记（jaix marker）**:
-Package 声明的可选字段 `jaix`（config 路径 + 可选 exe），启用前置转译的声明面：config 空 = 未启用；exe 空 = PATH 查 "jaix"；exe 非空但 config 空 = 声明错误（不产生 prepared workspace）。config 为包相对路径（包可移植）；标记作用面 = root package（成员/依赖视图留未来）。标记缺席 = 零行为变化（可选前置 vs ADR 0004 义务前置的边界——见 [ADR 0007](docs/adr/0007-jaix-optional-pre-step.md)）。
+**Plugin face（插件面）**：
+插件对框架的一项贡献面：transpile 管线、lint 观察、lifecycle 钩子、options schema。
+_Avoid_: plugin type
 
-**Package type（包类型）**:
-Package 的角色：LIB 表示该 package 是供其他 package 通过 `#import` 引用的库，不声明 executable target、不产生 artifact，但可被 Test 测试；BIN 表示按 target declaration 与默认入口产生 executable。类型未指定时由约定推导：存在显式 target 或默认入口 `src/main.jai` 推导为 BIN，存在导入入口推导为 LIB，其余视为 BIN。
-_Avoid_: module 类型、library target。
+**Pre-step plugin（前置插件）**：
+贡献 PRESTEP `before` 钩子的插件，在 Transpile 之前变换编译输入（例如 jaix）。
+_Avoid_: 单独使用 "pre-step" 指代插件、jaix front
 
-**Import entry（导入入口）**:
-LIB package 提供给消费者的模块入口，约定为 package root 的 `module.jai` 或 `src/module.jai`（前者优先）；消费者以 package 名执行 `#import`。Import entry 是文件系统事实与约定的结合，不在 manifest 中声明。
-_Avoid_: root_file、入口文件（易与 target 的入口文件混淆）。
+**Source substitution table（源替换表）**：
+前置插件的输出：原包相对路径 → 替换绝对路径，外加剔除集；命令据此选择编译输入。append-only、仅 root package、不新增文件。
+_Avoid_: mirror table、view map
 
-**Target declaration**:
-Package declaration 中对一个可构建、可运行目标的显式描述。Target declaration 必须明确 target 名称与入口文件；target 名称在 package 内唯一，是不包含路径含义且在支持平台上都可作为文件名的标识；名称比较在命令选择时大小写敏感，在 artifact 冲突检查时不区分大小写；入口文件使用可移植的 package-relative path，必须解析为 package root 内存在的普通 `.jai` 文件；一旦存在显式 target，package 就不再发现 implicit target。显式 target 只属于 BIN package；LIB package 声明显式 target 是无效声明。
+**Plugin prepare（插件准备）**：
+命令级步骤：解析插件声明、扫描与链接成员插件、写注册文件、决定是否需要 plugin host。
+_Avoid_: plugin load
 
-**Implicit target（隐式 target）**:
-BIN package 没有显式 target、但 package 中存在默认入口文件 `src/main.jai` 时由约定产生的 target。Implicit target 使用 package 名称作为 target 名称；默认入口若是指向 package 外部的符号链接，则它是无效声明而不是“没有 target”。是否产生 implicit target 取决于默认入口文件是否存在，而不取决于其他约定。
+**Plugin host（插件宿主）**：
+PRESTEP-only 生成的子进程：加载注册文件、应用 options、运行 PRESTEP 钩子，经 host 记录返回阶段效果（替换、剔除、诊断）；零声明 hooks 插件 = 不 spawn。
+_Avoid_: plugin runtime、third-party host（后者指通用 DLL/进程外宿主）
 
-**Effective target（有效 target）**:
-将 root package 的 target declaration 或 implicit target 与 package 默认约定合并后得到的完整 target 含义。其入口文件是 package root 内不能发生路径逃逸的相对路径，并且必须解析为存在的普通 `.jai` 文件。Build 和 Run 共同依据 effective target，而不各自解释缺省值。LIB package 没有 effective target。
+**Plugin registration file（插件注册文件）**：
+命令级插件准备生成的会话产物 `target/plugins/registration.jai`：按声明序 import 插件模块并装配钩子；测试 metaprogram 与 plugin host 消费同一份，不二次扫描。不是发布模块面。
+_Avoid_: plugin manifest、plugins.jai
 
-**Artifact plan（产物计划）**:
-描述 effective target 将产生的 artifact，包含 target 名称、结果目录以及带平台扩展名的规范化绝对 artifact 路径。Build 与 Run 共同消费同一份 artifact plan。
+**Plugin host record（host 记录）**：
+plugin host 子进程写出的阶段效果文件 `target/plugins/host-records.txt`：`SUBSTITUTE` / `DROP` / `DIAG` / `OK` 行，值用 `%XX` 编码；父进程严格解析，缺失或坏记录 = 命令失败。
+_Avoid_: host log
 
-**Artifact（产物）**:
-Effective target 构建后得到的可执行输出，具有确定的名称与位置；Build 产生 artifact，Run 启动同一个 artifact。Artifact 的默认名称等于 effective target 名称。测试生成物不是 artifact。
+**Member hook face（成员 hook 面）**：
+成员插件经 plugin host 执行的 lifecycle hook 集合；v1 只支持 PRESTEP/before。其它 stage/position 的声明在 prepare 期（host 校验）失败。AT 仍是 in-process 测试 seam，不是成员插件的承诺。
+_Avoid_: hook face（不区分 in-process 与 member）
 
-**Target directory（目标目录）**:
-Package 的全部 Juice 管理生成物所在的固定约定目录 `target/`：artifact 与编译中间物（obj、构建 metaprogram 等）落其根，依赖导入 shim 落 `target/packages/`，转译产物落 `target/transpile/`，jaix 镜像视图落 `target/jaix/`（前置转译启用时），Testing 模块编译视图落 `target/testing-module/`（票 0033 特例：Test 写 EXPAND 视图——驻 test 命令，票 0039；Build 与 Bootstrap build 写 STRIP 视图——驻 Strip front 共享模块，票 0051；各自运行前重写）。同一 package 的不同 artifact 以各自名称共存于其根。Target directory 必须是位于 package root 内的普通目录，不能是符号链接或其他路径重定向；artifact 也不能以符号链接占据计划路径。Clean 递归删除 root package 与 workspace member 的 target directory 整目录。与 Target declaration 同名异义（生成物目录 vs 构建目标声明），接受撞词。
-_Avoid_: result 目录（遗留不再管理）、bin 目录。
+## 编排与 lifecycle
 
-**Transpile（转译）**:
-将含 test block 的源文件转换为合法 Jai 的 source-to-source 步骤，是 Juice 进程内的库。Build 从入口闭包探测：闭包含 test block 才转译（剥离模式），否则原样直编；Test 对发现的全部文件转译（展开模式）。依赖剥离前端（票 0049）把同一剥离语义延至依赖闭包：Build 与 Test 都经 import shim 探测依赖入口闭包，含 test block 时整闭包剥离视图落 `target/transpile/deps/<依赖名>/...` 并改写 shim。Test block 的保证生效范围是 build 下入口经字面量 in-package `#load` 可达的文件与依赖 shim 可达的依赖闭包、test 下全包发现的文件；其余非字面量与 out-of-package `#load` 的目标不转译，其含 test block 由编译错误暴露。转译产物按内容寻址缓存。
-_Avoid_: 通用语法扩展框架（转译只为 test block 服务）。
+**Command lifecycle session（命令 lifecycle 会话）**：
+一次 build/test 命令内，把 plugin prepare、插件声明解析、typed stage state 构造、PRESTEP host 与 seam 派发绑在一起的编排概念；命令只提供自己的前置动作与 stage body。`prepare → resolve → dispatch` 的协议由它拥有。
+_Avoid_: lifecycle manager、orchestrator、pipeline（后者是 Transpile 管线）
 
-**前置转译（pre-step）**:
-Package 声明 jaix 标记后，build 与 test 在编译前自动执行的 jaix 转译编排（[ADR 0007](docs/adr/0007-jaix-optional-pre-step.md)——可选、子进程、通用扩展，对照 ADR 0004 的义务转译）：整包扫描（骨架驻共享扫描模块 Scan walk——见该词条；test 发现同族排除规则 + jaix 特有排除——marker 的 config 文件与含 juice test block 的文件）→ 逐文件 spawn `jaix transpile`（全绝对路径、stderr 透传）→ 镜像落 `target/jaix/`。转译失败 = 前置失败 = command 失败（诊断透传、不编译、不产 artifact）；缺 jaix exe = 清晰错误。标记缺席 = 无前置（零行为变化）。jaix 是独立通用转译器（try/catch 等扩展语法），与 juice 自身 Transpile（test block 专用义务转译）并存不替代。
-_Avoid_: 把 pre-step 与 juice 自身 Transpile 混称（一个是外部工具的可选接线，一个是内置义务前置）。
+**Stage state（阶段状态）**：
+某个 stage seam 执行时由前置动作与主体读写的明确类型的状态，包括编译输入、视图与产物信息；状态随所属 seam 区分，不用通用上下文承载所有阶段。
+_Avoid_: stage context、phase data、context bag
 
-**镜像目录（jaix mirror）**:
-前置转译的产物目录 `target/jaix/`（ADR 0003 统一 target 目录惯例）：jaix 转译视图以包相对结构镜像其内，sidecar `<file>.map` 随落（v1 不消费）。未触碰文件视图 = 原文逐字节（往返恒等）；in-package #load 链在镜像内自然解析（零路径改写）。编译输入面：build 入口 = 镜像内入口视图；test 的镜像文件（test-free）EXPAND 于镜像视图（二级视图）。随 target directory 清理、每构建全覆写（v1 无缓存）。
+**Stage seam（阶段 seam）**：
+可在不修改命令编排处改变阶段行为的接入点。活跃 seam 只有 PRESTEP 与 COMPILE；执行顺序为 before → body → after，`at` 不再是第三种挂载位置，而是 body 的替换。TRANSPILE 是 COMPILE 的首个前置动作，不是独立 seam。
+_Avoid_: mount matrix、stage/position hook、lifecycle context
 
-**Scan walk（扫描走查）**:
-共享的整包扫描骨架（src/scan_walk.jai，spec 054 决定 7 / 票 0057——0050 收敛方向）：walk 编排（visit_files 递归、目录/文件排除回调——proc 参数形态，pre-step seam 同款先例）、确定性 DFS 枚举（逐目录文件先、字典序）、包相对路径助手、扫描失败错误通道、共享记录 `Scan_File {rel_path, abs_path}`。两个消费者收敛为薄包装——test 发现（`collect_test_files`）与 jaix 前置扫描（`collect_jaix_files`）各自只持有排除集谓词与错误文案（"test sources" vs "jaix sources"）；jaix driver 垃圾判定谓词（`is_jaix_driver_litter`——文件头 1024 字节窗口内列 0 行 `// jaix transpile driver` 前缀匹配；内容标记而非名字标记、无条件适用）在模块内实现一次、两消费者的文件排除谓词引用之。经 main.jai 装载（非 bootstrap #load 目标——不在 build.jai metaprogram 的 #load 树上；#load 目标性而非闭包性）→ 测试可内联。
-_Avoid_: 每条新排除规则写两份（票 0057 已消除的复制）。
+## 转译与测试
 
-**Strip front（剥离前端）**:
-共享的闭包探测与视图计算机器（src/transpile_front.jai，票 0050 自 dependency.jai 与 commands/build.jai 收敛）：闭包探测、视图计算、生产 transpile 步骤与 Testing 模块 STRIP 特例（票 0051）。必须 test-free——bootstrap 以 `#load` 复用、test block 随 metaprogram 编译期文本包含会非法；其测试驻 tests/transpile_front_tests.jai（测试组织规则：test-free 模块的单元测试与集成测试同驻 tests/，票 0053）。视图落点与缓存语义按 Strip_View_Layout 参数化——CONTENT_ADDRESSED（runtime：内容寻址 + 缓存命中跳过写入）与 PLAIN（bootstrap：`<base>/<rel>` 恒写、含入口的全闭包落盘，票 0052）。三个消费方：bootstrap build.jai（#load）、Build command（build_plan_entry）、依赖剥离前端（票 0049）。
-_Avoid_: 探测与视图计算在 bootstrap 与 runtime 各持一份（票 0050 已消除的复制）。
+**Transpile（转译）**：
+juice 进程内的锚点级文本变换，只服务 test block 与 `#load`。
+_Avoid_: jaix、pre-step（两者是外部工具或前置层，不是 Transpile）
 
-**View（视图）**:
-一个源文件经 Transpile 生成、与其一一对应的合法 Jai 产物，镜像 package 相对目录结构。剥离视图删除 test block 并将 in-package `#load` 重写为指向目标视图；测试视图将 test block 转换为带注记的普通过程并剥离 in-package `#load`，符号经程序级可见性共享。视图与原文件行号一一对应，产物中的行列坐标可直接对照原文件；原文件路径的还原由测试驱动携带的映射承担。唯一例外是 Testing 模块编译视图（票 0033 特例）：EXPAND 视图尾部追加自测支撑段，行号不保真，其失败坐标经 path_mapping 映射回 `modules/Testing.jai` 原文坐标。
-_Avoid_: 把视图与一般「产物」混称（视图专指转译产物）。
+**Transpile pipeline（转译管线）**：
+按声明序派发的转译插件链；内置插件是 `load` 与 `test-block`。
+_Avoid_: 把 pre-step 混入管线
 
-**Local dependency directory（本地依赖目录）**:
-Root workspace 中由 Juice 管理的 `target/packages/` 子目录。Juice 为每个依赖生成一个以依赖名命名的导入 shim，指向被依赖方的导入入口；消费者以 package 名 `#import` 引用。被依赖方不要求有 package manifest——任何符合导入入口约定的 Jai 模块都可作为依赖。依赖闭包含 test block 时，依赖剥离前端（票 0049）把 shim 的 `#load` 改写到入口的剥离视图。本地依赖目录随 target directory 一并清理。
+**View（视图）**：
+Transpile 生成的、与源文件一一对应的合法 Jai 文本，行号保真。
+_Avoid_: artifact
 
-**Unspecified value（未指定值）**:
-Package declaration 中省略的可选值或显式提供的空值；两者具有相同含义。若某值没有可用约定，未指定该值就是无效声明。
+**Mirror（镜像）**：
+jaix CLI 的逐文件输出树，作为前置插件的编译输入；不是 view。
+_Avoid_: view
 
-## Test language
+**Test block（测试块）**：
+源文件顶层的 `test "name" { ... }` 或匿名 `test { ... }` 声明；不是合法 Jai，必须经 Transpile 才能编译。
+_Avoid_: test case
 
-**Test block**:
-源文件顶层的 Zig 风格单元测试声明：`test "name" { ... }` 或匿名 `test { ... }`。Test block 不是合法 Jai，必须经 Transpile 转换为普通过程后才能编译。块体是无参数、无返回值的过程体：失败不经返回值通道，由 Testing 全局登记；裸 `return` 提前结束当前测试。可见性等于所在文件顶层的可见性；仅文件顶层允许，函数体与类型声明体内的 test 由转译期拒绝。命名测试以名字为报告名，允许同名共存，撞名时报告附 package 相对路径消歧；匿名测试的报告名为 package 相对路径:行号。
-_Avoid_: 测试函数、容器式测试。
+**Test discovery（测试发现）**：
+从编译器注记流中枚举测试过程的机制；test block 与手写 `@test` 走同一发现源。
+_Avoid_: test scan（扫描是文件收集，不是发现）
 
-**Test discovery**:
-为 Test 确定测试源的过程：从 package root 全量递归扫描小写扩展名的 `.jai` 文件，不跟随符号链接；排除点开头条目、package root 的 target directory、tests/data/（fixture 目录）与 modules/（模块目录）以及各 package 的 manifest + jaix driver 垃圾（内容标记判定——见 Scan walk 词条）。Test discovery 消费 workspace discovery 快照（member 边界）但不并入 workspace discovery。root 扫描不进 member 子树，member 以自身为 root 测试；依赖中的 test block 不发现、不执行。遍历顺序确定（字典序），测试枚举、调用与报告顺序由它派生。走查骨架驻共享扫描模块（Scan walk——见该词条）。
-
-**Testing**:
-Juice 的一级断言模块，测试程序中的用户代码以 `#import "Testing"` 引用。提供最小断言集 expect、expect_eq、fail：断言失败即登记并中止当前测试，套件继续；失败即时逐条输出，结束时汇总计数，失败数非零使测试构建失败。失败报告以 `路径:行,列` 语法指向原文件坐标。Testing 仅依赖 Basic，对执行模型中立。
-
-**Test support（测试支撑代码）**:
-`tests/test_support.jai` 约定位置（2026-10 用户修订：纯测试支撑代码不驻 src/，由 `src/test_support.jai` 移入），收录供测试程序共享的声明：跨 test block 复用的 helper、recording fake、记录全局与测试常量。Test support 不被入口 `#load` 引用，不进 Build 闭包、不参与发布构建；Test discovery 全包扫描将其收录进测试程序，src 内联 test block 经程序级可见性引用其声明。测试共享声明只允许位于 Test support 文件。
-_Avoid_: 测试专用声明散落其他源文件顶层（会随剥离视图进入发布产物）。
-
-**Test driver**:
-Juice 为执行测试生成的测试程序核心：一个无入口点的生成文件，收录全部视图，以编译期执行方式运行经 pattern 过滤的测试清单，存在失败时使编译失败。测试程序的全部生成物（视图、驱动、metaprogram）位于 target directory 的转译子树，不产生 artifact——唯一例外是 Testing 模块编译视图（票 0033 特例），落 `target/testing-module/`：置于转译树内会混入其直接子项，破坏 cache-tree 测试对「转译树直接子项恰为 hash 目录与 driver.jai/first.jai」的断言。测试在编译期环境执行，崩溃即测试构建失败、无汇总；Testing 模块经生成的 metaprogram 注入测试程序。
-_Avoid_: test runner（无运行期 runner 进程）、测试可执行文件。
-
-## Command organization
-
-**Command registry**:
-Juice 当前可执行 command 的目录。它让 command 的名称、说明、参数责任和前置关系可被统一发现，但不改变各 command 自己拥有其行为的事实；目录中的每个 command 都可被用户直接调用。
-
-**Dispatcher**:
-根据用户输入在 command registry 中选择 command，按其前置关系执行所需 command，并把最终成功/失败结果交给 CLI 进程。Dispatcher 在执行任何 prerequisite 之前用目标 command 自身的参数规则验证用户参数；参数无效时任何 command 都不执行。
-
-**Metaprogram generator（metaprogram 生成器）**:
-Juice 进程内生成编译 metaprogram 源文本的模块（src/metaprogram.jai）：Build、Test 与 bootstrap（票 0052）共用同一生成器，产出驱动 jai 编译器的一次性 workspace、拦截与消息循环骨架；各消费方各自组装 options（workspace 名、输出形状、import 目录、入口文件）后调用，Testing 模块编译视图的 "" 哨兵约定在生成器内单点成立。bootstrap 的 options 组装自票 0055 起亦驻生成器（bootstrap_compiler_metaprogram_options 纯函数——output_path/intermediate_path 以 root 派生绝对路径，根治子进程 jai #run 期工作目录切换导致的 target/target/ 落点缺陷）。bootstrap 生成后 spawn 子进程 jai 编译（与 Build command 同形状）；release 验证路径经 very_optimized 字段发射 set_optimization（默认零发射，既有消费方输出逐字节不变）。
-_Avoid_: 各 command 自持 metaprogram 骨架（会复制消息循环与哨兵约定）。
-
-## Relationships
-
-- Dispatcher 从 command registry 选择一个 command。
-- Command 可以声明零个或多个 prerequisite command；prerequisite command 成功后，目标 command 才能执行。
-- `run` 依赖 `build`（唯一 command 前置关系）；`build` 依赖完整的 workspace preparation；workspace preparation 依赖 workspace discovery。
-- `clean` 依赖 workspace discovery，但不解析、获取或更新 dependencies；它递归删除 root package 与已验证 workspace member 的 target directory 整目录。
-- Workspace discovery 与 prepared workspace 是递进但不同的结果：Clean 只消费前者，Build、Run 与 Test 消费后者。
-- Package declaration 保留作者声明；effective target 和 artifact plan 表达约定补全后的构建含义。
-- 当前 Build 和 Run 只解析 root package 的 effective target；workspace member 仍是 workspace discovery 的一部分。
-- Package type 决定 package 的角色：LIB package 是导入源，验证导入入口后成功完成且不产生 artifact；BIN package 按 target declaration 与默认入口产生 executable。未指定的类型按约定推导。
-- Workspace member 要被引用，必须被声明为依赖；dependency preparation 为其在本地依赖目录中注册导入 shim 供 `#import` 解析。
-- 依赖的被依赖方不要求是 Juice package；符合导入入口约定的普通 Jai 模块同样可被声明为依赖并引用。
-- Build 按全部 artifact plan 产生 artifact；Run 在同一组 artifact plan 中选择并启动 artifact。
-- Effective target 先于 dependency preparation 得到验证；没有 effective target 时，Build 不触发 dependency preparation。
-- Command registry 描述可发现的 command；Dispatcher 负责执行顺序，但不拥有 build、run、clean、test 的业务行为。
-- `test` 与 `build` 经一次幂等的 workspace 准备调用消费 prepared workspace；`test` 不依赖 `build`，不消费 artifact plan，LIB package 无 effective target 时仍可测。
-- Test block 必须经 Transpile 转换为视图后才能编译；build 探测后剥离、test 展开，run 经 build 继承。
-- Package 声明 jaix 标记 → Build 与 Test 前置执行 pre-step、编译镜像视图；标记缺席 = 零行为变化（可选前置——ADR 0007）。
-- 依赖剥离前端为 Build 与 Test 共用（票 0049）：依赖闭包含 test block 时整闭包剥离视图落 `target/transpile/deps/<依赖名>/...`，shim 改写指向入口视图；依赖测试不发现、不执行。
-- 前置转译与 juice 自身 Transpile 是两层：混合包中 test block 文件走原文 juice 路径（EXPAND/STRIP），test-free 文件走镜像视图；juice 自身 test block 机制照常（标记配置不用 jaix test block 插件——双重处理排除）。
-- Bootstrap build 与 Build command 共用同一转译器与视图契约；Test support 被 Test discovery 扫描收录、不进 Build 闭包与 Bootstrap build 输入。
-- Test discovery 消费 workspace discovery 快照但不并入；member 以自身为 root 测试，依赖不发现不执行。
-- 测试程序全部生成物位于 target directory 的转译子树（Testing 模块编译视图除外，落 `target/testing-module/`），不是 artifact。
-- Testing 经生成的 metaprogram 注入测试程序，收口断言与失败汇总。
-- 视图与原文件行号一一对应；失败报告与转译期诊断引用原文件坐标。
-- Clean 递归删除 root 与 member 的 target directory 整目录。
-- Build、Test 与 Bootstrap build（票 0052）共用同一 Metaprogram generator 生成编译 metaprogram；bootstrap 生成后 spawn 子进程 jai、与 Build command 同形状。
-- 闭包探测与视图计算三消费方共用 Strip front（票 0050）：bootstrap 经 #load、Build command 与依赖剥离前端经程序级 #load。
+**Test runner（测试运行器）**：
+生成的测试程序入口 `<root>/target/transpile/test_runner.jai`；由 `src/test_runner.jai` 发射（driver 源以 `add_build_string` 嵌入，不单独落盘），`test` 命令 spawn，`build.jai` 按 `TEST_RUNNER_FILE_NAME`（`src/metaprogram.jai`）识别并跳过自身构建。
+_Avoid_: first.jai（旧名）、driver.jai（旧两文件形态；driver 是嵌入 runner 的 build 字符串，不是入口）

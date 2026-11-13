@@ -1,3 +1,13 @@
+
+COMMAND_REGISTRY :: Command.[
+    BUILD_COMMAND,
+    RUN_COMMAND,
+    CLEAN_COMMAND,
+    TEST_COMMAND,
+    VERSION_COMMAND,
+    HELP_COMMAND,
+];
+
 Command_Handler :: #type (ctx: *Command_Context, arguments: [] string) -> bool;
 Command_Argument_Validator :: #type (arguments: [] string) -> bool;
 
@@ -5,7 +15,10 @@ Command_Context :: struct {
     // The two process-wide paths (the only survivors of the Build_Driver
     // teardown; derived paths like packages_dir are derived by their own
     // owners): the package root (the working directory at startup) and the
-    // juice cache directory (under the XDG cache home).
+    // juice cache directory (under the XDG cache home). The workspace phase
+    // machine (EMPTY -> DISCOVERED -> PREPARED, src/workspace.jai) rides
+    // along for the command handlers; it zero-initializes to EMPTY and is
+    // filled by discovery (ticket 008).
     root_dir:  string;
     cache_dir: string;
     workspace: Workspace_State;

@@ -1,16 +1,33 @@
 #import "Basic";
 #import "File";
+#import "File_Utilities";
 #import "Hash";
 #import "Process";
 #import "String";
-#import "System";
-#import "Juice";
-#import "Testing";
+
+// The manifest protocol and loader: package.jai is an executable Jai source
+// file, interpreted only through the generated evaluator child process
+// (#load the manifest + #run main() printing line records). The stdout of
+// the child is never part of the protocol — the protocol is the data file
+// the child writes. The parent parses that file strictly (eleven record
+// kinds; unknown keys, duplicate single-value records and malformed shapes
+// are errors carrying 1-based line numbers). Plugin declarations are parsed
+// structurally here; semantic validation (unknown ids, member resolution,
+// versions, options) belongs to plugin preparation — the declaration-driven
+// workspace scan and resolve_plugin_configs (ticket 056). A child write
+// failure exits with code 2 and is retried at most twice; any other nonzero
+// exit fails immediately.
+//
+// The Package face is consumed through the namespaced Juice binding
+// (src/juice_module.jai — the load-bearing "Juice" module name constraint):
+// the evaluator children receive the published modules directory on their
+// import path, so the declarations package.jai files are written against
+// are exactly the ones this layer evaluates.
 
 Manifest_Parse_Result :: struct {
-    success:      bool;
-    package:      Package;
-    line_number:  int;
+    success:       bool;
+    package:       Juice.Package;
+    line_number:   int;
     error_message: string;
 }
 
@@ -18,8 +35,14 @@ to_forward_slashes :: (path: string) -> string {
     return path_slashes(path);
 }
 
-// Generate a tiny evaluator program. The evaluator is intentionally the only
-// way package.jai is interpreted; its stdout is never used as the protocol.
+// Generate the evaluator program: the only way package.jai is interpreted.
+// The generated main prints one KEY=VALUE line record per declaration, in
+// the fixed order below. Repeatable records keep declaration order (the
+// plugin loop is ordered on purpose — declaration order = pipeline order);
+// zero declarations print zero records, which the parser reads as the
+// default pipeline. Plugin options cross as PLUGIN_OPTION records; values
+// are %XX-encoded (% | CR LF) so the line-record shape survives arbitrary
+// option strings.
 build_eval_code :: (manifest_path: string, output_path: string) -> string {
     clean_manifest := to_forward_slashes(manifest_path);
     clean_output   := to_forward_slashes(output_path);
@@ -27,16 +50,38 @@ build_eval_code :: (manifest_path: string, output_path: string) -> string {
     builder: String_Builder;
     append(*builder, "#import \"Basic\";\n");
     append(*builder, "#import \"File\";\n");
-    append(*builder, "#import \"Juice\";\n\n");
-    append(*builder, "#import \"Compiler\";\n");
+    append(*builder, "#import \"Juice\";\n");
+    append(*builder, "#import \"Compiler\";\n\n");
 
     append(*builder, "#load \"");
     append(*builder, clean_manifest);
     append(*builder, "\";\n\n");
 
     append(*builder, "#run {\n");
-    append(*builder, "    set_build_options_dc(.{do_output=false});\n");
+    append(*builder, "    set_build_options_dc(.{do_output = false});\n");
     append(*builder, "    main();\n");
+    append(*builder, "}\n\n");
+
+    // The record-value encoder, generated into the child: the parent's
+    // unescape_record_value is the exact inverse. Only the delimiter, the
+    // escape character and line breaks are encoded; the rest passes through.
+    append(*builder, "manifest_eval_hex_digit :: (n: u8) -> u8 {\n");
+    append(*builder, "    return cast(u8) ifx n < 10 then #char \"0\" + n else #char \"a\" + (n - 10);\n");
+    append(*builder, "}\n\n");
+    append(*builder, "manifest_eval_escape :: (value: string) -> string {\n");
+    append(*builder, "    out: [..] u8;\n");
+    append(*builder, "    for i: 0..value.count-1 {\n");
+    append(*builder, "        c := value[i];\n");
+    append(*builder, "        if c == #char \"%\" || c == #char \"|\" || c == #char \"\\n\" || c == #char \"\\r\" {\n");
+    append(*builder, "            array_add(*out, #char \"%\");\n");
+    append(*builder, "            array_add(*out, manifest_eval_hex_digit(cast(u8) ((c >> 4) & 0xf)));\n");
+    append(*builder, "            array_add(*out, manifest_eval_hex_digit(cast(u8) (c & 0xf)));\n");
+    append(*builder, "        } else {\n");
+    append(*builder, "            array_add(*out, c);\n");
+    append(*builder, "        }\n");
+    append(*builder, "    }\n");
+    append(*builder, "    if out.count == 0 return \"\";\n");
+    append(*builder, "    return copy_string(to_string(out.data, out.count));\n");
     append(*builder, "}\n\n");
 
     append(*builder, "main :: () {\n");
@@ -46,8 +91,12 @@ build_eval_code :: (manifest_path: string, output_path: string) -> string {
     append(*builder, "    print_to_builder(*builder, \"TYPE=%\\n\", cast(s64) PACKAGE.type);\n");
     append(*builder, "    print_to_builder(*builder, \"DESCRIPTION=%\\n\", PACKAGE.description);\n");
     append(*builder, "    print_to_builder(*builder, \"BUILD_SCRIPT=%\\n\", PACKAGE.build_script);\n");
-    append(*builder, "    print_to_builder(*builder, \"JAIX_CONFIG=%\\n\", PACKAGE.jaix.config);\n");
-    append(*builder, "    print_to_builder(*builder, \"JAIX_EXE=%\\n\", PACKAGE.jaix.exe);\n\n");
+    append(*builder, "    for decl: PACKAGE.plugins {\n");
+    append(*builder, "        print_to_builder(*builder, \"PLUGIN=%1|%2\\n\", manifest_eval_escape(decl.id), manifest_eval_escape(decl.version));\n");
+    append(*builder, "        for opt: decl.options {\n");
+    append(*builder, "            print_to_builder(*builder, \"PLUGIN_OPTION=%1|%2|%3\\n\", manifest_eval_escape(decl.id), manifest_eval_escape(opt.key), manifest_eval_escape(opt.value));\n");
+    append(*builder, "        }\n");
+    append(*builder, "    }\n\n");
 
     append(*builder, "    for target: PACKAGE.targets {\n");
     append(*builder, "        print_to_builder(*builder, \"TARGET=%1|%2\\n\", target.name, target.main_file);\n");
@@ -65,13 +114,11 @@ build_eval_code :: (manifest_path: string, output_path: string) -> string {
     append(*builder, "        print_to_builder(*builder, \"DEP=%1|%2|%3|%4\\n\", dep.name, dep.version, dep.source, dep.package);\n");
     append(*builder, "    }\n\n");
 
-    // A write failure must fail the child with a nonzero exit code: the old
-    // implementation silently ignored the write result, the child still
-    // exited 0, and the parent treated stale/missing data as success —
-    // occasionally losing a workspace member or reporting "Failed to fetch
-    // dependency". Exit code 2 is the dedicated "manifest data write failed"
-    // signal the parent retries on; other failures (manifest compile errors
-    // etc.) stay exit code 1 and never trigger a retry.
+    // A write failure must fail the child with a nonzero exit code: the
+    // parent retries only exit code 2 (the dedicated "manifest data write
+    // failed" signal) — silently ignoring the write result would let the
+    // parent treat stale or missing data as success. Other failures
+    // (manifest compile errors etc.) stay exit code 1 and never retry.
     append(*builder, "    if !write_entire_file(\"");
     append(*builder, clean_output);
     append(*builder, "\", builder_to_string(*builder)) {\n");
@@ -85,6 +132,10 @@ build_eval_code :: (manifest_path: string, output_path: string) -> string {
     return builder_to_string(*builder);
 }
 
+// Strict protocol parsing: every error carries the 1-based line number of
+// the offending record. The parser is pure (no filesystem, no child), so
+// the whole protocol matrix is testable in-process; load_package_manifest
+// runs it after the child finishes.
 parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
     result: Manifest_Parse_Result;
 
@@ -93,13 +144,12 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
     seen_type := false;
     seen_description := false;
     seen_build_script := false;
-    seen_jaix_config := false;
-    seen_jaix_exe := false;
 
-    targets: [..] Target;
+    targets: [..] Juice.Target;
     members: [..] string;
     excluded: [..] string;
-    deps: [..] Dependency;
+    deps: [..] Juice.Dependency;
+    plugins: [..] Juice.Plugin_Declaration;
 
     lines := split(content, "\n");
     for line, line_index: lines {
@@ -141,7 +191,7 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
                     if !enum_ok || remainder.count != 0 || (enum_value != 0 && enum_value != 1 && enum_value != 2) {
                         return manifest_parse_failure(line_index + 1, "Invalid package type enum.");
                     }
-                    result.package.type = cast(Package_Type) enum_value;
+                    result.package.type = cast(Juice.Package_Type) enum_value;
                 }
 
             case "DESCRIPTION";
@@ -154,20 +204,10 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
                 seen_build_script = true;
                 result.package.build_script = copy_string(value);
 
-            case "JAIX_CONFIG";
-                if seen_jaix_config return manifest_parse_failure(line_index + 1, "Duplicate JAIX_CONFIG record.");
-                seen_jaix_config = true;
-                result.package.jaix.config = copy_string(value);
-
-            case "JAIX_EXE";
-                if seen_jaix_exe return manifest_parse_failure(line_index + 1, "Duplicate JAIX_EXE record.");
-                seen_jaix_exe = true;
-                result.package.jaix.exe = copy_string(value);
-
             case "TARGET";
                 parts := split(value, "|");
                 if parts.count != 2 return manifest_parse_failure(line_index + 1, "TARGET record must contain name|main_file.");
-                target: Target;
+                target: Juice.Target;
                 target.name = copy_string(parts[0]);
                 target.main_file = copy_string(parts[1]);
                 array_add(*targets, target);
@@ -183,12 +223,56 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
             case "DEP";
                 parts := split(value, "|");
                 if parts.count != 4 return manifest_parse_failure(line_index + 1, "DEP record must contain four fields.");
-                dep: Dependency;
+                dep: Juice.Dependency;
                 dep.name = copy_string(parts[0]);
                 dep.version = copy_string(parts[1]);
                 dep.source = copy_string(parts[2]);
                 dep.package = copy_string(parts[3]);
                 array_add(*deps, dep);
+
+            case "PLUGIN";
+                parts := split(value, "|");
+                if parts.count != 2 return manifest_parse_failure(line_index + 1, "PLUGIN record must contain id|version.");
+                plugin_id, id_ok := unescape_record_value(parts[0]);
+                plugin_version, version_ok := unescape_record_value(parts[1]);
+                if !id_ok || !version_ok return manifest_parse_failure(line_index + 1, "Invalid %XX escape in PLUGIN record.");
+                for decl: plugins {
+                    if decl.id == plugin_id return manifest_parse_failure(line_index + 1, "Duplicate PLUGIN record.");
+                }
+                decl: Juice.Plugin_Declaration;
+                decl.id = plugin_id;
+                decl.version = plugin_version;
+                array_add(*plugins, decl);
+
+            case "PLUGIN_OPTION";
+                parts := split(value, "|");
+                if parts.count != 3 return manifest_parse_failure(line_index + 1, "PLUGIN_OPTION record must contain id|key|value.");
+                plugin_id, id_ok := unescape_record_value(parts[0]);
+                option_key, key_ok := unescape_record_value(parts[1]);
+                option_value, value_ok := unescape_record_value(parts[2]);
+                if !id_ok || !key_ok || !value_ok return manifest_parse_failure(line_index + 1, "Invalid %XX escape in PLUGIN_OPTION record.");
+                plugin_index := -1;
+                for decl, index: plugins {
+                    if decl.id == plugin_id {
+                        plugin_index = index;
+                        break;
+                    }
+                }
+                if plugin_index < 0 return manifest_parse_failure(line_index + 1, "PLUGIN_OPTION for an undeclared plugin.");
+                for opt: plugins[plugin_index].options {
+                    if opt.key == option_key return manifest_parse_failure(line_index + 1, tprint("Duplicate plugin option key: %1", option_key));
+                }
+                option: Juice.Plugin_Option;
+                option.key = option_key;
+                option.value = option_value;
+                // The face's options slot is a [] slice; rebuild through a
+                // dynamic array (row counts are tiny) and store the view.
+                rows: [..] Juice.Plugin_Option;
+                for existing: plugins[plugin_index].options {
+                    array_add(*rows, existing);
+                }
+                array_add(*rows, option);
+                plugins[plugin_index].options = rows;
 
             case;
                 return manifest_parse_failure(line_index + 1, tprint("Unknown manifest record: %1", key));
@@ -199,6 +283,7 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
     result.package.workspace.members = members;
     result.package.workspace.exclude = excluded;
     result.package.dependencies = deps;
+    result.package.plugins = plugins;
     result.success = true;
     return result;
 }
@@ -207,32 +292,45 @@ manifest_parse_failure :: (line_number: int, message: string) -> Manifest_Parse_
     return .{success = false, line_number = line_number, error_message = copy_string(message)};
 }
 
-// Kept as a small convenience for pure parser callers. Callers that need the
-// diagnostic should use parse_manifest_data_strict().
-parse_manifest_data :: (content: string) -> Package {
+// Kept as a small convenience for pure parser callers. Callers that need
+// the diagnostic should use parse_manifest_data_strict().
+parse_manifest_data :: (content: string) -> Juice.Package {
     result := parse_manifest_data_strict(content);
     return result.package;
 }
 
-// Marker cross-record validation: an exe override without a config is a
-// declaration error — without a config the pre-step has nothing to run. The
-// gate is standalone so the load path's check is testable in-process
-// (load_package_manifest itself needs a real jai child; see workspace.jai's
-// validation matrix note for the same split).
-validate_jaix_marker :: (pkg: Package) -> (bool, string) {
-    if pkg.jaix.exe != "" && pkg.jaix.config == "" {
-        return false, "JAIX_EXE set without JAIX_CONFIG.";
-    }
-    return true, "";
+// Record-value decoder: the exact inverse of the evaluator's generated
+// manifest_eval_escape (%XX for %, |, CR and LF). Strict: a malformed
+// escape fails the record instead of being silently reinterpreted.
+hex_value_of :: (c: u8) -> s64 {
+    if c >= #char "0" && c <= #char "9" return cast(s64) (c - #char "0");
+    if c >= #char "a" && c <= #char "f" return cast(s64) (c - #char "a") + 10;
+    if c >= #char "A" && c <= #char "F" return cast(s64) (c - #char "A") + 10;
+    return -1;
 }
 
-// FNV-1a 64-bit hash rendered as 16 lowercase hex characters (a local copy:
-// same semantics as src/transpile_cache.jai's hash_hex). Declarations
-// injected via #load are shared across files (like to_forward_slashes) but
-// only visible to files loaded after the #load statement: main.jai loads
-// manifest.jai before transpile_cache.jai, so hash_hex is not visible here;
-// reordering the #loads would ripple through the production build chain
-// (transpile_cache depends on transpile.jai's types), so the copy stays.
+unescape_record_value :: (value: string) -> (string, bool) {
+    out: [..] u8;
+    i := 0;
+    while i < value.count {
+        c := value[i];
+        if c == #char "%" {
+            if i + 2 >= value.count return "", false;
+            high := hex_value_of(value[i+1]);
+            low  := hex_value_of(value[i+2]);
+            if high < 0 || low < 0 return "", false;
+            array_add(*out, cast(u8) (high * 16 + low));
+            i += 3;
+            continue;
+        }
+        array_add(*out, c);
+        i += 1;
+    }
+    if out.count == 0 return "", true;
+    return copy_string(to_string(out.data, out.count)), true;
+}
+
+// FNV-1a 64-bit hash rendered as 16 lowercase hex characters.
 manifest_hash_hex :: (s: string) -> string {
     hash := fnv1a_hash(s.data, s.count);
     out: [16] u8;
@@ -243,15 +341,10 @@ manifest_hash_hex :: (s: string) -> string {
     return copy_string(to_string(out.data, 16));
 }
 
-// Temp file naming: the manifest evaluator's temp files used to share fixed
-// names (eval_manifest.jai / manifest_data.txt) — sequential or concurrent
-// evaluator child processes overwrote each other: a file written by one
-// child got transiently locked (AV), and a later child whose write failed
-// silently read stale manifest data (occasionally losing a workspace
-// member). Names now hash the absolute path of the manifest being
-// evaluated: distinct manifests never collide across processes; concurrent
-// evaluations of the same manifest produce identical content, so the shared
-// name is harmless.
+// Temp file naming: names hash the absolute path of the manifest being
+// evaluated — distinct manifests never collide across sequential or
+// concurrent evaluator children, and concurrent evaluations of the same
+// manifest produce identical content, so the shared name is harmless.
 manifest_temp_file_names :: (cache_dir: string, pkg_dir: string) -> (string, string) {
     stem := manifest_hash_hex(pkg_dir);
     eval_src := to_forward_slashes(tprint("%1/eval_manifest_%2.jai", cache_dir, stem));
@@ -259,7 +352,29 @@ manifest_temp_file_names :: (cache_dir: string, pkg_dir: string) -> (string, str
     return eval_src, eval_out;
 }
 
-load_package_manifest :: (cache_dir: string, pkg_dir: string) -> Package, bool {
+// Production evaluator spawn: one jai child per manifest, compiling and
+// running the generated evaluator program. The child inherits the caller's
+// working directory (the evaluator only prints declaration fields and never
+// resolves paths, and every path it touches is absolute). The modules
+// directory feeds -import_dir so the manifest's `#import "Juice"` resolves.
+spawn_manifest_evaluator :: (eval_src: string, eval_out: string, modules_dir: string) -> s32 {
+    result := run_command("jai", eval_src, "-import_dir", modules_dir, "-quiet");
+    return result.exit_code;
+}
+
+// Load and validate a package manifest. Returns the parsed package with its
+// dir backfilled to the absolute package directory (every later path
+// resolution anchors on it), or an empty package and false on failure.
+//
+// modules_dir defaults to the derivation next to the running executable
+// (spec section 9.3); tests inject the published modules directory
+// (ensure_published_modules). The spawn
+// seam is the child boundary (production default spawn_manifest_evaluator);
+// tests inject a recording fake to drive the retry loop deterministically —
+// a real child's write failure cannot be forced on demand.
+load_package_manifest :: (cache_dir: string, pkg_dir: string,
+                          modules_dir: string = "",
+                          spawn: #type (eval_src: string, eval_out: string, modules_dir: string) -> s32 = spawn_manifest_evaluator) -> Juice.Package, bool {
     manifest_path := to_forward_slashes(tprint("%1/package.jai", pkg_dir));
     if !file_exists(manifest_path) return .{}, false;
 
@@ -275,21 +390,19 @@ load_package_manifest :: (cache_dir: string, pkg_dir: string) -> Package, bool {
         return .{}, false;
     }
 
-    exe_path := get_path_of_running_executable();
-    bin_dir  := path_strip_filename(exe_path);
-    global_modules_dir := to_forward_slashes(tprint("%1/../modules", bin_dir));
+    dir := modules_dir;
+    if dir == "" dir = juice_modules_dir();
 
     // Retry a data-write failure (exit code 2) at most twice: transient file
-    // locks (AV etc.) disappear across retries; each retry reuses the same
-    // temp file pair (same manifest, same names, and a file that failed to
-    // write has unchanged content, so the retry just overwrites it). Any
-    // other nonzero exit code is a real evaluation failure and errors out
-    // immediately.
+    // locks disappear across retries; each retry reuses the same temp file
+    // pair (same manifest, same names, and a file that failed to write has
+    // unchanged content, so the retry just overwrites it). Any other nonzero
+    // exit code is a real evaluation failure and errors out immediately.
     attempts := 0;
     while true {
-        result := run_command("jai", temp_eval_src, "-import_dir", global_modules_dir, "-quiet");
-        if result.exit_code == 0 break;
-        if result.exit_code == 2 && attempts < 2 {
+        exit_code := spawn(temp_eval_src, temp_eval_out, dir);
+        if exit_code == 0 break;
+        if exit_code == 2 && attempts < 2 {
             attempts += 1;
             print("[juice] Manifest evaluator failed to write its data (transient); retrying (%1/2)...\n", attempts);
             continue;
@@ -309,61 +422,6 @@ load_package_manifest :: (cache_dir: string, pkg_dir: string) -> Package, bool {
         print("[juice ERROR] Invalid manifest protocol at % (line %): %\n", manifest_path, parsed.line_number, parsed.error_message);
         return .{}, false;
     }
-    jaix_ok, jaix_error := validate_jaix_marker(parsed.package);
-    if !jaix_ok {
-        print("[juice ERROR] Invalid jaix marker at %: %\n", manifest_path, jaix_error);
-        return .{}, false;
-    }
     parsed.package.dir = copy_string(pkg_dir);
     return parsed.package, true;
-}
-
-// ---------------------------------------------------------------------------
-// Inline tests: the jaix marker validation matrix. The parse faces are pure
-// protocol; the marker cross-record check lives in validate_jaix_marker (the
-// load path's testable seam — load_package_manifest needs a real jai child,
-// so its branches stay covered by E2E message assertions elsewhere).
-// ---------------------------------------------------------------------------
-
-test "Jaix marker parses a config and exe pair" {
-    parsed := parse_manifest_data_strict("NAME=demo\nVERSION=1\nJAIX_CONFIG=jaix.config.jai\nJAIX_EXE=jaix.exe\n");
-    expect(parsed.success);
-    expect(parsed.package.jaix.config == "jaix.config.jai");
-    expect(parsed.package.jaix.exe == "jaix.exe");
-}
-
-test "Jaix marker records default to empty when absent" {
-    parsed := parse_manifest_data_strict("NAME=demo\nVERSION=1\n");
-    expect(parsed.success);
-    expect(parsed.package.jaix.config == "");
-    expect(parsed.package.jaix.exe == "");
-}
-
-test "Jaix marker rejects a duplicate JAIX_CONFIG record" {
-    parsed := parse_manifest_data_strict("NAME=demo\nVERSION=1\nJAIX_CONFIG=a\nJAIX_CONFIG=b\n");
-    expect(!parsed.success);
-    expect(parsed.line_number == 4);
-    expect(parsed.error_message == "Duplicate JAIX_CONFIG record.");
-}
-
-test "Jaix marker rejects a duplicate JAIX_EXE record" {
-    parsed := parse_manifest_data_strict("NAME=demo\nVERSION=1\nJAIX_EXE=a\nJAIX_EXE=b\n");
-    expect(!parsed.success);
-    expect(parsed.line_number == 4);
-    expect(parsed.error_message == "Duplicate JAIX_EXE record.");
-}
-
-test "Jaix marker rejects an exe without a config" {
-    ok, message := validate_jaix_marker(.{name = "demo", version = "1", jaix = .{config = "", exe = "jaix.exe"}});
-    expect(!ok);
-    expect(message == "JAIX_EXE set without JAIX_CONFIG.");
-}
-
-test "Jaix marker accepts a config with or without an exe override" {
-    ok, _ := validate_jaix_marker(.{name = "demo", version = "1", jaix = .{config = "jaix.config.jai"}});
-    expect(ok);
-    ok, _ = validate_jaix_marker(.{name = "demo", version = "1", jaix = .{config = "jaix.config.jai", exe = "jaix.exe"}});
-    expect(ok);
-    ok, _ = validate_jaix_marker(.{name = "demo", version = "1"});
-    expect(ok);
 }
