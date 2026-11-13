@@ -1,6 +1,12 @@
 #import "Basic";
 #import "Testing";
 #import "File_Utilities";
+#import "Thread"(LOAD_THREAD_GROUP = false);
+
+#if OS == .WINDOWS {
+    declaration_test_kernel32 :: #system_library "kernel32";
+    SetEnvironmentVariableW :: (name: *u16, value: *u16) -> s32 #foreign declaration_test_kernel32;
+}
 
 test "Package-relative paths normalize internal parent segments" {
     result := normalize_package_relative_path("src/../module.jai");
@@ -22,8 +28,13 @@ test "Path safety rejects a linked ancestor, not just a linked leaf" {
     real := tprint("%1/real/child", scratch);
     expect(make_directory_if_it_does_not_exist(real, recursive = true));
     junction := tprint("%1/alias", scratch);
-    if !make_test_link(junction, tprint("%1/real", scratch), true, true) {
-        print("SKIP: mklink unavailable (needs developer mode or elevation)\n");
+    #if OS == .WINDOWS {
+        link_ok := make_test_link(junction, tprint("%1/real", scratch), true, true);
+    } else {
+        link_ok := run_command("ln", "-s", tprint("%1/real", scratch), junction).exit_code == 0;
+    }
+    if !link_ok {
+        print("SKIP: symbolic link creation unavailable\\n");
         return;
     }
     expect(!path_chain_is_link_free(tprint("%1/child", junction)));
@@ -31,7 +42,12 @@ test "Path safety rejects a linked ancestor, not just a linked leaf" {
 }
 
 test "Typed cache and state roots honor XDG and platform defaults" {
+    // Verify the public return types without calling getters against the user environment.
+    cache_getter: () -> Content_Cache_Root_Result = get_juice_content_cache_root;
+    state_getter: () -> Resolution_State_Root_Result = get_juice_resolution_state_root;
     scratch := otter_scratch("declaration-xdg-roots");
+    delete_directory_full(scratch);
+    defer delete_directory_full(scratch);
     expect(make_directory_if_it_does_not_exist(scratch, recursive = true));
     xdg := tprint("%1/custom-xdg", scratch);
     cache := resolve_juice_content_cache_root(xdg, "", "");
@@ -54,8 +70,115 @@ test "Typed cache and state roots honor XDG and platform defaults" {
 
     blocked := tprint("%1/blocked", scratch);
     expect(write_entire_file(blocked, "regular file"));
-    blocked_result := xdg_create_root(.{path = tprint("%1/child", blocked), success = true});
+    blocked_path := tprint("%1/child", blocked);
+    blocked_result := xdg_create_root(.{path = blocked_path, success = true, warning = true});
     expect(!blocked_result.success);
+    expect(blocked_result.path == blocked_path && blocked_result.warning && !blocked_result.used_fallback);
+    blocked_content, read_ok := read_entire_file(blocked);
+    expect(read_ok && blocked_content == "regular file");
+}
+
+test "XDG absolute roots require a real volume or complete UNC share" {
+    expect(xdg_join("/", "juice") == "/juice");
+    #if OS == .WINDOWS {
+        expect(xdg_path_is_absolute("C:/cache"));
+        expect(xdg_path_is_absolute("z:\\cache"));
+        expect(xdg_path_is_absolute("//server/share"));
+        expect(xdg_path_is_absolute("//server/share/cache"));
+        expect(!xdg_path_is_absolute("1:/cache"));
+        expect(!xdg_path_is_absolute("_:/cache"));
+        expect(!xdg_path_is_absolute("C:cache"));
+        expect(!xdg_path_is_absolute("/cache"));
+        expect(!xdg_path_is_absolute("//"));
+        expect(!xdg_path_is_absolute("//server"));
+        expect(!xdg_path_is_absolute("//server/"));
+        expect(!xdg_path_is_absolute("///share"));
+    } else {
+        expect(xdg_path_is_absolute("/cache"));
+        expect(!xdg_path_is_absolute("C:/cache"));
+    }
+}
+
+test "Windows environment paths retain Unicode across size changes" {
+    #if OS == .WINDOWS {
+        name := tprint("JUICE_TEST_DECLARATION_UNICODE_%1", GetCurrentProcessId());
+        wide_name := utf8_to_wide(name,, temp);
+        expect(get_env(name) == "");
+        defer SetEnvironmentVariableW(wide_name, null);
+        for value: string.["C:/缓存/状态/😀", "C:/短", "C:/更长的缓存路径/状态目录/🧪/juice"] {
+            expect(SetEnvironmentVariableW(wide_name, utf8_to_wide(value,, temp)) != 0);
+            expect(get_env(name) == value);
+        }
+        Environment_Worker :: struct {
+            thread: Thread;
+            name: *u16;
+            short_value: *u16;
+            long_value: *u16;
+            success: bool = true;
+        }
+        resize_environment :: (thread: *Thread) -> s64 {
+            worker := cast(*Environment_Worker) thread;
+            for 0..999 {
+                if SetEnvironmentVariableW(worker.name, worker.short_value) == 0 worker.success = false;
+                if SetEnvironmentVariableW(worker.name, worker.long_value) == 0 worker.success = false;
+            }
+            return 0;
+        }
+        short_value := "C:/短";
+        long_value := "C:/更长的缓存路径/状态目录/🧪/juice";
+        worker: Environment_Worker;
+        worker.name = wide_name;
+        worker.short_value = utf8_to_wide(short_value,, temp);
+        worker.long_value = utf8_to_wide(long_value,, temp);
+        expect(thread_init(*worker.thread, resize_environment));
+        thread_start(*worker.thread);
+        valid := true;
+        for 0..999 {
+            value := get_env(name);
+            if value != short_value && value != long_value valid = false;
+        }
+        thread_is_done(*worker.thread, -1);
+        thread_deinit(*worker.thread);
+        expect(worker.success);
+        expect(valid);
+        expect(SetEnvironmentVariableW(wide_name, null) != 0);
+        expect(get_env(name) == "");
+    } else {
+        print("SKIP: Windows wide environment API is platform-specific\n");
+    }
+}
+
+test "Concurrent write probes are independent and never reuse a fixed name" {
+    scratch := otter_scratch("declaration-xdg-probes");
+    delete_directory_full(scratch);
+    defer delete_directory_full(scratch);
+    expect(make_directory_if_it_does_not_exist(scratch, recursive = true));
+    fixed_probe := tprint("%1/.juice-write-probe", scratch);
+    expect(write_entire_file(fixed_probe, "user-owned content"));
+    Probe_Worker :: struct { thread: Thread; root: string; success: bool = true; };
+    probe_worker :: (thread: *Thread) -> s64 {
+        worker := cast(*Probe_Worker) thread;
+        for 0..31 {
+            result := xdg_create_root(.{path = worker.root, success = true});
+            if !result.success || result.path != worker.root worker.success = false;
+        }
+        return 0;
+    }
+    workers: [8] Probe_Worker;
+    for i: 0..workers.count-1 {
+        workers[i].root = scratch;
+        expect(thread_init(*workers[i].thread, probe_worker));
+        thread_start(*workers[i].thread);
+    }
+    for i: 0..workers.count-1 {
+        thread_is_done(*workers[i].thread, -1);
+        thread_deinit(*workers[i].thread);
+    }
+    for worker: workers expect(worker.success);
+    files := file_list(scratch);
+    expect(files.count == 1 && paths_equal(files[0], fixed_probe));
+    content, read_ok := read_entire_file(fixed_probe);
+    expect(read_ok && content == "user-owned content");
 }
 
 test "Declaration names use their ASCII grammar and compare without rewriting" {

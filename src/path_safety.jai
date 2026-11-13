@@ -167,6 +167,7 @@ path_chain_is_link_free :: (path: string) -> bool {
         if parent == "" || paths_equal(parent, current) return false;
         current = parent;
     }
+    return false;
 }
 
 Package_Path_Result :: struct {
