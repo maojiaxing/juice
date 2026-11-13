@@ -1,6 +1,6 @@
 ---
 title: 实施：声明路径身份与 XDG 目录基础
-status: open
+status: closed
 labels: [ready-for-agent]
 assignee: maojiaxing
 parent: "0087"
@@ -31,3 +31,12 @@ blocked-by: []
 ## Integration
 
 集成分支 `integration/package-declaration-semantics`；共享执行纪律在仓库外 `C:/Users/maojiaxing/DevTools/msys/tmp/juice-package-implementation/README.md`。报告精确的新函数签名/失败语义，供声明及依赖票消费。完成前合并集成分支最新 tip，提交变更；由 merger 核对并关闭本票。
+
+## Resolution
+
+- Merged path/name/XDG foundation into `integration/package-declaration-semantics` as `4149b26766da5f0153b8727b362ec8d57ba72bdb`.
+- Added package-relative normalization, complete ancestor symlink/junction checks, package/identifier ASCII validation and ASCII-only equality; added typed content-cache and resolution-state roots with XDG precedence on Windows and non-Windows, explicit fallback/warning results, strict failure, Unicode-safe Windows environment reads, and exclusive write probes.
+- Downstream callers must use `get_juice_content_cache_root()` / `get_juice_resolution_state_root()`, check `.success`, surface `.warning`, and use `.path` directly without appending `/juice`. Legacy `get_cache_home()` remains only for existing callers until the command-wiring ticket migrates them.
+- Validation on Windows 11 with Jai beta 0.2.009: `jai build.jai` exit 0; `target/juice.exe test juice_test_8` exit 0 (11 passed, 0 failed), covering new IDs 84-89; `target/juice.exe test juice_test_9` exit 0 (11 passed, 0 failed), covering new IDs 90-91; full copied-executable `test` exit 0, final suite tally 339 passed, 0 failed, no SKIP. The test module's own `finish()` resets its counter, so 339 is its final tally rather than a sum of every nested test invocation. Expected negative-case child diagnostics were present.
+- Logs are preserved outside the repository in `C:/Users/maojiaxing/DevTools/msys/tmp/juice-package-implementation/merged-0088-build.log`, `merged-0088-filter-8.log`, `merged-0088-filter-9.log`, and `merged-0088-full.log`; review replay evidence is in `path-foundation-evidence/`.
+- Limitations: Linux/case-sensitive runtime verification was not available. The installed NixOS environment could not start the generic Linux compiler, and the alternate WSL image lacked complete development/startup files. ACL-denied-existing-directory behavior is implemented through the exclusive write probe but was not separately exercised; creation failure was tested using a regular-file parent. Existing command callers have not yet migrated to typed roots and are owned by the later command ticket.
