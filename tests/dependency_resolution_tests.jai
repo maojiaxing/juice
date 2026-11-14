@@ -8,6 +8,8 @@
 #if OS == .WINDOWS {
     #import "Windows";
     #import "Windows_Utf8";
+} else {
+    #import "POSIX";
 }
 
 // ---------------------------------------------------------------------------
@@ -82,16 +84,90 @@ dr_set_process_env :: (name: string, value: string) {
     }
 }
 
+// Remove one process environment variable: a null value deletes it on Windows,
+// POSIX has an explicit call.
+dr_unset_process_env :: (name: string) {
+    #if OS == .WINDOWS {
+        wide_name, name_ok := utf8_to_wide(name,, temp);
+        if name_ok SetEnvironmentVariableW(wide_name, null);
+    } else {
+        unsetenv(temp_c_string(name));
+    }
+}
+
+// The XDG roots a case overrides, saved before the first override so the case
+// can put the process back exactly as it found it.
+//
+// Why this exists: the whole suite runs in one process and later E2E cases
+// spawn real juice children, which inherit the parent environment when they are
+// spawned. A case that left XDG_CACHE_HOME/XDG_STATE_HOME pointing at its own
+// scratch tree made every following child resolve into a directory that the
+// next suite run deletes (or into a previous case's stale tree), so unrelated
+// E2E cases failed for reasons unrelated to their own behavior. Saving and
+// restoring around every case keeps this suite invisible to its neighbors.
+//
+// `active` makes the save idempotent: a case stores the pair once, so a second
+// dr_isolate call in the same body still restores the original values.
+Dr_Saved_Environment :: struct {
+    active:        bool;
+    cache_present: bool;
+    cache_value:   string;
+    state_present: bool;
+    state_value:   string;
+}
+
+dr_saved_environment: Dr_Saved_Environment;
+
+// A present-but-empty variable behaves like an absent one for the XDG contract
+// (empty and relative values fall back to the platform default), so empty is
+// recorded as absent and restored by deletion.
+dr_environment_value :: (name: string) -> (string, bool) {
+    value := get_env(name);
+    return value, value != "";
+}
+
 // Point both typed roots at the case's own scratch tree. Absolute paths are
 // required: a relative XDG value is a fallback with a warning and would leak the
-// case into the machine's real roots.
+// case into the machine's real roots. The caller pairs this with
+// `defer dr_restore_env();`.
 dr_isolate :: (scratch: string) {
+    if !dr_saved_environment.active {
+        cache_value, cache_present := dr_environment_value("XDG_CACHE_HOME");
+        state_value, state_present := dr_environment_value("XDG_STATE_HOME");
+        dr_saved_environment = .{
+            active        = true,
+            cache_present = cache_present,
+            cache_value   = copy_string(cache_value),
+            state_present = state_present,
+            state_value   = copy_string(state_value),
+        };
+    }
     cache := dr_path(scratch, "xdg-cache");
     state := dr_path(scratch, "xdg-state");
     dr_set_process_env("XDG_CACHE_HOME", cache);
     dr_set_process_env("XDG_STATE_HOME", state);
     make_directory_if_it_does_not_exist(cache, recursive = true);
     make_directory_if_it_does_not_exist(state, recursive = true);
+}
+
+// Restore the environment a case found. Every case calls this through `defer`
+// immediately after dr_isolate: a failing `expect` returns from the test body at
+// once (the Testing contract), so only a scope defer is guaranteed to run.
+// Tests execute one at a time (Testing_run) and no child is spawned after the
+// defer, so one saved slot per process is enough.
+dr_restore_env :: () {
+    if !dr_saved_environment.active return;
+    if dr_saved_environment.cache_present {
+        dr_set_process_env("XDG_CACHE_HOME", dr_saved_environment.cache_value);
+    } else {
+        dr_unset_process_env("XDG_CACHE_HOME");
+    }
+    if dr_saved_environment.state_present {
+        dr_set_process_env("XDG_STATE_HOME", dr_saved_environment.state_value);
+    } else {
+        dr_unset_process_env("XDG_STATE_HOME");
+    }
+    dr_saved_environment.active = false;
 }
 
 dr_run :: (working_dir: string, arguments: [] string) -> (Process_Result, string, string) {
@@ -203,6 +279,7 @@ dr_run_app :: (app: string) -> (s32, string) {
 dependency_resolution_path_source_alias :: () {
     scratch := dr_scratch("path-alias");
     dr_isolate(scratch);
+    defer dr_restore_env();
     expect(dr_write_module_provider(dr_path(scratch, "provider"), "provider", "Provider_Value :: 7;\n"));
     app := dr_path(scratch, "app");
     expect(dr_write_app(app, "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"prov\", source = .{kind = .PATH, path = \"../provider\"}, modules = .[.{alias = \"Lib\"}]},\n    ],\n",
@@ -226,6 +303,7 @@ dependency_resolution_path_source_alias :: () {
 dependency_resolution_rejects_implicit_name_search :: () {
     scratch := dr_scratch("no-name-search");
     dr_isolate(scratch);
+    defer dr_restore_env();
     expect(dr_write_module_provider(dr_path(dr_path(scratch, "elsewhere"), "provider"), "provider", "Provider_Value :: 7;\n"));
     empty_source := dr_path(scratch, "not-a-package");
     expect(make_directory_if_it_does_not_exist(empty_source, recursive = true));
@@ -245,6 +323,7 @@ dependency_resolution_rejects_implicit_name_search :: () {
 dependency_resolution_module_selection_rules :: () {
     scratch := dr_scratch("module-selection");
     dr_isolate(scratch);
+    defer dr_restore_env();
 
     two := dr_path(scratch, "two-exports");
     expect(dr_write_file(two, "package.jai", dr_package_source("two_exports", "    modules = .[.{name = \"First\", entry = \"first.jai\"}, .{name = \"Second\", entry = \"second.jai\"}],\n")));
@@ -278,6 +357,7 @@ dependency_resolution_module_selection_rules :: () {
 dependency_resolution_module_identity_and_name_conflicts :: () {
     scratch := dr_scratch("identity");
     dr_isolate(scratch);
+    defer dr_restore_env();
     expect(dr_write_module_provider(dr_path(scratch, "provider"), "provider", "Provider_Value :: 7;\n"));
     app := dr_path(scratch, "app");
     expect(dr_write_app(app, "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    modules = .[.{name = \"AppMod\", entry = \"src/appmod.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"one\", source = .{kind = .PATH, path = \"../provider\"}, modules = .[.{alias = \"First\"}]},\n        .{name = \"two\", source = .{kind = .PATH, path = \"../provider\"}, modules = .[.{alias = \"Second\"}]},\n    ],\n",
@@ -311,6 +391,7 @@ dependency_resolution_module_identity_and_name_conflicts :: () {
 dependency_resolution_transitive_visibility :: () {
     scratch := dr_scratch("transitive");
     dr_isolate(scratch);
+    defer dr_restore_env();
 
     expect(dr_write_module_provider(dr_path(scratch, "cipher"), "cipher", "Cipher_Value :: 11;\n"));
 
@@ -337,6 +418,7 @@ dependency_resolution_transitive_visibility :: () {
 dependency_resolution_package_cycle_reports_chain :: () {
     scratch := dr_scratch("cycle");
     dr_isolate(scratch);
+    defer dr_restore_env();
 
     package_a := dr_path(scratch, "alpha");
     package_b := dr_path(scratch, "beta");
@@ -367,6 +449,7 @@ dependency_resolution_package_cycle_reports_chain :: () {
 dependency_resolution_workspace_source_membership :: () {
     scratch := dr_scratch("workspace-source");
     dr_isolate(scratch);
+    defer dr_restore_env();
 
     workspace := dr_path(scratch, "ws");
     expect(dr_write_module_provider(dr_path(workspace, "member"), "member", "Member_Value :: 9;\n"));

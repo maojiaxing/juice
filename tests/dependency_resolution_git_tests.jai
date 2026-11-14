@@ -42,6 +42,7 @@ dr_write_git_app_module :: (app: string, url: string, import_name: string, packa
 dependency_resolution_git_reuse_and_update :: () {
     scratch := dr_scratch("git-reuse");
     dr_isolate(scratch);
+    defer dr_restore_env();
     repo := dr_path(scratch, "repo");
     expect(dr_git_init(repo));
     expect(dr_git_provider_value(repo, 100));
@@ -94,6 +95,7 @@ dependency_resolution_git_reuse_and_update :: () {
 dependency_resolution_git_content_restore :: () {
     scratch := dr_scratch("git-restore");
     dr_isolate(scratch);
+    defer dr_restore_env();
     repo := dr_path(scratch, "repo");
     expect(dr_git_init(repo));
     expect(dr_git_provider_value(repo, 100));
@@ -129,6 +131,7 @@ dependency_resolution_git_content_restore :: () {
 dependency_resolution_offline_matrix :: () {
     scratch := dr_scratch("offline");
     dr_isolate(scratch);
+    defer dr_restore_env();
     repo := dr_path(scratch, "repo");
     expect(dr_git_init(repo));
     expect(dr_git_provider_value(repo, 100));
@@ -177,6 +180,7 @@ dependency_resolution_offline_matrix :: () {
 dependency_resolution_context_isolation :: () {
     scratch := dr_scratch("isolation");
     dr_isolate(scratch);
+    defer dr_restore_env();
     repo := dr_path(scratch, "repo");
     expect(dr_git_init(repo));
     expect(dr_git_provider_value(repo, 100));
@@ -231,6 +235,7 @@ dependency_resolution_context_isolation :: () {
 dependency_resolution_corrupt_state_fails :: () {
     scratch := dr_scratch("corrupt-state");
     dr_isolate(scratch);
+    defer dr_restore_env();
     repo := dr_path(scratch, "repo");
     expect(dr_git_init(repo));
     expect(dr_git_provider_value(repo, 100));
@@ -260,6 +265,7 @@ dependency_resolution_corrupt_state_fails :: () {
 dependency_resolution_failure_preserves_old_state :: () {
     scratch := dr_scratch("failure-state");
     dr_isolate(scratch);
+    defer dr_restore_env();
     repo := dr_path(scratch, "repo");
     expect(dr_git_init(repo));
     expect(dr_git_provider_value(repo, 100));
@@ -303,6 +309,7 @@ dependency_resolution_failure_preserves_old_state :: () {
 dependency_resolution_git_checkout_boundary :: () {
     scratch := dr_scratch("git-boundary");
     dr_isolate(scratch);
+    defer dr_restore_env();
     repo := dr_path(scratch, "repo");
     expect(dr_git_init(repo));
 
