@@ -417,7 +417,7 @@ test "E2E: an unknown plugin id fails plugin preparation byte-for-byte" {
     result, output, _ := run_otter_child_at(fixture_root, string.["build"]);
     expect(expect_exit("bad-manifest-plugin-id", result, 1, "build child"));
     expect(child_output_contains("bad-manifest-plugin-id", output,
-        "[juice ERROR] mystery: Plugin source unavailable: mystery (explicit PATH/WORKSPACE required by this implementation stage)"));
+        "[juice ERROR] mystery: Plugin 'mystery' source: provider package has no declaration:"));
     expect(child_output_contains("bad-manifest-plugin-id", output,
         "[juice ERROR] Could not prepare the workspace's plugin declarations."));
     expect(output_matches("bad-manifest-plugin-id", output, string.["[juice] Build completed successfully!"], want = false));

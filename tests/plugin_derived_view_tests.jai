@@ -66,6 +66,11 @@ pdv_stage :: (root: string, retained: [] string) -> Prestep_Stage {
     stage.root_dir = package_root;
     stage.package_root = package_root;
     stage.derived_root = derived_root;
+    stage.target_root = tprint("%1/target", root);
+    // The typed suite pins the THIRD-PARTY contract (the generated plugin host's
+    // posture): every physical output stays inside the package's private target
+    // areas. Juice's own in-process hooks leave the flag false.
+    stage.enforce_private_output = true;
     return stage;
 }
 

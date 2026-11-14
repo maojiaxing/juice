@@ -535,7 +535,7 @@ test "E2E: an installed juice fails loudly when the jaix member is missing" {
 
     result, output, _, _ := run_command(installed_exe, "build", working_directory = root, capture_and_return_output = true);
     expect(expect_exit("jaix-installed missing-member", result, 1));
-    expect(child_output_contains("jaix-installed missing-member", output, "[juice ERROR] juice-plugin-jaix: Plugin source unavailable: juice-plugin-jaix (explicit PATH/WORKSPACE required by this implementation stage)"));
+    expect(child_output_contains("jaix-installed missing-member", output, "[juice ERROR] juice-plugin-jaix: Plugin 'juice-plugin-jaix' source: provider package has no declaration:"));
     expect(child_output_contains("jaix-installed missing-member", output, "[juice ERROR] Could not prepare the workspace's plugin declarations."));
     expect(!file_exists(target_artifact_path(package_target_dir(root), "missing_member")));
     // No host was spawned, no registration landed.

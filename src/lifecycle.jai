@@ -230,6 +230,14 @@ Prestep_Stage :: struct {
     generated:     [..] Generated_Source;     // registered auxiliary sources
     package_root:  string;                    // logical path base (read-only)
     derived_root:  string;                    // private derived output root
+    target_root:   string;                    // the package's target/ tree
+    // Whether the third-party plugin contract is enforced on this stage. The
+    // generated plugin host sets it (its values are third-party code, so every
+    // physical output must stay inside the consuming package's private target
+    // areas); juice's own in-process build hooks leave it false, so the trusted
+    // build seam keeps its established freedom (their replacements come from
+    // the tool's own pre-step plugins, which the tests pin).
+    enforce_private_output: bool = false;
 }
 
 // The logical package-relative path is usable when it is non-empty, relative,
@@ -361,9 +369,18 @@ prestep_add_substitution :: (ctx: *Lifecycle_Context, original: string, replacem
         array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("substitution original is not a retained package source: %", original)});
         return false;
     }
-    if stage.derived_root.count > 0 && !derived_path_within_root(stage.derived_root, replacement) {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("substitution replacement is outside the package's private derived area: %", replacement)});
-        return false;
+    if stage.enforce_private_output && stage.derived_root.count > 0 {
+        // Spec 0087 decision 24: every physical output of a third-party plugin
+        // lands inside the consuming package's private target areas — its
+        // derived root, or a plugin-owned area under the same package's
+        // target/ tree. The package sources and any shared checkout are never
+        // writable, so a path outside both is the read-only violation.
+        inside_derived := derived_path_within_root(stage.derived_root, replacement);
+        inside_target := stage.target_root.count > 0 && derived_path_within_root(stage.target_root, replacement);
+        if !inside_derived && !inside_target {
+            array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("substitution replacement is outside the package's private derived area: %", replacement)});
+            return false;
+        }
     }
     array_add(*stage.substitutions, .{original = original, replacement = replacement});
     return true;

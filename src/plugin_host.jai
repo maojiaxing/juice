@@ -298,6 +298,7 @@ Plugin_Host_Options :: struct {
     // area and its substitutions resolve against its own sources.
     package_root:      string;
     derived_root:      string;
+    target_root:       string;
 }
 
 plugin_host_dir :: (target_dir: string) -> string {
@@ -349,6 +350,8 @@ package_host_options :: (
     options.registration_path = package_view.registration_path;
     options.package_root = path_slashes(package_view.package_root);
     options.derived_root = path_slashes(package_view.derived_root);
+    options.target_root = path_slashes(package_target_dir(prepared.discovery.root_dir));
+    options.target_root = path_slashes(package_target_dir(prepared.discovery.root_dir));
     member_dirs: [..] string;
     for dir: stage.member_dirs array_add(*member_dirs, copy_string(dir));
     options.member_dirs = member_dirs;
@@ -445,6 +448,7 @@ generate_plugin_host :: (options: Plugin_Host_Options) -> string {
     print_to_builder(*builder, "HOST_ROOT :: %1;\n", quote_jai_string(path_slashes(options.root_dir)));
     print_to_builder(*builder, "HOST_MODE :: %1;\n", quote_jai_string(options.mode));
     print_to_builder(*builder, "HOST_PACKAGE_ROOT :: %1;\n", quote_jai_string(path_slashes(options.package_root)));
+    print_to_builder(*builder, "HOST_TARGET_ROOT :: %1;\n", quote_jai_string(path_slashes(options.target_root)));
     print_to_builder(*builder, "HOST_DERIVED_ROOT :: %1;\n", quote_jai_string(path_slashes(options.derived_root)));
     append(*builder, "HOST_MEMBER_DIRS :: string.[");
     for dir, index: options.member_dirs {
@@ -487,6 +491,8 @@ generate_plugin_host :: (options: Plugin_Host_Options) -> string {
     append(*builder, "    stage: Prestep_Stage;\n");
     append(*builder, "    stage.root_dir = HOST_ROOT;\n");
     append(*builder, "    stage.package_root = HOST_PACKAGE_ROOT;\n");
+    append(*builder, "    stage.target_root = HOST_TARGET_ROOT;\n");
+    append(*builder, "    stage.enforce_private_output = true;\n");
     append(*builder, "    stage.derived_root = HOST_DERIVED_ROOT;\n");
     append(*builder, "    for dir: HOST_MEMBER_DIRS array_add(*stage.member_dirs, dir);\n");
     append(*builder, "    diags: [..] Lifecycle_Diagnostic;\n");
