@@ -22,6 +22,12 @@
 //     identity plus export) may be selected once per consumer; a final import
 //     name may not shadow the consumer's own modules, another direct import or
 //     a standard Jai module (decision 11).
+//   * The consumer's own declared modules are import names of that package:
+//     its programs and its other modules import them by public name, exactly
+//     like a provider uses its siblings. Their shims are package-private (the
+//     package's own target/packages), so two packages may declare the same
+//     module name and one package's own modules never become another package's
+//     import names (stories 37, decision 11).
 //   * Providers resolve their own dependencies, may use their own sibling
 //     modules, and keep both out of the consumer's direct imports: provider
 //     modules carry mangled private names and their sources compile through a
@@ -100,7 +106,13 @@ Workspace_Membership :: struct {
     error:          string;
 }
 
+// One import shim: the file name the compiler resolves and the entry it loads.
+// directory is the shim directory that owns the name, so a resolution writes a
+// package's own modules into that package's target/packages and its dependency
+// import names into the consumer root's. Names are unique per directory, never
+// globally: two packages may each declare a module of the same name.
 Import_Shim :: struct {
+    directory:   string;
     import_name: string;
     entry_path:  string;
 }
@@ -119,6 +131,9 @@ Resolution_Graph :: struct {
     memberships:      [..] Workspace_Membership;
     consumer_exports: [..] string;
     shims:            [..] Import_Shim;
+    // Every directory this resolution owns shims in. Each one is regenerated
+    // wholesale, so a removed declaration never leaves a stale shim behind.
+    shim_directories: [..] string;
 }
 
 resolution_fail :: (graph: *Resolution_Graph, message: string) -> bool {
@@ -722,49 +737,75 @@ resolution_effective_entry :: (graph: *Resolution_Graph, package_index: int, ent
     return tprint("%1/%2", node.view_dir, relative);
 }
 
-resolution_add_shim :: (graph: *Resolution_Graph, import_name: string, entry_path: string) -> bool {
+resolution_add_shim_directory :: (graph: *Resolution_Graph, directory: string) {
+    for existing: graph.shim_directories {
+        if paths_equal(existing, directory) return;
+    }
+    array_add(*graph.shim_directories, copy_string(directory));
+}
+
+resolution_add_shim :: (graph: *Resolution_Graph, directory: string, import_name: string, entry_path: string) -> bool {
     for shim: graph.shims {
+        if !paths_equal(shim.directory, directory) continue;
         if shim.import_name != import_name continue;
         if shim.entry_path == entry_path return true;
-        graph.error = tprint("Dependency import name '%' resolves to two different modules.", import_name);
+        graph.error = tprint("Import name '%' resolves to two different modules.", import_name);
         return false;
     }
-    array_add(*graph.shims, Import_Shim.{import_name = import_name, entry_path = entry_path});
+    array_add(*graph.shims, Import_Shim.{directory = copy_string(directory), import_name = copy_string(import_name), entry_path = entry_path});
+    return true;
+}
+
+// The consumer's own modules keep their public names, but their shims are the
+// package's own (decision 11): the package that declares the name owns it.
+resolution_plan_own_module_shims :: (graph: *Resolution_Graph) -> bool {
+    consumer := graph.nodes[graph.consumer_index];
+    directory := packages_dir(consumer.dir);
+    for export: consumer.exports {
+        if !resolution_add_shim(graph, directory, export.name, export.source_path) return false;
+    }
     return true;
 }
 
 resolution_plan_shims :: (graph: *Resolution_Graph) -> bool {
+    if !resolution_plan_own_module_shims(graph) return false;
+    // Consumer-visible selections and provider-internal rewrites live in the
+    // consumer root's shim directory, the one every compile of this command
+    // searches (decision 12).
+    directory := packages_dir(graph.consumer_root);
     for module: graph.modules {
         entry := resolution_effective_entry(graph, module.package_index, module.entry_path);
-        if !resolution_add_shim(graph, module.import_name, entry) return false;
+        if !resolution_add_shim(graph, directory, module.import_name, entry) return false;
     }
     for module: graph.private_modules {
         entry := resolution_effective_entry(graph, module.package_index, module.entry_path);
-        if !resolution_add_shim(graph, module.import_name, entry) return false;
+        if !resolution_add_shim(graph, directory, module.import_name, entry) return false;
     }
     return true;
 }
 
-// Write the consumer's import shims: the dependency directory is regenerated so
-// a removed declaration stops resolving (no stale shim survives), and every
-// provider-visible module keeps its private name.
-resolution_write_shims :: (graph: *Resolution_Graph, root_dir: string) -> bool {
-    directory := packages_dir(root_dir);
-    if !make_directory_if_it_does_not_exist(directory, recursive = true) return false;
+// Write the import shims, one directory at a time: every owned directory is
+// regenerated so a removed declaration stops resolving (no stale shim
+// survives), and each directory carries only the names it owns.
+resolution_write_shims :: (graph: *Resolution_Graph) -> bool {
+    for directory: graph.shim_directories {
+        if !make_directory_if_it_does_not_exist(directory, recursive = true) return false;
 
-    existing, scanned := collect_shim_names(directory);
-    if !scanned {
-        graph.error = tprint("Could not scan the dependency shim directory: %", directory);
-        return false;
-    }
-    for name: existing {
-        file_delete(tprint("%1/%.jai", directory, name));
-    }
-    for shim: graph.shims {
-        path := tprint("%1/%.jai", directory, shim.import_name);
-        if !write_entire_file(path, dependency_shim_content(shim.import_name, shim.entry_path)) {
-            graph.error = tprint("Could not write the dependency import shim: %", path);
+        existing, scanned := collect_shim_names(directory);
+        if !scanned {
+            graph.error = tprint("Could not scan the import shim directory: %", directory);
             return false;
+        }
+        for name: existing {
+            file_delete(tprint("%1/%.jai", directory, name));
+        }
+        for shim: graph.shims {
+            if !paths_equal(shim.directory, directory) continue;
+            path := tprint("%1/%.jai", directory, shim.import_name);
+            if !write_entire_file(path, dependency_shim_content(shim.import_name, shim.entry_path)) {
+                graph.error = tprint("Could not write the dependency import shim: %", path);
+                return false;
+            }
         }
     }
     return true;
@@ -812,6 +853,12 @@ resolution_resolve_consumer :: (request: Dependency_Preparation_Request, consume
         return graph;
     }
     for export: consumer_exports.targets array_add(*graph.consumer_exports, export.name);
+    // The dependency shim directory is always regenerated; the package's own
+    // one only when it declares modules, or when an earlier run left it behind
+    // (a declaration that lost its module list must still stop resolving).
+    resolution_add_shim_directory(*graph, packages_dir(graph.consumer_root));
+    own_directory := packages_dir(consumer_package.dir);
+    if consumer_exports.targets.count > 0 || is_directory(own_directory) resolution_add_shim_directory(*graph, own_directory);
 
     node: Resolved_Node;
     node.name = consumer_package.name;
@@ -879,22 +926,26 @@ resolve_dependencies_for_workspace :: (request: Dependency_Preparation_Request) 
         array_add(*graphs, graph);
     }
 
-    // One shim directory serves the selected packages of this command; name
-    // conflicts across them fail before anything is written.
+    // One shim set serves the selected packages of this command; a name owned
+    // by two packages in DIFFERENT directories is two names (own modules are
+    // package-scoped), while a name mapped twice inside one directory is a
+    // conflict and fails before anything is written.
     combined: Resolution_Graph;
     combined.success = true;
     for *graph: graphs {
+        for directory: graph.shim_directories resolution_add_shim_directory(*combined, directory);
         for shim: graph.shims {
             for existing: combined.shims {
+                if !paths_equal(existing.directory, shim.directory) continue;
                 if ascii_names_equal(existing.import_name, shim.import_name) && existing.entry_path != shim.entry_path {
-                    print("[juice ERROR] Selected packages map the import name '%' to two different modules.\n", shim.import_name);
+                    print("[juice ERROR] Selected packages map the import name '%' to two different modules in %.\n", shim.import_name, shim.directory);
                     return false;
                 }
             }
             array_add(*combined.shims, shim);
         }
     }
-    if !resolution_write_shims(*combined, request.discovery.root_dir) {
+    if !resolution_write_shims(*combined) {
         print("[juice ERROR] %\n", combined.error);
         return false;
     }

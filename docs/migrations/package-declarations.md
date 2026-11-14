@@ -179,11 +179,12 @@
 ### 4.3 可见范围
 
 - 提供方包内模块可以互相按公开名引用：解析器把提供方内部的 `#import "<export>"` 重写到私有名，并写入消费工程私有的 shim 目录。
-- 传递依赖不会泄漏为消费方的直接导入名。
-- 消费方**自己**包内的模块入口目前不会获得同名 shim：程序或其他模块要使用本包模块时，用 Jai 的文件级加载而非公开名导入。
-  实测：`#import "calc"` 在声明包自己的程序里失败（`target/evidence/probe-consumer-own-module-import.log`，exit 1），
-  `#load "../module.jai"` 成功（E03）；同一提供方被当作依赖时，其内部 `#import "beta"` 被重写并成功
-  （`target/evidence/probe-provider-internal-module-import.log`，exit 0）。这是当前实现的限制，已在文末“已知限制与未执行项”第 3 条登记，不隐藏。
+- 包**自己**在 `modules` 里声明的公开模块在本包内按公开名可用：本包程序和本包其他模块都可以写 `#import "<本包导出名>"`。
+  这些 shim 落在本包自己的 `target/packages/`（包私有），所以不同包可以声明同名模块，一个包的模块名不会变成另一个包的导入名。
+  文件级 `#load` 仍然可用，两种写法不冲突。验收用例：`dependency_resolution_own_module_public_import`（本包程序与本包模块互相引用，`build`/`run`）、
+  `dependency_resolution_own_module_workspace_members`（工作区成员，成员间同名模块互不覆盖）、`dependency_resolution_own_module_in_test_source`（`test` 的测试程序）。
+- 传递依赖不会泄漏为消费方的直接导入名：`#import` 提供方的传递模块仍然失败（`dependency_resolution_transitive_visibility`）。
+- 依赖的最终导入名不得覆盖本包模块、其他直接导入或编译器标准模块：该冲突在解析阶段报错（`dependency_resolution_module_identity_and_name_conflicts`）。
 
 ### 4.4 Git 修订与工程上下文
 
@@ -367,7 +368,7 @@ add :: (left: s64, right: s64) -> s64 {
 }
 ```
 
-`src/adder.jai`（本包模块用文件级加载，见 §4.3）：
+`src/adder.jai`（本包模块也可按公开名导入，见 §4.3；此处保留文件级加载）：
 
 ```jai
 #import "Basic";
@@ -875,7 +876,7 @@ check_internal_rule :: () {
 
 1. 本指南全部运行证据来自 Windows + `jai 0.2.9`。Linux 或大小写敏感文件系统未运行，不能据此声明跨平台通过。
 2. `target/evidence/` 是易失证据区（`clean` 会删除）。需要长期保留的验收记录应复制到 `docs/implementation/` 或由 0096 收进其 Resolution。
-3. 消费包**自己**的模块入口没有同名 shim：程序与同包模块要使用本包模块时用 `#load`/文件级加载；公开名导入只在“该包作为提供方被依赖”时由解析器重写。见 §4.3 与两条探针日志。这是当前实现与故事 37 的字面表述之间的差异，登记给验收票处理。
+3. `test` 命令的测试程序会 `#load` 包内每个不在根级 `target/`、`modules/`、`tests/data/` 之下的 `.jai` 文件。因此本包模块入口若落在这些扫描区内，同一文件再被 `#import` 会重复声明（这与文件级 `#load` 的既有行为相同，与本票无关）。把本包公开模块放在包内 `modules/` 下即可避免；`build`/`run` 不受此限，模块入口可在包内任意位置。
 4. 本指南没有展开：Testing 迁移 effort、兄弟仓库、静态/动态库产物、包注册中心、版本范围求解。
 5. 以下行为在本指南中未执行（因此不宣称通过）：同名成员与 Git 来源冲突（A02）、不同来源同名包并存（A03）、完整多跳环链路（A04）、插件坏 options 与派生视图冲突（A06/A08）、无记录离线/短修订拒绝（A09）、失败保旧状态与成员隔离（A10）、缓存清理与状态损坏（A11）、Git 内部相对引用（A12）、下级包测试扫描剪除（A13）、链接拒绝与大小写敏感文件系统（A15）、安装单元缺失/混装（A16）。
 6. 仓库内 `packages/juice-plugin-lint/package.jai`、`packages/juice-plugin-jaix/package.jai` 的注释仍写着旧词（“LIB with no targets”、声明 version 必须重复）。声明本身已是新写法；注释漂移不在本票文件所有权内，登记给维护者。
@@ -907,4 +908,4 @@ check_internal_rule :: () {
 | `target/evidence/probe-empty-declaration.log`、`probe-default-run-empty.log` | 空声明、`default_run` 显式空 | 1 / 1 |
 | `target/evidence/probe-plugins-omitted.log`、`probe-plugins-empty.log` | 插件省略 = 内置、空 = 全禁用 | 0 / 1 |
 | `target/evidence/probe-empty-dependency-modules.log` | 显式空依赖模块清单 | 1 |
-| `target/evidence/probe-consumer-own-module-import.log`、`probe-provider-internal-module-import.log` | 本包模块导入限制与提供方内部导入 | 1 / 0 |
+| `target/evidence/own-module-acceptance.log` | 本包公开名导入（根包、本包模块互引、工作区成员、`test` 的测试程序）、传递依赖不泄漏、依赖导入名不得覆盖本包模块 | 导入 0；泄漏与覆盖 1 |

@@ -83,16 +83,28 @@ packages_dir :: (root_dir: string) -> string {
 
 // Import directories every compile gets beyond jai's own defaults: the
 // juice module directory (adjacent to the running executable, holds
-// Testing.jai/Juice.jai) and the package's dependency shim directory when it
-// exists. Build and test share this derivation — the test program's
-// "#import <dependency name>" (including workspace members) resolves through
-// the shim directory exactly like a build does.
-compiler_import_directories :: (packages_dir: string) -> [..] string {
+// Testing.jai/Juice.jai), the compiled package's own module shims and the
+// consumer root's dependency shim directory when they exist. Build and test
+// share this derivation — the test program's "#import <dependency name>"
+// (including workspace members) and "#import <own module name>" resolve
+// through the shim directories exactly like a build does.
+//
+// own_packages_dir is the directory of the compiled package's own declared
+// modules (target/packages of that package): importing names are
+// package-scoped, so a workspace member's own modules never become another
+// package's import names.
+compiler_import_directories :: (packages_dir: string, own_packages_dir: string = "") -> [..] string {
     dirs: [..] string;
 
     global_modules_dir := juice_modules_dir();
     if is_directory(global_modules_dir) array_add(*dirs, global_modules_dir);
 
+    // The package's own import names come before the consumer root's: the
+    // package that declares a module name owns it (decision 11). For the root
+    // package the two directories are the same, so the name is added once.
+    if own_packages_dir != "" && !paths_equal(own_packages_dir, packages_dir) && is_directory(own_packages_dir) {
+        array_add(*dirs, path_slashes(own_packages_dir));
+    }
     if is_directory(packages_dir) {
         array_add(*dirs, path_slashes(packages_dir));
     }

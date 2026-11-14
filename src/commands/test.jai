@@ -695,6 +695,7 @@ test_package :: (
     // COMPILE stage (t12): before -> at | built-in front -> after.
     cstage: Test_Compile_Stage;
     cstage.prepared = prepared;
+    cstage.package_root = tstage.package_root;
     cstage.files = tstage.files;
     cstage.view_paths = tstage.view_paths;
     cstage.transpile_dir = tstage.transpile_dir;

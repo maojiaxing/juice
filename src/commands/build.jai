@@ -293,7 +293,10 @@ compile_artifact_plan :: (root_dir: string, plan: Artifact_Plan, entry: string,
     options.output_path       = path_slashes(plan.target_dir);
     options.intermediate_path = path_slashes(target_build_dir(plan.target_dir));
     options.pdb_path          = path_slashes(tprint("%1/%2.pdb", target_build_dir(plan.target_dir), plan.target.name));
-    options.import_dirs       = compiler_import_directories(packages_dir(root_dir));
+    // The package's own module shims precede the consumer root's dependency
+    // shims: this package's declared modules are import names of this package,
+    // which its program and its own module sources both use (story 37).
+    options.import_dirs       = compiler_import_directories(packages_dir(root_dir), target_packages_dir(plan.target_dir));
     options.build_file        = source_file;
     options.testing_view_dir  = testing_dir;
     if !write_entire_file(metaprogram_path, generate_compiler_metaprogram(options)) {
