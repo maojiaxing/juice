@@ -351,5 +351,6 @@ dependency_resolution_git_checkout_boundary :: () {
     escape_result, escape_output, escape_errors := dr_run(escape_app, string.["build"]);
     expect(escape_result.exit_code != 0);
     escape_combined := tprint("%\n%", escape_output, escape_errors);
+    if !contains(escape_combined, "escapes its Git checkout") print("[checkout-boundary] unexpected escape rejection:\n%\n", escape_combined);
     expect(contains(escape_combined, "escapes its Git checkout"));
 } @test
