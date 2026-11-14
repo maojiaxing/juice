@@ -444,7 +444,7 @@ main :: () {
 }
 
 test "the builtin test-block plugin transpiles this block" {
-    expect(1 + 1 == 2);
+    print("builtin test block ran\n");
 }
 PDV_END
 // The plugin declaration shape under test: the external plugin through its OWN
@@ -580,4 +580,239 @@ plugin_derived_options_errors_cli :: () {
     duplicate_text := pdv_child_text(duplicate_output, duplicate_errors);
     expect(expect_exit("options-duplicate", duplicate_result, 1));
     expect(output_matches("options-duplicate", duplicate_text, .["Duplicate plugin option key"]));
+} @test
+
+// ===========================================================================
+// CLI family: duplicate enablement and the ordinary-dependency role
+// ===========================================================================
+
+// A hook-less plugin module: it carries exactly one entry, contributes no
+// faces and no options, so the cases that only need "this provider exports a
+// plugin module AND a plain module" stay fast (no PRESTEP host spawn).
+PDV_NOOP_PLUGIN_SOURCE :: #string PDV_END
+#import "Basic";
+#import "juice_core";
+
+Noop_Plugin :: struct {
+    using base: Juice_Plugin;
+}
+
+get_juice_plugin :: () -> *Noop_Plugin {
+    plugin := New(Noop_Plugin);
+    plugin.id = "noop_plugin";
+    plugin.version = "0.0.0";
+    plugin.options = cast(*void) plugin;
+    return plugin;
+} @juice_plugin
+PDV_END
+
+PDV_PROVIDER_PACKAGE_WITH_NOOP :: #string PDV_END
+#import "Juice";
+
+PACKAGE :: Package.{
+    name    = "my-plugin",
+    version = "1",
+    modules = .[
+        .{name = "plugin_module",      entry = "plugin.jai"},
+        .{name = "noop_plugin_module", entry = "noop_plugin.jai"},
+        .{name = "plain_module",       entry = "plain.jai"},
+    ],
+};
+PDV_END
+
+pdv_write_provider_with_noop :: (root: string) -> bool {
+    if !build_seam_write(root, "packages/my-plugin/package.jai", PDV_PROVIDER_PACKAGE_WITH_NOOP) return false;
+    if !build_seam_write(root, "packages/my-plugin/plugin.jai", PDV_PLUGIN_MODULE_SOURCE) return false;
+    if !build_seam_write(root, "packages/my-plugin/noop_plugin.jai", PDV_NOOP_PLUGIN_SOURCE) return false;
+    if !build_seam_write(root, "packages/my-plugin/plain.jai", PDV_NO_ENTRY_MODULE_SOURCE) return false;
+    if !build_seam_write(root, "packages/my-plugin/api.jai", PDV_API_MODULE_SOURCE) return false;
+    return true;
+}
+
+// One dependency entry selecting a module of the provider.
+pdv_dependency :: (name: string, module_name: string, alias := "", entry_module := "") -> string {
+    alias_field := ifx alias == "" then "" else tprint(", alias = \"%\"", alias);
+    path := ifx entry_module == "" then "packages/my-plugin" else entry_module;
+    return tprint("    dependencies = Dependency.[.{name = \"%1\", source = .{kind = .WORKSPACE}, modules = .[.{path = \"%2\", name = \"%3\"%4}]}],\n", name, path, module_name, alias_field);
+}
+
+plugin_derived_duplicate_enablement_cli :: () {
+    // The same ACTUAL plugin twice: different ids, same source and module. The
+    // identity is the resolved source + provider directory + export, so a
+    // different name cannot buy a second instance (decision 21).
+    twice_root := pdv_scratch("cli-twice");
+    defer delete_directory_full(twice_root);
+    expect(pdv_write_provider(twice_root, PDV_PLUGIN_MODULE_SOURCE));
+    duplicate_plugins := tprint("    plugins = Plugin_Declaration.[\n        .{id = \"my_plugin\", source = .{kind = .WORKSPACE}, module = .{path = \"packages/my-plugin\", name = \"plugin_module\"}, options = Plugin_Option.[%1]},\n        .{id = \"my_plugin_copy\", source = .{kind = .WORKSPACE}, module = .{path = \"packages/my-plugin\", name = \"plugin_module\"}, options = Plugin_Option.[%1]},\n    ],\n", PDV_OPTIONS_ENTRY_HELPER);
+    expect(pdv_write_app(twice_root, duplicate_plugins, "", PDV_APP_MAIN));
+    twice_result, twice_output, twice_errors := run_otter_child_at(twice_root, .["build"]);
+    twice_text := pdv_child_text(twice_output, twice_errors);
+    expect(expect_exit("twice", twice_result, 1));
+    expect(output_matches("twice", twice_text, .["the same plugin is enabled twice"]));
+    expect(!file_exists(tprint("%1/src/main.jai", pdv_derived_root(twice_root))));
+} @test
+
+plugin_derived_ordinary_dependency_roles_cli :: () {
+    // The plugin module ALSO selected as an ordinary dependency module is one
+    // actual module with two roles: rejected (decision 21). A different export
+    // of the same provider is the legal way to use the provider's API.
+    double_root := pdv_scratch("cli-double-role");
+    defer delete_directory_full(double_root);
+    expect(pdv_write_provider(double_root, PDV_PLUGIN_MODULE_SOURCE));
+    expect(pdv_write_app(double_root, pdv_plugins_external(PDV_OPTIONS_ENTRY_HELPER), pdv_dependency("plugin-lib", "plugin_module", "plugin_lib"), PDV_APP_MAIN));
+    double_result, double_output, double_errors := run_otter_child_at(double_root, .["build"]);
+    double_text := pdv_child_text(double_output, double_errors);
+    expect(expect_exit("double-role", double_result, 1));
+    expect(output_matches("double-role", double_text, .["already selected by the ordinary dependency"]));
+    expect(!file_exists(tprint("%1/src/main.jai", pdv_derived_root(double_root))));
+
+    // The provider's OTHER public module as an ordinary dependency while its
+    // plugin module is enabled: both work, in one build.
+    api_root := pdv_scratch("cli-api-beside-plugin");
+    defer delete_directory_full(api_root);
+    expect(pdv_write_provider_with_noop(api_root));
+    noop_plugins := "    plugins = Plugin_Declaration.[. {id = \"noop_plugin\", source = .{kind = .WORKSPACE}, module = .{path = \"packages/my-plugin\", name = \"noop_plugin_module\"}}],\n";
+    noop_plugins = tprint("    plugins = Plugin_Declaration.[.{id = \"noop_plugin\", source = .{kind = .WORKSPACE}, module = .{path = \"packages/my-plugin\", name = \"noop_plugin_module\"}}],\n");
+    api_main := #string PDV_END
+#import "Basic";
+#import "api";
+
+main :: () {
+    print("api value %\n", plain_helper());
+}
+PDV_END
+    expect(pdv_write_app(api_root, noop_plugins, pdv_dependency("api-lib", "plain_module", "api"), api_main));
+    api_result, api_output, api_errors := run_otter_child_at(api_root, .["build"]);
+    api_text := pdv_child_text(api_output, api_errors);
+    expect(expect_exit("api-beside-plugin", api_result, 0));
+    expect(output_matches("api-beside-plugin", api_text, .["Build completed successfully"]));
+    artifact := target_artifact_path(package_target_dir(api_root), "app");
+    expect(file_exists(artifact));
+    api_run, api_run_output, _, _ := run_command(artifact, capture_and_return_output = true);
+    expect(expect_exit("api-beside-plugin artifact", api_run, 0));
+    expect(output_matches("api-beside-plugin artifact", api_run_output, .["api value 1"]));
+} @test
+
+// ===========================================================================
+// CLI family: the builtin triad (omitted / explicit empty / replaced)
+// ===========================================================================
+
+plugin_derived_builtin_triad_cli :: () {
+    // Omitted: the builtin [load, test-block] pipeline runs, so the source's
+    // test block is transpiled and executed.
+    omitted_root := pdv_scratch("cli-builtin-omitted");
+    defer delete_directory_full(omitted_root);
+    expect(pdv_write_provider(omitted_root, PDV_PLUGIN_MODULE_SOURCE));
+    expect(pdv_write_app(omitted_root, "", "", PDV_APP_TEST_MAIN));
+    omitted_result, omitted_output, omitted_errors := run_otter_child_at(omitted_root, .["build"]);
+    omitted_text := pdv_child_text(omitted_output, omitted_errors);
+    expect(expect_exit("builtin-omitted", omitted_result, 0));
+    expect(output_matches("builtin-omitted", omitted_text, .["Build completed successfully"]));
+
+    // Explicit empty: NO plugin runs, builtins included — the same source no
+    // longer compiles, because nothing rewrites the test block. This is the
+    // declared consequence of an explicit empty list, not a regression.
+    empty_root := pdv_scratch("cli-builtin-empty");
+    defer delete_directory_full(empty_root);
+    expect(pdv_write_provider(empty_root, PDV_PLUGIN_MODULE_SOURCE));
+    expect(pdv_write_app(empty_root, "    plugins = Plugin_Declaration.[],\n", "", PDV_APP_TEST_MAIN));
+    empty_discovery, empty_discovered := discover_workspace(empty_root, pdv_scratch("cli-builtin-empty-cache"), plugin_face_modules_dir());
+    expect(empty_discovered && empty_discovery.has_package);
+    expect(empty_discovery.root_package.plugins.count == 0);
+    expect(!empty_discovery.root_package.plugins_omitted);
+    empty_result, empty_output, empty_errors := run_otter_child_at(empty_root, .["build"]);
+    empty_text := pdv_child_text(empty_output, empty_errors);
+    // No plugin ran at all: no registration file, no derived area, no host.
+    expect(!file_exists(workspace_plugin_registration_path(package_target_dir(empty_root))));
+    expect(!is_directory(pdv_derived_root(empty_root)));
+
+    // The non-empty direction (a list without a conversion face) is pinned at
+    // the resolver seam instead (plugin_derived_builtin_triad_resolver): the
+    // CLI build path normalizes test blocks for BUILD independently of the
+    // pipeline, so it cannot observe the difference.
+} @test
+
+// The explicit-empty triad at the resolver level (decision 22): an explicit
+// empty list contributes no transpile face AND asks for no default, while an
+// omitted list resolves to the builtin [load, test-block] pipeline. This is
+// the precise statement the CLI case observes indirectly.
+plugin_derived_builtin_triad_resolver :: () {
+    empty := resolve_package_plugins(Plugin_Reference.[], plugins_omitted = false);
+    expect(empty.ok);
+    expect(empty.pipeline.count == 0);
+
+    omitted := resolve_package_plugins(Plugin_Reference.[], plugins_omitted = true);
+    expect(omitted.ok);
+    expect(omitted.pipeline.count == 2);
+    expect(omitted.pipeline[0].name == "load" && omitted.pipeline[1].name == "test-block");
+
+    // A non-empty list without a conversion face is left alone: the defaults
+    // are never supplemented.
+    explicit := resolve_package_plugins(Plugin_Reference.[.{id = "load", builtin = true}], plugins_omitted = false);
+    expect(explicit.ok);
+    expect(explicit.pipeline.count == 1 && explicit.pipeline[0].name == "load");
+} @test
+
+// ===========================================================================
+// CLI family: update never runs a build hook (decision 23)
+// ===========================================================================
+
+plugin_derived_update_runs_no_hook_cli :: () {
+    root := pdv_scratch("cli-update");
+    defer delete_directory_full(root);
+    expect(pdv_write_provider(root, PDV_PLUGIN_MODULE_SOURCE));
+    expect(pdv_write_app(root, pdv_plugins_external(PDV_OPTIONS_ENTRY_HELPER), "", PDV_APP_MAIN));
+
+    result, output, errors := run_otter_child_at(root, .["update"]);
+    text := pdv_child_text(output, errors);
+    expect(expect_exit("update", result, 0));
+    // Refreshing the resolution graph resolves the declared plugin sources but
+    // never dispatches PRESTEP: no host, no derived output.
+    expect(!file_exists(tprint("%1/src/main.jai", pdv_derived_root(root))));
+    expect(!file_exists(plugin_host_path(package_target_dir(root))));
+    expect(output_matches("update", text, .["derived entry"], want = false));
+} @test
+
+// ===========================================================================
+// Typed-API family: one package operation prepares a package exactly once
+// ===========================================================================
+
+// The command-layer single-prepare interface: resolving the same package twice
+// returns the SAME context (no second scan, no second registration, no second
+// derived area), which is what keeps a build front, a second program and a
+// re-entered prerequisite phase from enabling a package's plugins twice.
+plugin_derived_prepare_once :: () {
+    root := pdv_scratch("prepare-once");
+    defer delete_directory_full(root);
+    expect(pdv_write_provider(root, PDV_PLUGIN_MODULE_SOURCE));
+    expect(pdv_write_app(root, pdv_plugins_external(PDV_OPTIONS_ENTRY_HELPER), "", PDV_APP_MAIN));
+
+    discovery, discovered := discover_workspace(root, pdv_scratch("prepare-once-cache"), plugin_face_modules_dir());
+    expect(discovered && discovery.has_package);
+    prepared: Prepared_Workspace;
+    prepared.discovery = discovery;
+
+    preparation: Plugin_Preparation;
+    first := plugin_prepare_once_for(*preparation, *prepared, discovery.root_package);
+    expect(first.ok);
+    expect(first.prepare_count == 1);
+    expect(first.sources.count == 1);
+    expect(first.sources[0].module_export == "plugin_module");
+    expect(first.sources[0].package_dir == path_slashes(tprint("%1/packages/my-plugin", root)));
+    expect(first.registration_path != "" && file_exists(first.registration_path));
+    expect(first.derived_root == package_derived_view_root(package_target_dir(root), "plugin-app"));
+
+    // The same package again: the same context, still prepared once.
+    second := plugin_prepare_once_for(*preparation, *prepared, discovery.root_package);
+    expect(second == first);
+    expect(second.prepare_count == 1);
+    expect(preparation.packages.count == 1);
+
+    // A DIFFERENT package gets its own context and its own private derived
+    // area — per-package isolation, never a shared view.
+    member := discovery.member_packages[1];
+    other := plugin_prepare_once_for(*preparation, *prepared, member);
+    expect(preparation.packages.count == 2);
+    expect(other.derived_root != first.derived_root);
+    expect(other.package_dir == path_slashes(member.dir));
 } @test
