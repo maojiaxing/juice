@@ -588,8 +588,8 @@ test "E2E：fixture 插件包全链（扫描→注册文件→真编译→合并
     // generates the driver, spawns the real jai compiler. The configs are
     // the fixture's declared plugin ids (the resolver input, ticket 056).
     result, output, errors := run_plugin_scan_child("plugin-fixture", "fixture_mark", Plugin_Config.[
-        .{id = "extra", version = "1.0.0"},
-        .{id = "plugin-fixture", version = "1.0.0"},
+        .{id = "extra"},
+        .{id = "plugin-fixture"},
     ]);
     if expect_exit("plugin-scan", result, 0) {
         ok := true;
@@ -644,7 +644,7 @@ test "E2E：坏 fixture 插件包全链（扫描→注册→合并/解析响亮�
     // generates the driver, spawns the real jai compiler. The declared id is
     // the duplicate both fixture plugins claim.
     result, output, errors := run_plugin_scan_child("plugin-fixture-bad", "bad_mark", Plugin_Config.[
-        .{id = "bad-shared", version = "1.0.0"},
+        .{id = "bad-shared"},
     ]);
     if expect_exit("plugin-scan-bad", result, 0) {
         ok := true;

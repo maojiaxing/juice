@@ -85,6 +85,12 @@ Prepared_Workspace :: struct {
     discovery: Workspace_Discovery;
     artifact_plans: [] Artifact_Plan;
     dependencies_prepared: bool;
+    // The resolution environment the preparation ran with (ticket 0092: the
+    // plugin source resolution reuses the dependency resolution environment, so
+    // a plugin Git source and a dependency Git source behave identically). The
+    // command layer fills it before preparation; plugins never derive it from a
+    // process-global value.
+    environment: Resolution_Environment;
 }
 
 // Command selection request (spec 0087 decision 18). The mutual exclusion of

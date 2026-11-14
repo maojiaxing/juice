@@ -268,8 +268,8 @@ test "Merge/Resolve: declaration order feeds the pipeline and the hook table" {
     // The declared order b, a reaches the pipeline reversed and the hook
     // table in declaration order (registration order = execution order).
     resolved := resolve_plugin_configs(merged.registry, Plugin_Config.[
-        .{id = "b", version = "2.0.0"},
-        .{id = "a", version = "1.0.0"},
+        .{id = "b"},
+        .{id = "a"},
     ]);
     expect(resolved.ok);
     expect(resolved.pipeline.count == 2);
@@ -343,8 +343,8 @@ test "Merge: before/after hooks stack freely on one mount" {
     // Both contributions register on one mount, declaration order preserved
     // (the resolver is the hook-table landing point).
     resolved := resolve_plugin_configs(merged.registry, Plugin_Config.[
-        plug_config("a", "1.0.0"),
-        plug_config("b", "1.0.0"),
+        plug_config("a"),
+        plug_config("b"),
     ]);
     expect(resolved.ok);
     expect(resolved.hook_table.count == 2);
@@ -378,7 +378,7 @@ test "Merge: a plugin contributing no faces is legal" {
     expect(merged.registry.count == 1);
     // Declared but face-less: contributes nothing to any product channel; no
     // declared transpile face means the default pipeline.
-    resolved := resolve_plugin_configs(merged.registry, Plugin_Config.[.{id = "observer-only", version = "1.0.0"}]);
+    resolved := resolve_plugin_configs(merged.registry, Plugin_Config.[.{id = "observer-only"}]);
     expect(resolved.ok);
     expect(resolved.pipeline.count == 2);
     expect(resolved.pipeline[0].name == "load" && resolved.pipeline[1].name == "test-block");
@@ -427,7 +427,7 @@ test "Merge/Resolve: the resolved product feeds the executor directly" {
     array_add(*hooked.hooks, plug_hook(.TRANSPILE, .before));
     // The recording hook reads its slot through plugin_state; the resolver's
     // slot_options is the aligned host input.
-    hooked_resolved := resolve_plugin_configs(.[as_plugin(hooked)], Plugin_Config.[.{id = "hooked", version = "1.0.0"}]);
+    hooked_resolved := resolve_plugin_configs(.[as_plugin(hooked)], Plugin_Config.[.{id = "hooked"}]);
     expect(hooked_resolved.ok);
     expect(hooked_resolved.hook_table.count == 1);
     diags: [..] Lifecycle_Diagnostic;
@@ -544,13 +544,13 @@ test "Merge: duplicate lint rule names conflict across plugins" {
 // ===========================================================================
 
 // A config without option rows.
-plug_config :: (id: string, version: string) -> Plugin_Config {
-    return .{id = id, version = version};
+plug_config :: (id: string) -> Plugin_Config {
+    return .{id = id};
 }
 
 // A config with option rows.
-plug_config_with_rows :: (id: string, version: string, rows: [] Option_Row) -> Plugin_Config {
-    return .{id = id, version = version, options = rows};
+plug_config_with_rows :: (id: string, rows: [] Option_Row) -> Plugin_Config {
+    return .{id = id, options = rows};
 }
 
 test "Resolver: face default — no declared transpile face yields [load, test-block]" {
@@ -563,7 +563,7 @@ test "Resolver: face default — no declared transpile face yields [load, test-b
     expect(empty.pipeline[0].name == "load" && empty.pipeline[1].name == "test-block");
 
     lint_only := plug_lint_plugin("lint-only", "rule", "1.0.0");
-    resolved := resolve_plugin_configs(.[as_plugin(lint_only)], Plugin_Config.[plug_config("lint-only", "1.0.0")]);
+    resolved := resolve_plugin_configs(.[as_plugin(lint_only)], Plugin_Config.[plug_config("lint-only")]);
     expect(resolved.ok);
     expect(resolved.pipeline.count == 2);
     expect(resolved.pipeline[0].name == "load" && resolved.pipeline[1].name == "test-block");
@@ -584,7 +584,7 @@ test "Resolver: declaration order drives the pipeline, hooks and lint; undeclare
     array_add(*registry, as_plugin(used));
     array_add(*registry, as_plugin(unused));
 
-    resolved := resolve_plugin_configs(registry, Plugin_Config.[plug_config("used", "1.0.0")]);
+    resolved := resolve_plugin_configs(registry, Plugin_Config.[plug_config("used")]);
     expect(resolved.ok);
     // Only the declared plugin's faces exist: its pipeline face, its hooks
     // and its lint rule. The undeclared plugin never contributes.
@@ -595,7 +595,7 @@ test "Resolver: declaration order drives the pipeline, hooks and lint; undeclare
 }
 
 test "Resolver: an unknown plugin id rejects" {
-    resolved := resolve_plugin_configs(builtin_plugins(), Plugin_Config.[plug_config("mystery", "1")]);
+    resolved := resolve_plugin_configs(builtin_plugins(), Plugin_Config.[plug_config("mystery")]);
     expect(!resolved.ok);
     expect(resolved.diagnostics.count == 1);
     expect(resolved.diagnostics[0].message == "unknown plugin id: mystery");
@@ -605,12 +605,26 @@ test "Resolver: an unknown plugin id rejects" {
     expect(resolved.pipeline.count == 2);
 }
 
-test "Resolver: a version mismatch rejects" {
-    resolved := resolve_plugin_configs(builtin_plugins(), Plugin_Config.[plug_config("load", "9.9.9")]);
+test "Resolver: an incompatible plugin entry ABI rejects (no declared version)" {
+    // Spec 0087 decision 21/22: compatibility is the entry ABI, checked
+    // independently of any package version or Git selector; a plugin
+    // enablement declares no version at all (Plugin_Config carries none).
+    // The built-in load plugin keeps the ABI it ships with, so a
+    // declaration of it resolves; a value compiled against another face
+    // fails before its options and hooks are reached.
+    compatible := resolve_plugin_configs(builtin_plugins(), Plugin_Config.[plug_config("load")]);
+    expect(compatible.ok);
+    expect(compatible.pipeline.count == 1 && compatible.pipeline[0].name == "load");
+
+    stale := builtin_load_plugin();
+    stale.abi_version = JUICE_PLUGIN_ABI_VERSION - 1;
+    resolved := resolve_plugin_configs(.[stale], Plugin_Config.[plug_config("load")]);
     expect(!resolved.ok);
     expect(resolved.diagnostics.count == 1);
-    expect(resolved.diagnostics[0].message == "plugin version mismatch: load (declared 9.9.9, plugin 1.0.0)");
-    expect(resolved.pipeline.count == 2);
+    expect(resolved.diagnostics[0].message == tprint("incompatible plugin entry ABI: load (plugin %, juice supports %)", JUICE_PLUGIN_ABI_VERSION - 1, JUICE_PLUGIN_ABI_VERSION));
+    expect(resolved.diagnostics[0].line == 0 && resolved.diagnostics[0].column == 0);
+    // The unusable product carries no face of the rejected plugin.
+    expect(resolved.pipeline.count == 0);
 }
 
 test "Resolver: one package providing several plugins rejects (the v1 rule)" {
@@ -618,7 +632,7 @@ test "Resolver: one package providing several plugins rejects (the v1 rule)" {
     // itself would have rejected the duplicate registration).
     first := plug_fake("dup", "1.0.0", "face-a");
     second := plug_fake("dup", "1.0.0", "face-b");
-    resolved := resolve_plugin_configs(.[as_plugin(first), as_plugin(second)], Plugin_Config.[plug_config("dup", "1.0.0")]);
+    resolved := resolve_plugin_configs(.[as_plugin(first), as_plugin(second)], Plugin_Config.[plug_config("dup")]);
     expect(!resolved.ok);
     expect(resolved.diagnostics.count == 1);
     expect(resolved.diagnostics[0].message == "plugin package provides multiple plugins: dup");
@@ -629,8 +643,8 @@ test "Resolver: one package providing several plugins rejects (the v1 rule)" {
 test "Resolver: a repeated declaration id rejects" {
     plugin := plug_fake("once", "1.0.0", "face-once");
     resolved := resolve_plugin_configs(.[as_plugin(plugin)], Plugin_Config.[
-        plug_config("once", "1.0.0"),
-        plug_config("once", "1.0.0"),
+        plug_config("once"),
+        plug_config("once"),
     ]);
     expect(!resolved.ok);
     expect(resolved.diagnostics.count == 1);
@@ -643,7 +657,7 @@ test "Resolver: option rows apply through the schema, then validate runs" {
     array_add(*registry, as_plugin(plugin));
 
     // A valid row lands in the typed options field (the apply channel).
-    resolved := resolve_plugin_configs(registry, Plugin_Config.[plug_config_with_rows("opt", "1.0.0", Option_Row.[
+    resolved := resolve_plugin_configs(registry, Plugin_Config.[plug_config_with_rows("opt", Option_Row.[
         .{key = "label", value = "clean"},
     ])]);
     expect(resolved.ok);
@@ -651,7 +665,7 @@ test "Resolver: option rows apply through the schema, then validate runs" {
 
     // validate runs after all rows: the space rejection surfaces as a
     // diagnostic (the row was still applied).
-    resolved = resolve_plugin_configs(registry, Plugin_Config.[plug_config_with_rows("opt", "1.0.0", Option_Row.[
+    resolved = resolve_plugin_configs(registry, Plugin_Config.[plug_config_with_rows("opt", Option_Row.[
         .{key = "label", value = "bad label"},
     ])]);
     expect(!resolved.ok);
@@ -662,7 +676,7 @@ test "Resolver: option rows apply through the schema, then validate runs" {
     // the plugin's schema. Reset the typed value first so the validate pass
     // stays clean and the unknown-key report is the only diagnostic.
     plugin.config.label = "clean";
-    resolved = resolve_plugin_configs(registry, Plugin_Config.[plug_config_with_rows("opt", "1.0.0", Option_Row.[
+    resolved = resolve_plugin_configs(registry, Plugin_Config.[plug_config_with_rows("opt", Option_Row.[
         .{key = "mystery", value = "x"},
     ])]);
     expect(!resolved.ok);
@@ -671,7 +685,7 @@ test "Resolver: option rows apply through the schema, then validate runs" {
 
     // Duplicate keys in one declaration reject up front.
     plugin.config.label = "clean";
-    resolved = resolve_plugin_configs(registry, Plugin_Config.[plug_config_with_rows("opt", "1.0.0", Option_Row.[
+    resolved = resolve_plugin_configs(registry, Plugin_Config.[plug_config_with_rows("opt", Option_Row.[
         .{key = "label", value = "a"},
         .{key = "label", value = "b"},
     ])]);
@@ -682,7 +696,7 @@ test "Resolver: option rows apply through the schema, then validate runs" {
 
 test "Resolver: a plugin without a schema rejects option rows" {
     plugin := plug_fake("bare", "1.0.0", "");
-    resolved := resolve_plugin_configs(.[as_plugin(plugin)], Plugin_Config.[plug_config_with_rows("bare", "1.0.0", Option_Row.[
+    resolved := resolve_plugin_configs(.[as_plugin(plugin)], Plugin_Config.[plug_config_with_rows("bare", Option_Row.[
         .{key = "anything", value = "x"},
     ])]);
     expect(!resolved.ok);

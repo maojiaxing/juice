@@ -328,6 +328,7 @@ prepare_workspace :: (
     }
     prepared := Prepared_Workspace.{};
     prepared.discovery = state.discovery;
+    prepared.environment = state.environment;
     prepared.artifact_plans = plans_result.plans;
     if prepared.artifact_plans.count > 0 || force_dependencies {
         print("[juice] Preparing workspace dependencies...\n");

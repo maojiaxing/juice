@@ -348,7 +348,7 @@ test "Plugin host driver: the generated text embeds the inputs and runs PRESTEP 
     options.mode = "test";
     options.member_dirs = string.["C:/repo/packages/prestep-plugin"];
     options.configs = Plugin_Config.[
-        .{id = "prestep-plugin", version = "0.1.0", options = Option_Row.[.{key = "entry", value = "src/main.jai"}]},
+        .{id = "prestep-plugin", options = Option_Row.[.{key = "entry", value = "src/main.jai"}]},
     ];
     options.registration_path = "C:/repo/target/plugins/registration.jai";
     options.host_path = "C:/repo/target/plugins/host.jai";
@@ -365,7 +365,7 @@ test "Plugin host driver: the generated text embeds the inputs and runs PRESTEP 
     expect(find_index_from_left(text, "HOST_MODE :: \"test\";") >= 0);
     expect(find_index_from_left(text, "HOST_MEMBER_DIRS :: string.[\"C:/repo/packages/prestep-plugin\"];") >= 0);
     expect(find_index_from_left(text, "HOST_OUTPUT_PATH :: \"C:/repo/target/plugins/host-records.txt\";") >= 0);
-    expect(find_index_from_left(text, "plugin_configs: [] Plugin_Config = Plugin_Config.[.{ id = \"prestep-plugin\", version = \"0.1.0\", options = Option_Row.[.{ key = \"entry\", value = \"src/main.jai\" }] }];") >= 0);
+    expect(find_index_from_left(text, "plugin_configs: [] Plugin_Config = Plugin_Config.[.{ id = \"prestep-plugin\", options = Option_Row.[.{ key = \"entry\", value = \"src/main.jai\" }] }];") >= 0);
     // The resolve + dispatch + record emission chain.
     expect(find_index_from_left(text, "merged := merge_plugins(plugins);") >= 0);
     expect(find_index_from_left(text, "resolved := resolve_plugin_configs(merged.registry, plugin_configs);") >= 0);
@@ -413,7 +413,7 @@ test "Test command: the prepare registration drives the metaprogram without a se
     generated, ok := read_entire_file(test_test_spawn_path);
     expect(ok);
     expect(find_index_from_left(generated, "#load \"C:/sentinel/registration.jai\";") >= 0);
-    expect(find_index_from_left(generated, ".{ id = \"ghost-member\", version = \"\", options = Option_Row.[] }") >= 0);
+    expect(find_index_from_left(generated, ".{ id = \"ghost-member\", options = Option_Row.[] }") >= 0);
     expect(find_index_from_left(generated, tprint("set_working_directory(\"%1\");", root)) >= 0);
     // No scan landed a registration in this workspace.
     expect(!is_directory(target_plugins_dir(package_target_dir(root))));

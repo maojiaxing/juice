@@ -184,8 +184,11 @@ build_plan_entry :: (
         print("[juice ERROR] The pre-step dropped the build entry: %\n", entry_rel);
         return "", false;
     }
-    replacement, substituted := prestep_substitution_for(prestep, entry_rel);
-    if substituted {
+    // This round's registered derived source (a substitution OR an auxiliary
+    // registration) is the compile input; the logical path stays the entry's
+    // (spec 0087 decision 24: 源替换保留逻辑路径，物理路径仅用于读取).
+    replacement, derived := prestep_derived_source_for(prestep, entry_rel);
+    if derived {
         return path_slashes(replacement), true;
     }
 
@@ -410,7 +413,10 @@ build_prepared_workspace :: (
     // table (the command process holds built-in values only; member values
     // are validated where they exist — the test metaprogram / the PRESTEP
     // host). Zero declarations cost nothing (no I/O).
-    plugin_prepare := prepare_workspace_plugins(prepared);
+    preparation: Plugin_Preparation;
+    preparation.environment = prepared.environment;
+    plugin_view := plugin_prepare_once_for(*preparation, prepared, prepared.discovery.root_package);
+    plugin_prepare := plugin_prepare_result(plugin_view);
     report_plugin_prepare(plugin_prepare);
     if !plugin_prepare.ok return false;
     resolved := resolve_package_plugins(prepared.discovery.root_package.plugins, prepared.discovery.root_package.plugins_omitted);
@@ -461,6 +467,7 @@ build_prepared_workspace :: (
     // selection below reads the original sources exactly as before.
     pstage: Prestep_Stage;
     pstage.root_dir = prepared.discovery.root_dir;
+    if !prepare_package_derived_view(plugin_view, *pstage) return false;
     for pkg, index: prepared.discovery.member_packages {
         if index == 0 continue;   // the root package itself
         array_add(*pstage.member_dirs, copy_string(pkg.dir));

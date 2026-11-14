@@ -79,53 +79,182 @@ Plugin_Prepare_Result :: struct {
     diagnostics:       [..] Plugin_Scan_Diagnostic;
 }
 
-// Command-level plugin preparation: the only declaration scan / member shim /
-// registration landing point (build and test both call this before PRESTEP;
-// the test metaprogram consumes the returned registration without scanning).
-// The scan validates every declared member id, links the declared members
-// through their ordinary import shims and returns the hits in declaration
-// order. With hits the merged registration file lands at
-// <root>/target/plugins/registration.jai; zero hits write nothing (the
-// in-process static values need no registration and no host).
-prepare_workspace_plugins :: (prepared: *Prepared_Workspace) -> Plugin_Prepare_Result {
-    result: Plugin_Prepare_Result;
-    scan := scan_workspace_plugins(prepared.discovery);
-    result.hits = scan.hits;
-    result.diagnostics = scan.diagnostics;
-    result.ok = scan.ok;
-    result.member_hooks = scan.has_hooks;
-    if !scan.ok return result;
-    if scan.hits.count == 0 {
-        // Zero declared member plugins = no registration file. A previous run
-        // in this workspace may have declared some (the session artifact
-        // outlives the declaration); remove the stale file so the contract
-        // holds. It is never consumed anyway — the path is only handed out
-        // when this run wrote it.
-        if prepared.discovery.root_dir != "" {
-            target_dir := package_target_dir(prepared.discovery.root_dir);
-            registration := workspace_plugin_registration_path(target_dir);
-            if file_exists(registration) && !file_delete(registration) {
-                array_add(*result.diagnostics, .{rel_path = "target/plugins/registration.jai", message = tprint("Could not remove the stale plugin registration: %", registration), fatal = true});
-                result.ok = false;
-            }
+// One selected package's plugin preparation (ticket 0092, spec 0087 decision
+// 23: 各被选包使用自身插件声明和私有状态). Everything about one package lives
+// here: the resolved plugin sources, the registration landing path, the
+// private derived view (its source root and its derived output root) and the
+// hooks-face signal. Packages never share any of it, and the root package's
+// declarations are never inherited by a member.
+Prepared_Package_Plugins :: struct {
+    package_dir:       string;
+    package_name:      string;
+    registration_path: string;                          // "" = no external plugin
+    sources:           [..] Resolved_Plugin_Source;     // declaration order
+    derived_root:      string;                          // private output root
+    package_root:      string;                          // read-only source root
+    member_hooks:      bool;
+    hits:              [..] Plugin_Scan_Hit;            // registration order
+    diagnostics:       [..] Plugin_Scan_Diagnostic;
+    ok:                bool;
+    // How many times this package's plugin sources were resolved. The
+    // command layer only ever reads a prepared context (prepare_once_for),
+    // so a build front, a second program or a re-entered phase never
+    // re-resolves or re-runs a package's plugins: the field stays 1.
+    prepare_count:     s64;
+}
+
+// The command-level preparation set: one context per selected package, in
+// selection order. The command builds it once per operation and then reads it
+// through plugin_prepare_once_for (the single-prepare interface ticket 0092
+// requires: "提供命令层"只 prepare 一次的接口").
+Plugin_Preparation :: struct {
+    // The resolution environment (Git record reuse / offline / update). Filled
+    // by the command layer before the first prepare; plugin source resolution
+    // reuses it, so a plugin Git source behaves exactly like a dependency
+    // source. `update` mode still resolves sources but never runs a hook.
+    environment: Resolution_Environment;
+    packages:    [..] Prepared_Package_Plugins;
+    ok:          bool;
+    diagnostics: [..] Plugin_Scan_Diagnostic;
+}
+
+// Prepare one package's plugins. Resolving a package that already has a
+// context is a no-op that returns the SAME context (the single-prepare
+// guarantee); a new package appends a context with prepare_count = 1.
+prepare_plugins_once :: (preparation: *Plugin_Preparation, prepared: *Prepared_Workspace, package: Normalized_Package) -> *Prepared_Package_Plugins {
+    package_root := path_slashes(package.dir);
+    for prepared_package, index: preparation.packages {
+        if prepared_package.package_dir != package_root continue;
+        return *preparation.packages[index];
+    }
+
+    entry: Prepared_Package_Plugins;
+    entry.package_dir = package_root;
+    entry.package_name = package.name;
+    entry.package_root = package_root;
+    entry.derived_root = package_derived_view_root(package_target_dir(prepared.discovery.root_dir), package.name);
+    entry.prepare_count = 1;
+
+    request: Plugin_Source_Request;
+    request.discovery = prepared.discovery;
+    request.consumer = package;
+    request.environment = ifx preparation.environment.state_root != "" || preparation.environment.content_cache_root != "" then preparation.environment else prepared.environment;
+    resolved := resolve_plugin_sources(request);
+    entry.sources = resolved.sources;
+    entry.ok = resolved.ok;
+    for diagnostic: resolved.diagnostics array_add(*entry.diagnostics, diagnostic);
+
+    scan := plugin_scan_result_from_sources(prepared.discovery, resolved);
+    for diagnostic: scan.diagnostics {
+        already_reported := false;
+        for existing: entry.diagnostics {
+            if existing.message == diagnostic.message already_reported = true;
         }
-        return result;
+        if !already_reported array_add(*entry.diagnostics, diagnostic);
+    }
+    entry.member_hooks = scan.has_hooks;
+    entry.hits = scan.hits;
+    if !resolved.ok || !scan.ok {
+        entry.ok = false;
+        array_add(*preparation.packages, entry);
+        preparation.ok = false;
+        for diagnostic: entry.diagnostics array_add(*preparation.diagnostics, diagnostic);
+        return *preparation.packages[preparation.packages.count - 1];
     }
 
     target_dir := package_target_dir(prepared.discovery.root_dir);
-    registration := workspace_plugin_registration_path(target_dir);
+    landing := ifx package_root == path_slashes(prepared.discovery.root_dir)
+        then workspace_plugin_registration_path(target_dir)
+        else plugin_registration_path(target_dir, package.name);
+    entry.registration_path = write_package_plugin_registration(landing, package.name, scan.hits, *entry);
+    if !entry.ok {
+        array_add(*preparation.packages, entry);
+        preparation.ok = false;
+        for diagnostic: entry.diagnostics array_add(*preparation.diagnostics, diagnostic);
+        return *preparation.packages[preparation.packages.count - 1];
+    }
+
+    array_add(*preparation.packages, entry);
+    for diagnostic: entry.diagnostics if diagnostic.fatal preparation.ok = false;
+    return *preparation.packages[preparation.packages.count - 1];
+}
+
+// The registration landing point of one package: <target>/plugins/<package>/
+// registration.jai for a package with external plugins, "" when it has none
+// (the in-process built-in values need no registration and no host). A stale
+// file from an earlier declaration set is removed so the contract holds.
+write_package_plugin_registration :: (
+    registration: string,
+    package_name: string,
+    hits: [] Plugin_Scan_Hit,
+    entry: *Prepared_Package_Plugins
+) -> string {
+    if hits.count == 0 {
+        if file_exists(registration) && !file_delete(registration) {
+            array_add(*entry.diagnostics, .{rel_path = package_name, message = tprint("Could not remove the stale plugin registration: %", registration), fatal = true});
+            entry.ok = false;
+        }
+        return "";
+    }
     registration_dir := path_strip_filename(registration);
     if !make_directory_if_it_does_not_exist(registration_dir, recursive = true) {
-        array_add(*result.diagnostics, .{rel_path = "target/plugins", message = tprint("Could not create the plugin registration directory: %", registration_dir), fatal = true});
-        result.ok = false;
-        return result;
+        array_add(*entry.diagnostics, .{rel_path = package_name, message = tprint("Could not create the plugin registration directory: %", registration_dir), fatal = true});
+        entry.ok = false;
+        return "";
     }
-    if !write_entire_file(registration, generate_plugin_registration(scan.hits)) {
-        array_add(*result.diagnostics, .{rel_path = "target/plugins/registration.jai", message = tprint("Could not write the workspace plugin registration: %", registration), fatal = true});
-        result.ok = false;
-        return result;
+    if !write_entire_file(registration, generate_plugin_registration(hits)) {
+        array_add(*entry.diagnostics, .{rel_path = package_name, message = tprint("Could not write the plugin registration: %", registration), fatal = true});
+        entry.ok = false;
+        return "";
     }
-    result.registration_path = registration;
+    return registration;
+}
+
+// Attach a prepared package's private derived view to the stage the hooks will
+// fill (ticket 0092): the package's own source root becomes the logical path
+// base and its private derived directory the only place outputs may land. A
+// stale derived tree is removed for hygiene only — correctness comes from the
+// registration table, because nothing ever scans the derived directory (a file
+// an earlier run left behind can therefore never be consumed).
+prepare_package_derived_view :: (package_view: *Prepared_Package_Plugins, stage: *Prestep_Stage) -> bool {
+    stage.package_root = package_view.package_root;
+    stage.derived_root = package_view.derived_root;
+    if package_view.derived_root == "" return true;
+    if is_directory(package_view.derived_root) && !delete_directory_full(package_view.derived_root) {
+        print("[juice WARNING] Could not clear the stale private derived area: %\n", package_view.derived_root);
+    }
+    return true;
+}
+
+// The single-prepare read interface for the command layer: the package's
+// context, prepared on first use and reused afterwards. A build front that
+// runs once per package, a second program of the same package and an
+// idempotent prerequisite phase all come through here, so plugins are
+// prepared once and the view is consumed once.
+plugin_prepare_once_for :: (preparation: *Plugin_Preparation, prepared: *Prepared_Workspace, package: Normalized_Package) -> *Prepared_Package_Plugins {
+    return prepare_plugins_once(preparation, prepared, package);
+}
+
+// Command-level plugin preparation of the ROOT package: the pre-0092 entry
+// point, now a thin view over the per-package preparation (one package = one
+// context = one scan, one registration, one private derived view). Build and
+// test keep calling it for the current single-package selection; the
+// per-package interface below is what a multi-package command layers on.
+prepare_workspace_plugins :: (prepared: *Prepared_Workspace) -> Plugin_Prepare_Result {
+    preparation: Plugin_Preparation;
+    preparation.environment = prepared.environment;
+    return plugin_prepare_result(plugin_prepare_once_for(*preparation, prepared, prepared.discovery.root_package));
+}
+
+// The pre-0092 result shape over a prepared package context (the command's
+// reporting and registration hand-off read only these fields).
+plugin_prepare_result :: (package_view: *Prepared_Package_Plugins) -> Plugin_Prepare_Result {
+    result: Plugin_Prepare_Result;
+    result.ok = package_view.ok;
+    result.registration_path = package_view.registration_path;
+    result.member_hooks = package_view.member_hooks;
+    result.hits = package_view.hits;
+    for diagnostic: package_view.diagnostics array_add(*result.diagnostics, diagnostic);
     return result;
 }
 
@@ -158,10 +287,17 @@ Plugin_Host_Options :: struct {
     mode:              string;   // "build" / "test" (embedded; the PRESTEP-only
                                  // host behaves identically today)
     member_dirs:       [] string;
+    member_packages:   [] Normalized_Package;
     configs:           [] Plugin_Config;
     registration_path: string;
     host_path:         string;
     records_path:      string;
+    // The consuming package's read-only source root (the logical path base of
+    // the derived view) and its private derived output root. The host embeds
+    // both, so a plugin's registrations land inside its own package's private
+    // area and its substitutions resolve against its own sources.
+    package_root:      string;
+    derived_root:      string;
 }
 
 plugin_host_dir :: (target_dir: string) -> string {
@@ -181,18 +317,57 @@ plugin_host_records_path :: (target_dir: string) -> string {
 // configs carry only member declarations — the host's registry is exactly the
 // scanned member values (the static built-in values never cross the process
 // boundary).
-plugin_host_options :: (prepared: *Prepared_Workspace, stage: *Prestep_Stage, mode: string) -> Plugin_Host_Options {
-    options: Plugin_Host_Options;
-    options.root_dir = path_slashes(prepared.discovery.root_dir);
+// The workspace-level landing paths every per-package host option set shares.
+// Separate so the per-package construction below cannot drift from the
+// workspace-level one.
+plugin_host_context_over :: (prepared: *Prepared_Workspace) -> Plugin_Host_Options {
+    shared: Plugin_Host_Options;
+    shared.root_dir = path_slashes(prepared.discovery.root_dir);
+    target_dir := package_target_dir(prepared.discovery.root_dir);
+    shared.host_path = plugin_host_path(target_dir);
+    shared.records_path = plugin_host_records_path(target_dir);
+    shared.registration_path = workspace_plugin_registration_path(target_dir);
+    shared.member_packages = prepared.discovery.member_packages;
+    return shared;
+}
+
+// The host options of ONE consuming package (ticket 0092, spec 0087 decision
+// 23): the package's own declaration configs, its own registration file and
+// its own source/derived roots. Nothing here is inherited from the root
+// package, so a member's plugins resolve against the member's declarations and
+// write inside the member's private derived area.
+package_host_options :: (
+    prepared: *Prepared_Workspace,
+    package: Normalized_Package,
+    package_view: *Prepared_Package_Plugins,
+    stage: *Prestep_Stage,
+    mode: string
+) -> Plugin_Host_Options {
+    options := plugin_host_context_over(prepared);
     options.mode = mode;
+    options.configs = plugin_configs_from_declarations(package.plugins, prepared.discovery.member_packages);
+    options.registration_path = package_view.registration_path;
+    options.package_root = path_slashes(package_view.package_root);
+    options.derived_root = path_slashes(package_view.derived_root);
     member_dirs: [..] string;
     for dir: stage.member_dirs array_add(*member_dirs, copy_string(dir));
     options.member_dirs = member_dirs;
+    return options;
+}
+
+// The root package's host options over an already filled PRESTEP stage — the
+// pre-0092 entry, kept for the callers that only need the landing paths (the
+// protocol tests) and for the root package's own host run when a prepared
+// package context is not at hand. The derived-view roots come from the stage.
+plugin_host_options :: (prepared: *Prepared_Workspace, stage: *Prestep_Stage, mode: string) -> Plugin_Host_Options {
+    options := plugin_host_context_over(prepared);
+    options.mode = mode;
     options.configs = plugin_configs_from_declarations(prepared.discovery.root_package.plugins, prepared.discovery.member_packages);
-    target_dir := package_target_dir(prepared.discovery.root_dir);
-    options.registration_path = workspace_plugin_registration_path(target_dir);
-    options.host_path = plugin_host_path(target_dir);
-    options.records_path = plugin_host_records_path(target_dir);
+    member_dirs: [..] string;
+    for dir: stage.member_dirs array_add(*member_dirs, copy_string(dir));
+    options.member_dirs = member_dirs;
+    options.package_root = path_slashes(stage.package_root);
+    options.derived_root = path_slashes(stage.derived_root);
     return options;
 }
 
@@ -229,13 +404,13 @@ append_host_escape_code :: (builder: *String_Builder) {
 }
 
 // One Plugin_Config literal array (the same shape the test metaprogram
-// embeds): the member declarations' ids, versions and option rows in
-// declaration order.
+// embeds): the member declarations' ids and option rows in declaration
+// order (no declared version — the entry ABI check replaces it).
 append_host_plugin_configs :: (builder: *String_Builder, configs: [] Plugin_Config) {
     append(builder, "plugin_configs: [] Plugin_Config = Plugin_Config.[");
     for config, config_index: configs {
         if config_index > 0 append(builder, ", ");
-        print_to_builder(builder, ".{ id = %1, version = %2, options = Option_Row.[", quote_jai_string(config.id), quote_jai_string(config.version));
+        print_to_builder(builder, ".{ id = %1, options = Option_Row.[", quote_jai_string(config.id));
         for row, row_index: config.options {
             if row_index > 0 append(builder, ", ");
             print_to_builder(builder, ".{ key = %1, value = %2 }", quote_jai_string(row.key), quote_jai_string(row.value));
@@ -269,6 +444,8 @@ generate_plugin_host :: (options: Plugin_Host_Options) -> string {
     // The embedded inputs: root / mode / member dirs / configs (spec §5.2).
     print_to_builder(*builder, "HOST_ROOT :: %1;\n", quote_jai_string(path_slashes(options.root_dir)));
     print_to_builder(*builder, "HOST_MODE :: %1;\n", quote_jai_string(options.mode));
+    print_to_builder(*builder, "HOST_PACKAGE_ROOT :: %1;\n", quote_jai_string(path_slashes(options.package_root)));
+    print_to_builder(*builder, "HOST_DERIVED_ROOT :: %1;\n", quote_jai_string(path_slashes(options.derived_root)));
     append(*builder, "HOST_MEMBER_DIRS :: string.[");
     for dir, index: options.member_dirs {
         if index > 0 append(*builder, ", ");
@@ -309,6 +486,8 @@ generate_plugin_host :: (options: Plugin_Host_Options) -> string {
     append(*builder, "    }\n");
     append(*builder, "    stage: Prestep_Stage;\n");
     append(*builder, "    stage.root_dir = HOST_ROOT;\n");
+    append(*builder, "    stage.package_root = HOST_PACKAGE_ROOT;\n");
+    append(*builder, "    stage.derived_root = HOST_DERIVED_ROOT;\n");
     append(*builder, "    for dir: HOST_MEMBER_DIRS array_add(*stage.member_dirs, dir);\n");
     append(*builder, "    diags: [..] Lifecycle_Diagnostic;\n");
     append(*builder, "    lctx: Lifecycle_Context;\n");
@@ -316,6 +495,9 @@ generate_plugin_host :: (options: Plugin_Host_Options) -> string {
     append(*builder, "    lctx.prestep = *stage;\n");
     append(*builder, "    for slot: resolved.slot_options array_add(*lctx.plugin_state, slot);\n");
     append(*builder, "    hooks_ok := run_mounted_hooks(resolved.hook_table, .PRESTEP, .before, *lctx);\n");
+    append(*builder, "    for generated: stage.generated {\n");
+    append(*builder, "        print_to_builder(*builder, \"GENERATED=%1|%2\n\", host_escape(generated.logical_path), host_escape(generated.physical_path));\n");
+    append(*builder, "    }\n");
     append(*builder, "    for substitution: stage.substitutions {\n");
     append(*builder, "        print_to_builder(*builder, \"SUBSTITUTE=%1|%2\\n\", host_escape(substitution.original), host_escape(substitution.replacement));\n");
     append(*builder, "    }\n");
@@ -370,6 +552,7 @@ spawn_plugin_host :: (host_path: string, import_dirs: [] string) -> Process_Resu
 Plugin_Host_Records :: struct {
     substitutions: [..] Source_Substitution;
     drops:         [..] string;
+    generated:     [..] Generated_Source;
     diagnostics:   [..] Lifecycle_Diagnostic;
     ok:            bool;
     error:         string;
@@ -450,6 +633,26 @@ parse_plugin_host_records :: (text: string) -> Plugin_Host_Records {
                 return out;
             }
             array_add(*out.drops, dropped);
+            continue;
+        }
+
+        if key == "GENERATED" {
+            separator := find_index_from_left(value, "|");
+            if separator < 0 {
+                out.error = tprint("GENERATED needs two fields at line %", line_index + 1);
+                return out;
+            }
+            logical, logical_ok := unescape_record_value(slice(value, 0, separator));
+            physical, physical_ok := unescape_record_value(slice(value, separator + 1, value.count - separator - 1));
+            if !logical_ok || !physical_ok {
+                out.error = tprint("malformed percent escape at line %", line_index + 1);
+                return out;
+            }
+            if logical.count == 0 || physical.count == 0 {
+                out.error = tprint("empty GENERATED field at line %", line_index + 1);
+                return out;
+            }
+            array_add(*out.generated, .{logical_path = logical, physical_path = physical});
             continue;
         }
 
@@ -578,6 +781,10 @@ apply_plugin_host_effects :: (stage: *Prestep_Stage, records: Plugin_Host_Record
     }
     for dropped: records.drops {
         if prestep_add_drop(*ctx, dropped) continue;
+        return plugin_host_table_failure(diagnostics);
+    }
+    for generated: records.generated {
+        if prestep_register_generated(*ctx, generated.logical_path, generated.physical_path) continue;
         return plugin_host_table_failure(diagnostics);
     }
     return true;

@@ -173,14 +173,14 @@ test "The generated test metaprogram embeds the declaration configs (ids, versio
     options.plugin_registration = "X:\\demo\\target\\plugins\\registration.jai";
     options.package_root        = "X:\\demo";
     options.plugin_configs      = Plugin_Config.[
-        .{id = "juice-plugin-lint", version = "0.1.0"},
-        .{id = "opt", version = "1.0.0", options = Option_Row.[
+        .{id = "juice-plugin-lint"},
+        .{id = "opt", options = Option_Row.[
             .{key = "label", value = "clean"},
         ]},
     ];
     generated := generate_test_metaprogram(options);
     expect(find_index_from_left(generated,
-        "plugin_configs: [] Plugin_Config = Plugin_Config.[.{ id = \"juice-plugin-lint\", version = \"0.1.0\", options = Option_Row.[] }, .{ id = \"opt\", version = \"1.0.0\", options = Option_Row.[.{ key = \"label\", value = \"clean\" }] }];") >= 0);
+        "plugin_configs: [] Plugin_Config = Plugin_Config.[.{ id = \"juice-plugin-lint\", options = Option_Row.[] }, .{ id = \"opt\", options = Option_Row.[.{ key = \"label\", value = \"clean\" }] }];") >= 0);
 }
 
 test "The generated test metaprogram observes lint findings at collection time" {

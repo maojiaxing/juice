@@ -292,14 +292,14 @@ generate_test_metaprogram :: (options: Test_Metaprogram_Options) -> string {
         print_to_builder(*builder, "merged_plugins: Merged_Plugins;\n\n");
         print_to_builder(*builder, "// The declaration-driven resolution (ticket 056): the resolved pipeline,\n");
         print_to_builder(*builder, "// declared lint list and hook table. A resolver failure (unknown id,\n");
-        print_to_builder(*builder, "// version mismatch, option rejection) is a compile error too.\n");
+        print_to_builder(*builder, "// ABI mismatch, option rejection) is a compile error too.\n");
         print_to_builder(*builder, "resolved_plugins: Resolved_Plugins;\n\n");
         print_to_builder(*builder, "// The Package.plugins declarations, embedded as the shared plugin-face\n");
         print_to_builder(*builder, "// config values (Plugin_Config / Option_Row come from juice_core).\n");
         print_to_builder(*builder, "plugin_configs: [] Plugin_Config = Plugin_Config.[");
         for config, config_index: options.plugin_configs {
             if config_index > 0 print_to_builder(*builder, ", ");
-            print_to_builder(*builder, ".{ id = %1, version = %2, options = Option_Row.[", quote_jai_string(config.id), quote_jai_string(config.version));
+            print_to_builder(*builder, ".{ id = %1, options = Option_Row.[", quote_jai_string(config.id));
             for row, row_index: config.options {
                 if row_index > 0 print_to_builder(*builder, ", ");
                 print_to_builder(*builder, ".{ key = %1, value = %2 }", quote_jai_string(row.key), quote_jai_string(row.value));

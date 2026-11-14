@@ -78,7 +78,6 @@ resolve_package_plugins :: (decls: [] Plugin_Reference, plugins_omitted: bool = 
 
         config: Plugin_Config;
         config.id = decl.id;
-        config.version = "";
         // The declaration options slice -> the shared Option_Row array (a
         // slice field cannot array_add; rebuild and assign the view).
         rows: [..] Option_Row;
@@ -105,7 +104,6 @@ plugin_configs_from_declarations :: (decls: [] Plugin_Reference, member_packages
 
         config: Plugin_Config;
         config.id = decl.id;
-        config.version = "";
         rows: [..] Option_Row;
         for opt: decl.options array_add(*rows, .{ key = opt.key, value = opt.value });
         config.options = rows;

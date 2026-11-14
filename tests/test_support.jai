@@ -1168,7 +1168,7 @@ plugin_scan_driver_code :: (registration_path: string, marker: string, configs: 
     append(*builder, "plugin_configs: [] Plugin_Config = Plugin_Config.[");
     for config, index: configs {
         if index > 0 append(*builder, ", ");
-        print_to_builder(*builder, ".{ id = %1, version = %2, options = Option_Row.[] }", quote_jai_string(config.id), quote_jai_string(config.version));
+        print_to_builder(*builder, ".{ id = %1, options = Option_Row.[] }", quote_jai_string(config.id));
     }
     append(*builder, "];\n\n");
     append(*builder, "main :: () {\n");
@@ -1267,7 +1267,7 @@ run_plugin_lint_child :: (registration_fixture: string, test_fixture: string, te
     resolved_configs := configs;
     if resolved_configs.count == 0 {
         default_configs: [..] Plugin_Config;
-        array_add(*default_configs, .{id = registration_fixture, version = "1.0.0"});
+        array_add(*default_configs, .{id = registration_fixture});
         resolved_configs = default_configs;
     }
 
