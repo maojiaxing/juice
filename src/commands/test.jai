@@ -55,17 +55,21 @@ TEST_COMMAND :: Command.{
 };
 
 test_arguments_are_valid :: (arguments: [] string) -> bool {
-    return arguments.count <= 1;
+    return resolution_flag_arguments_are_valid(arguments, 1);
 }
 
 test_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
-    if !command_arguments_are_valid(TEST_COMMAND, arguments) return false;
+    // --offline joins the single optional pattern argument; full selection
+    // wiring belongs to ticket 0093.
+    mode, remaining, rejected := split_offline_flag(arguments);
+    if rejected || !command_arguments_are_valid(TEST_COMMAND, remaining) return false;
+    ctx.workspace.environment.mode = mode;
     // force_dependencies: a LIB package has no effective target, yet its
     // test program still references dependencies through import shims — Test
     // must prepare dependencies (the old juice posture).
     prepared := ensure_workspace_prepared(ctx.root_dir, ctx.cache_dir, *ctx.workspace, force_dependencies = true);
     if prepared == null return false;
-    pattern := ifx arguments.count == 1 then arguments[0] else "";
+    pattern := ifx remaining.count == 1 then remaining[0] else "";
     return test_prepared_workspace(prepared, pattern);
 }
 

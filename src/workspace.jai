@@ -259,6 +259,15 @@ Workspace_State :: struct {
     phase:     Workspace_Phase;
     discovery: Workspace_Discovery;
     prepared:  Prepared_Workspace;
+    // The directory the command was invoked from (the nearest-declaration
+    // lookup starts here, and the package selection's location default reads
+    // it). Discovery keeps it so preparation can select packages without
+    // consulting process-global state.
+    invocation_dir: string;
+    // The explicit dependency resolution environment (content cache root,
+    // state root and mode). The command layer fills it before preparation; it
+    // is never derived from a global "current project".
+    environment: Resolution_Environment;
 }
 
 ensure_workspace_discovered :: (
@@ -276,6 +285,7 @@ ensure_workspace_discovered :: (
     }
     state.discovery = discovery;
     state.phase = .DISCOVERED;
+    state.invocation_dir = root_dir;
     if discovery.has_package {
         print("[juice] Package '%' (v%) discovered.\n", discovery.root_package.name, discovery.root_package.version);
     } else {
@@ -303,7 +313,7 @@ prepare_workspace :: (
     cache_dir: string,
     state: *Workspace_State,
     resolve: #type (pkg: Normalized_Package) -> Artifact_Plan_Result = resolve_artifact_plans,
-    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Normalized_Package) -> (bool) = resolve_and_fetch_dependencies,
+    prepare_dependencies: #type (request: Dependency_Preparation_Request) -> bool = resolve_dependencies_for_workspace,
     force_dependencies := false
 ) -> bool {
     if state.phase == .PREPARED return true;
@@ -316,12 +326,18 @@ prepare_workspace :: (
         print("[juice ERROR] %\n", plans_result.error_message);
         return false;
     }
-    prepared: Prepared_Workspace;
+    prepared := Prepared_Workspace.{};
     prepared.discovery = state.discovery;
     prepared.artifact_plans = plans_result.plans;
     if prepared.artifact_plans.count > 0 || force_dependencies {
         print("[juice] Preparing workspace dependencies...\n");
-        if !prepare_dependencies(state.discovery.root_dir, cache_dir, state.discovery.member_packages) {
+        request := Dependency_Preparation_Request.{
+            discovery      = state.discovery,
+            invocation_dir = ifx state.invocation_dir != "" then state.invocation_dir else root_dir,
+            cache_dir      = cache_dir,
+            environment    = state.environment,
+        };
+        if !prepare_dependencies(request) {
             print("[juice ERROR] Dependency resolution failed.\n");
             return false;
         }
@@ -353,7 +369,7 @@ ensure_workspace_prepared :: (
     state: *Workspace_State,
     discover: #type (root_dir: string, cache_dir: string, modules_dir: string) -> (Workspace_Discovery, bool) = discover_workspace,
     resolve: #type (pkg: Normalized_Package) -> Artifact_Plan_Result = resolve_artifact_plans,
-    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Normalized_Package) -> (bool) = resolve_and_fetch_dependencies,
+    prepare_dependencies: #type (request: Dependency_Preparation_Request) -> bool = resolve_dependencies_for_workspace,
     force_dependencies := false
 ) -> *Prepared_Workspace {
     if state.phase == .PREPARED return *state.prepared;

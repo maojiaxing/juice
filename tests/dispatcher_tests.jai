@@ -11,11 +11,11 @@
 
 test "Registry: the production registry validates" {
     expect(validate_registry(COMMAND_REGISTRY).success);
-    expect(COMMAND_REGISTRY.count == 6);
+    expect(COMMAND_REGISTRY.count == 7);
 }
 
 test "Registry: the production declarations match the spec shape" {
-    expected := Command.[BUILD_COMMAND, RUN_COMMAND, CLEAN_COMMAND, TEST_COMMAND, VERSION_COMMAND, HELP_COMMAND];
+    expected := Command.[BUILD_COMMAND, RUN_COMMAND, CLEAN_COMMAND, TEST_COMMAND, UPDATE_COMMAND, VERSION_COMMAND, HELP_COMMAND];
     for declaration, i: expected {
         registered := COMMAND_REGISTRY[i];
         expect(registered.name == declaration.name && registered.description == declaration.description);
@@ -30,6 +30,7 @@ test "Registry: the production declarations match the spec shape" {
     // The only prerequisite relation: run depends on build (spec section 4.3).
     expect(RUN_COMMAND.prerequisites.count == 1 && RUN_COMMAND.prerequisites[0] == "build");
     expect(BUILD_COMMAND.prerequisites.count == 0 && CLEAN_COMMAND.prerequisites.count == 0 && TEST_COMMAND.prerequisites.count == 0);
+    expect(UPDATE_COMMAND.prerequisites.count == 0);
     expect(VERSION_COMMAND.prerequisites.count == 0 && HELP_COMMAND.prerequisites.count == 0);
 }
 
