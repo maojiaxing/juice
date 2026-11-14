@@ -378,13 +378,13 @@ resolution_add_provider_module :: (graph: *Resolution_Graph, owner_index: int, p
 resolution_select_export :: (exports: [] Effective_Target, selection: Module_Reference) -> (Effective_Target, string) {
     if selection.name == "" {
         if exports.count == 1 return exports[0], "";
-        if exports.count == 0 return .{}, "Dependency provider exposes no modules; name the export explicitly.";
-        return .{}, "Dependency module selection is ambiguous; the provider exposes several modules.";
+        if exports.count == 0 return .{}, "Provider exposes no modules; name the export explicitly.";
+        return .{}, "Module selection is ambiguous; the provider exposes several modules.";
     }
     for export: exports {
         if ascii_names_equal(export.name, selection.name) return export, "";
     }
-    return .{}, tprint("Dependency provider does not export module '%'.", selection.name);
+    return .{}, tprint("Provider does not export module '%'.", selection.name);
 }
 
 // Resolve one Git source to a commit plus its content directory, honoring the

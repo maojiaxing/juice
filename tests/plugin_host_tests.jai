@@ -55,18 +55,28 @@ PH_HOOKS_ANCHOR_SOURCE :: "get_juice_plugin :: () -> *X { plugin.hooks; return n
 
 // A prepared workspace over a scratch root with one declared member plugin
 // (the declaration-driven scan surface: declaration order + member snapshot).
+// The member is a real package: its package.jai declares the public module the
+// plugin enablement selects (spec 0087 decision 21 — a provider must declare the
+// module its plugin entry lives in), and the snapshot carries the same
+// declaration. A WORKSPACE source requires the declaring package to belong to a
+// workspace, so the snapshot reports one (has_workspace).
 ph_prepared_with_member :: (root: string, member_name: string, anchor_source: string) -> Prepared_Workspace {
     build_seam_write(root, tprint("packages/%1/module.jai", member_name), anchor_source);
+    build_seam_write(root, tprint("packages/%1/package.jai", member_name),
+        tprint("#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"0.1.0\",\n    modules = .[.{name = \"plugin_module\", entry = \"module.jai\"}],\n    name    = \"%\",\n\n};\n", member_name));
     prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     prepared.discovery.has_package = true;
+    prepared.discovery.has_workspace = true;
     prepared.discovery.root_package.name = "plugin-host-root";
+    prepared.discovery.root_package.dir = root;
     plugins: [..] Plugin_Reference;
     array_add(*plugins, .{id = member_name, source = .{kind = .WORKSPACE}, module = .{path = tprint("packages/%", member_name)}});
     prepared.discovery.root_package.plugins = plugins;
     members: [..] Normalized_Package;
     array_add(*members, .{name = "plugin-host-root", dir = root});
-    array_add(*members, .{name = member_name, dir = path_slashes(tprint("%1/packages/%2", root, member_name))});
+    array_add(*members, .{name = member_name, dir = path_slashes(tprint("%1/packages/%2", root, member_name)),
+        modules = Declared_Product.[.{name = "plugin_module", entry = "module.jai", name_present = true}]});
     prepared.discovery.member_packages = members;
     return prepared;
 }
@@ -348,7 +358,7 @@ test "Plugin host driver: the generated text embeds the inputs and runs PRESTEP 
     options.mode = "test";
     options.member_dirs = string.["C:/repo/packages/prestep-plugin"];
     options.configs = Plugin_Config.[
-        .{id = "prestep-plugin", version = "0.1.0", options = Option_Row.[.{key = "entry", value = "src/main.jai"}]},
+        .{id = "prestep-plugin", options = Option_Row.[.{key = "entry", value = "src/main.jai"}]},
     ];
     options.registration_path = "C:/repo/target/plugins/registration.jai";
     options.host_path = "C:/repo/target/plugins/host.jai";
@@ -365,7 +375,7 @@ test "Plugin host driver: the generated text embeds the inputs and runs PRESTEP 
     expect(find_index_from_left(text, "HOST_MODE :: \"test\";") >= 0);
     expect(find_index_from_left(text, "HOST_MEMBER_DIRS :: string.[\"C:/repo/packages/prestep-plugin\"];") >= 0);
     expect(find_index_from_left(text, "HOST_OUTPUT_PATH :: \"C:/repo/target/plugins/host-records.txt\";") >= 0);
-    expect(find_index_from_left(text, "plugin_configs: [] Plugin_Config = Plugin_Config.[.{ id = \"prestep-plugin\", version = \"0.1.0\", options = Option_Row.[.{ key = \"entry\", value = \"src/main.jai\" }] }];") >= 0);
+    expect(find_index_from_left(text, "plugin_configs: [] Plugin_Config = Plugin_Config.[.{ id = \"prestep-plugin\", options = Option_Row.[.{ key = \"entry\", value = \"src/main.jai\" }] }];") >= 0);
     // The resolve + dispatch + record emission chain.
     expect(find_index_from_left(text, "merged := merge_plugins(plugins);") >= 0);
     expect(find_index_from_left(text, "resolved := resolve_plugin_configs(merged.registry, plugin_configs);") >= 0);
@@ -413,7 +423,7 @@ test "Test command: the prepare registration drives the metaprogram without a se
     generated, ok := read_entire_file(test_test_spawn_path);
     expect(ok);
     expect(find_index_from_left(generated, "#load \"C:/sentinel/registration.jai\";") >= 0);
-    expect(find_index_from_left(generated, ".{ id = \"ghost-member\", version = \"\", options = Option_Row.[] }") >= 0);
+    expect(find_index_from_left(generated, ".{ id = \"ghost-member\", options = Option_Row.[] }") >= 0);
     expect(find_index_from_left(generated, tprint("set_working_directory(\"%1\");", root)) >= 0);
     // No scan landed a registration in this workspace.
     expect(!is_directory(target_plugins_dir(package_target_dir(root))));

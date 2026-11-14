@@ -43,6 +43,15 @@
 // tests live in tests/lifecycle_tests.jai (0053 rule).
 
 #import "Basic";
+// The derived view below is the published plugin face's own path/registration
+// surface, so the file-system checks it performs (retained-source presence,
+// derived writes) use the compiler's standard modules directly instead of the
+// tool-side path helpers — the plugin face closure is exactly the four files
+// publication.jai publishes, and File/File_Utilities/String are compiler
+// modules every consumer has.
+#import "File";
+#import "File_Utilities";
+#import "String";
 
 // ---------------------------------------------------------------------------
 // Stage enum
@@ -182,24 +191,133 @@ Source_Substitution :: struct {
     replacement: string;
 }
 
-// The PRESTEP stage's observable state (spec §6.1 "可观测状态"). The command
-// fills root_dir/member_dirs before dispatching (the pre-step plugin scans
-// the package itself and skips the member subtrees); the before hooks fill
-// the substitution table and the drop set; the command consumes both after
-// the stage:
+// One registered auxiliary source (spec 0087 decision 24, ticket 0092): the
+// logical package-relative path imports, diagnostics and test attribution
+// keep, plus the physical file inside the consuming package's private derived
+// directory. The logical path is never an absolute path and never escapes the
+// package root; the physical path is only ever read.
+Generated_Source :: struct {
+    logical_path:  string;
+    physical_path: string;
+}
+
+// The PRESTEP stage's observable state (spec §6.1 "可观测状态" + spec 0087
+// decision 24's derived view, ticket 0092). The command fills
+// root_dir/member_dirs and the two derived-view roots before dispatching; the
+// before hooks fill the substitution table, the drop set and the generated
+// auxiliary sources; the command consumes them after the stage:
 // - build: a substituted entry compiles the replacement path directly
 //   (closure probing and strip views are skipped); a dropped entry fails
 //   the build with a diagnostic; other plans are untouched;
 // - test: a substituted file's EXPAND source comes from the replacement
 //   while rel_path, numbering and path_mapping keep the original; a dropped
 //   file never enters the test program.
-// A stage without hook plugins keeps both tables empty — the no-op shape.
+// A stage without hook plugins keeps every table empty — the no-op shape.
+//
+// The derived view (ticket 0092) is the redirect surface of the whole stage:
+// package_root is the read-only source root the logical paths resolve
+// against, derived_root is the consuming package's private derived directory
+// (the only place physical outputs may land). Both are empty in the
+// pre-ticket-0092 in-process callers; the extra checks below apply when they
+// are set, so the production commands (which always set them) get the strict
+// contract.
 Prestep_Stage :: struct {
     root_dir:      string;                    // the root package dir
     member_dirs:   [..] string;               // workspace member package dirs
                                               // (the root itself excluded)
     substitutions: [..] Source_Substitution;  // append-only (root package only)
     drops:         [..] string;               // dropped package-relative paths
+    generated:     [..] Generated_Source;     // registered auxiliary sources
+    package_root:  string;                    // logical path base (read-only)
+    derived_root:  string;                    // private derived output root
+    target_root:   string;                    // the package's target/ tree
+    // Whether the third-party plugin contract is enforced on this stage. The
+    // generated plugin host sets it (its values are third-party code, so every
+    // physical output must stay inside the consuming package's private target
+    // areas); juice's own in-process build hooks leave it false, so the trusted
+    // build seam keeps its established freedom (their replacements come from
+    // the tool's own pre-step plugins, which the tests pin).
+    enforce_private_output: bool = false;
+}
+
+// The logical package-relative path is usable when it is non-empty, relative,
+// "/"-separated, free of "."/".." segments and ends in ".jai" when required.
+// The check is self-contained (the published plugin face does not load the
+// path-safety module): reject anything that could address a file outside the
+// package root instead of normalizing it, so a plugin cannot smuggle an escape
+// through a spelling difference.
+derived_logical_path_ok :: (path: string, require_jai: bool) -> bool {
+    if path.count == 0 return false;
+    if path[0] == #char "/" || path[0] == #char "\\" return false;
+    if path.count > 1 && path[1] == #char ":" return false;   // drive letter
+    if find_index_from_left(path, "\\") >= 0 return false;    // "/" only
+    if ends_with(path, "/") return false;
+    if require_jai && !ends_with(path, ".jai") return false;
+    start := 0;
+    while start <= path.count {
+        slash := find_index_from_left(slice(path, start, path.count - start), "/");
+        end := ifx slash >= 0 then start + slash else path.count;
+        segment := slice(path, start, end - start);
+        if segment.count == 0 return false;
+        if segment == "." || segment == ".." return false;
+        if slash < 0 break;
+        start = end + 1;
+    }
+    return true;
+}
+
+// Whether a physical path is inside the private derived root ("" = the root is
+// not set, so the containment check is inert — the pre-ticket-0092 caller
+// shape). Both sides are compared with "/" separators.
+derived_path_within_root :: (derived_root: string, candidate: string) -> bool {
+    if derived_root.count == 0 return true;
+    root := path_slashes_local(derived_root);
+    while root.count > 0 && root[root.count - 1] == #char "/" root.count -= 1;
+    path := path_slashes_local(candidate);
+    if path.count <= root.count + 1 return false;
+    if !starts_with_local(path, root) return false;
+    return path[root.count] == #char "/";
+}
+
+// "/"-normalization and prefix test for the published face's self-contained
+// path checks (the path_safety module is not part of the plugin face closure).
+path_slashes_local :: (path: string) -> string {
+    out: [..] u8;
+    for i: 0..path.count-1 {
+        c := path[i];
+        array_add(*out, ifx c == #char "\\" then #char "/" else c);
+    }
+    if out.count == 0 return "";
+    return to_string(out.data, out.count);
+}
+
+starts_with_local :: (path: string, prefix: string) -> bool {
+    if prefix.count > path.count return false;
+    for i: 0..prefix.count-1 {
+        if path[i] != prefix[i] return false;
+    }
+    return true;
+}
+
+// The physical derived landing path of one logical path: the private root plus
+// the logical relative path. Returns "" when the logical path is unusable, so a
+// caller can never build an escaping target from an unchecked string.
+derived_physical_path :: (derived_root: string, logical_path: string) -> string {
+    if derived_root.count == 0 return "";
+    if !derived_logical_path_ok(logical_path, false) return "";
+    root := path_slashes_local(derived_root);
+    while root.count > 0 && root[root.count - 1] == #char "/" root.count -= 1;
+    return tprint("%1/%2", root, logical_path);
+}
+
+// Whether the package already has a retained source at this logical path (the
+// file the derived view would shadow). An empty package_root means the check is
+// inert (the pre-ticket-0092 caller shape).
+derived_covers_retained_source :: (stage: *Prestep_Stage, logical_path: string) -> bool {
+    if stage.package_root.count == 0 return false;
+    root := path_slashes_local(stage.package_root);
+    while root.count > 0 && root[root.count - 1] == #char "/" root.count -= 1;
+    return file_exists(tprint("%1/%2", root, logical_path));
 }
 
 // Add one substitution row to the stage (spec §6.2 stage-level rules):
@@ -208,7 +326,16 @@ Prestep_Stage :: struct {
 // - the same original with a different replacement is a stage failure — the
 //   table cannot answer which replacement wins;
 // - an original already in the drop set is a stage failure — a file cannot
-//   be both replaced and excluded.
+//   be both replaced and excluded;
+// - a substitution of a logical path that is not a normal package-relative
+//   ".jai" path is a failure (spec 0087 decision 24: the logical path stays
+//   the package's own path, so an absolute path or an escape is rejected);
+// - with the derived view active (package_root/derived_root set) the original
+//   must be a retained package source (substitute maps an EXISTING logical
+//   input, it never invents one) and the replacement must live inside the
+//   package's private derived root — the source tree and any shared checkout
+//   stay read-only;
+// - a logical path already registered as an auxiliary source is a conflict.
 // A failure records an ERROR diagnostic on the context (the ordinary
 // dispatch failure rule then fails the stage even when the hook returns
 // true) and returns false. A missing prestep slot is the same failure.
@@ -229,14 +356,44 @@ prestep_add_substitution :: (ctx: *Lifecycle_Context, original: string, replacem
         array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("source substitution conflicts with a drop: %", original)});
         return false;
     }
+    for generated: stage.generated {
+        if generated.logical_path != original continue;
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("source substitution conflicts with an auxiliary source: %", original)});
+        return false;
+    }
+    if !derived_logical_path_ok(original, true) {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("substitution original is not a package-relative source path: %", original)});
+        return false;
+    }
+    if stage.package_root.count > 0 && !derived_covers_retained_source(stage, original) {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("substitution original is not a retained package source: %", original)});
+        return false;
+    }
+    if stage.enforce_private_output && stage.derived_root.count > 0 {
+        // Spec 0087 decision 24: every physical output of a third-party plugin
+        // lands inside the consuming package's private target areas — its
+        // derived root, or a plugin-owned area under the same package's
+        // target/ tree. The package sources and any shared checkout are never
+        // writable, so a path outside both is the read-only violation.
+        inside_derived := derived_path_within_root(stage.derived_root, replacement);
+        inside_target := stage.target_root.count > 0 && derived_path_within_root(stage.target_root, replacement);
+        if !inside_derived && !inside_target {
+            array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("substitution replacement is outside the package's private derived area: %", replacement)});
+            return false;
+        }
+    }
     array_add(*stage.substitutions, .{original = original, replacement = replacement});
     return true;
 }
 
 // Add one dropped package-relative path to the stage: a repeated drop is a
 // no-op; a path already in the substitution table is a stage failure (the
-// same rule as the reverse order in prestep_add_substitution). Failures
-// record an ERROR diagnostic and return false.
+// same rule as the reverse order in prestep_add_substitution); a logical path
+// registered as an auxiliary source is a conflict (an input cannot be excluded
+// and re-introduced under the same logical path). With the derived view
+// active the path must be a package-relative "".jai" input (a declared drop
+// only ever names a compilable input). Failures record an ERROR diagnostic and
+// return false.
 prestep_add_drop :: (ctx: *Lifecycle_Context, original: string) -> bool {
     if ctx.prestep == null {
         array_add(ctx.diagnostics, .{level = .ERROR, message = "source drop without prestep state"});
@@ -251,7 +408,110 @@ prestep_add_drop :: (ctx: *Lifecycle_Context, original: string) -> bool {
         array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("drop conflicts with a source substitution: %", original)});
         return false;
     }
+    for generated: stage.generated {
+        if generated.logical_path != original continue;
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("drop conflicts with an auxiliary source: %", original)});
+        return false;
+    }
     array_add(*stage.drops, original);
+    return true;
+}
+
+// Write a source text into the private derived area at a logical path and
+// return the physical landing path ("" + false = a plugin error). The view owns
+// the path: the logical path is validated and only ever composed onto the
+// private derived root, so a plugin cannot write into the package sources, a
+// shared Git checkout or anywhere else (spec 0087 decision 24: 源与共享检出只读,
+// 物理输出限于消费工程私有派生区). The parents are created on demand; a creation
+// or write failure is a plugin error.
+prestep_write_derived :: (ctx: *Lifecycle_Context, logical_path: string, contents: string) -> (string, bool) {
+    if ctx.prestep == null {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = "derived write without prestep state"});
+        return "", false;
+    }
+    stage := cast(*Prestep_Stage) ctx.prestep;
+    if stage.derived_root.count == 0 {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("no private derived area for the derived source: %", logical_path)});
+        return "", false;
+    }
+    if !derived_logical_path_ok(logical_path, true) {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("derived source path is not a package-relative .jai path: %", logical_path)});
+        return "", false;
+    }
+    physical := derived_physical_path(stage.derived_root, logical_path);
+    if physical == "" || !derived_path_within_root(stage.derived_root, physical) {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("could not derive a private landing path for: %", logical_path)});
+        return "", false;
+    }
+    last_slash := -1;
+    for i: 0..physical.count-1 {
+        if physical[i] == #char "/" last_slash = i;
+    }
+    if last_slash > 0 {
+        parent := slice(physical, 0, last_slash);
+        if !make_directory_if_it_does_not_exist(parent, recursive = true) {
+            array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("could not create the private derived directory: %", parent)});
+            return "", false;
+        }
+    }
+    if !write_entire_file(physical, contents) {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("could not write the derived source: %", physical)});
+        return "", false;
+    }
+    return physical, true;
+}
+
+// Register one auxiliary Jai source (spec 0087 decision 24's explicit
+// `generated` channel): the plugin supplies the logical package-relative path
+// and the source text, the view owns the physical landing path under the
+// package's private derived root. Rules — each failure records an ERROR
+// diagnostic and returns false, nothing is overwritten by order:
+// - the logical path must be a normal package-relative ".jai" path and the
+//   derived view must be active (no private area = plugin error);
+// - the same logical path registered twice is a conflict, even with identical
+//   text (two plugins must not silently agree on one output);
+// - a logical path that is already a retained package source is a conflict —
+//   an auxiliary file never shadows the package's own content and never turns
+//   itself into a public entry (changing an existing input is what substitute
+//   is for);
+// - a logical path that is substituted or dropped is a conflict (the same
+//   input would have two providers).
+prestep_add_generated :: (ctx: *Lifecycle_Context, logical_path: string, contents: string) -> bool {
+    if ctx.prestep == null {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = "derived source registration without prestep state"});
+        return false;
+    }
+    stage := cast(*Prestep_Stage) ctx.prestep;
+    if stage.derived_root.count == 0 {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("no private derived area for the auxiliary source: %", logical_path)});
+        return false;
+    }
+    if !derived_logical_path_ok(logical_path, true) {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source path is not a package-relative .jai path: %", logical_path)});
+        return false;
+    }
+    for generated: stage.generated {
+        if generated.logical_path != logical_path continue;
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("duplicate auxiliary source path: %", logical_path)});
+        return false;
+    }
+    if derived_covers_retained_source(stage, logical_path) {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source would cover a retained package source: %", logical_path)});
+        return false;
+    }
+    for s: stage.substitutions {
+        if s.original != logical_path continue;
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source conflicts with a source substitution: %", logical_path)});
+        return false;
+    }
+    for dropped: stage.drops {
+        if dropped != logical_path continue;
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source conflicts with a drop: %", logical_path)});
+        return false;
+    }
+    physical, written := prestep_write_derived(ctx, logical_path, contents);
+    if !written return false;
+    array_add(*stage.generated, .{logical_path = logical_path, physical_path = physical});
     return true;
 }
 
@@ -273,6 +533,76 @@ prestep_is_dropped :: (stage: *Prestep_Stage, original: string) -> bool {
         if dropped == original return true;
     }
     return false;
+}
+
+// Register an auxiliary source that was ALREADY materialized (the PRESTEP
+// host writes its own derived files and reports them): the same validation as
+// prestep_add_generated applies, but no write is queued. The reported physical
+// path must be inside the package's private derived area — a plugin that
+// reports a file elsewhere is the read-only violation (spec 0087 decision 24:
+// 源与共享检出只读).
+prestep_register_generated :: (ctx: *Lifecycle_Context, logical_path: string, physical_path: string) -> bool {
+    if ctx.prestep == null {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = "derived source registration without prestep state"});
+        return false;
+    }
+    stage := cast(*Prestep_Stage) ctx.prestep;
+    if stage.derived_root.count == 0 {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("no private derived area for the auxiliary source: %", logical_path)});
+        return false;
+    }
+    if !derived_logical_path_ok(logical_path, true) {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source path is not a package-relative .jai path: %", logical_path)});
+        return false;
+    }
+    if !derived_path_within_root(stage.derived_root, physical_path) {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source is outside the package's private derived area: %", physical_path)});
+        return false;
+    }
+    for generated: stage.generated {
+        if generated.logical_path != logical_path continue;
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("duplicate auxiliary source path: %", logical_path)});
+        return false;
+    }
+    if derived_covers_retained_source(stage, logical_path) {
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source would cover a retained package source: %", logical_path)});
+        return false;
+    }
+    for s: stage.substitutions {
+        if s.original != logical_path continue;
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source conflicts with a source substitution: %", logical_path)});
+        return false;
+    }
+    for dropped: stage.drops {
+        if dropped != logical_path continue;
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source conflicts with a drop: %", logical_path)});
+        return false;
+    }
+    array_add(*stage.generated, .{logical_path = logical_path, physical_path = physical_path});
+    return true;
+}
+
+// The physical file registered as an auxiliary source at this logical path;
+// ("", false) when nothing was registered THIS round. Only the current
+// registrations answer — the derived directory is never scanned, so a file an
+// earlier run left behind can never be consumed (spec 0087 decision 24).
+prestep_generated_for :: (stage: *Prestep_Stage, logical_path: string) -> (string, bool) {
+    if stage == null return "", false;
+    for generated: stage.generated {
+        if generated.logical_path == logical_path return generated.physical_path, true;
+    }
+    return "", false;
+}
+
+// The physical source a compile input must be read from: the substitution's
+// replacement first, then this round's auxiliary registration, else the
+// original path itself ("", false = read the package's own file).
+prestep_derived_source_for :: (stage: *Prestep_Stage, logical_path: string) -> (string, bool) {
+    replacement, substituted := prestep_substitution_for(stage, logical_path);
+    if substituted return replacement, true;
+    physical, generated := prestep_generated_for(stage, logical_path);
+    if generated return physical, true;
+    return "", false;
 }
 
 // ---------------------------------------------------------------------------

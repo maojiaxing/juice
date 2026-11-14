@@ -156,8 +156,9 @@ test "Build plugin preparation fails on invalid declarations before the zero-pla
     // fails loudly on a bad declaration — never silently builds nothing.
     reset_build_seam();
 
-    // An unknown id (neither built-in nor workspace member) fails the
-    // declaration-driven scan.
+    // A declaration without a PATH/GIT/WORKSPACE source fails the source
+    // resolution before any compile (ticket 0092: a plugin enablement names its
+    // own source; nothing is guessed from a member list).
     unknown: Prepared_Workspace;
     unknown.discovery.root_dir = "C:/build-plugin-prep-unknown";
     unknown.discovery.has_package = true;
@@ -168,17 +169,17 @@ test "Build plugin preparation fails on invalid declarations before the zero-pla
     expect(!build_prepared_workspace(*unknown, .[], test_artifact_is_running, test_artifact_handoff));
     expect(test_is_running_checked.count == 0);
 
-    // A built-in declaration whose version differs from the plugin's own
-    // version fails the resolver (the same check the test metaprogram runs
-    // for member values).
-    bad_version: Prepared_Workspace;
-    bad_version.discovery.root_dir = "C:/build-plugin-prep-version";
-    bad_version.discovery.has_package = true;
-    bad_version.discovery.root_package.name = "prep-root";
-    bad_version.discovery.root_package.plugins = Plugin_Reference.[.{id = "load", builtin = true, options = .[.{key = "unsupported", value = "x"}]}];
-    bad_version.discovery.member_packages = Normalized_Package.[.{name = "prep-root", dir = "C:/build-plugin-prep-version"}];
-    bad_version.artifact_plans = Artifact_Plan.[];
-    expect(!build_prepared_workspace(*bad_version, .[], test_artifact_is_running, test_artifact_handoff));
+    // A built-in declaration whose option the plugin's schema does not know
+    // fails the resolver (the same check the test metaprogram runs for member
+    // values).
+    bad_options: Prepared_Workspace;
+    bad_options.discovery.root_dir = "C:/build-plugin-prep-version";
+    bad_options.discovery.has_package = true;
+    bad_options.discovery.root_package.name = "prep-root";
+    bad_options.discovery.root_package.plugins = Plugin_Reference.[.{id = "load", builtin = true, options = .[.{key = "unsupported", value = "x"}]}];
+    bad_options.discovery.member_packages = Normalized_Package.[.{name = "prep-root", dir = "C:/build-plugin-prep-version"}];
+    bad_options.artifact_plans = Artifact_Plan.[];
+    expect(!build_prepared_workspace(*bad_options, .[], test_artifact_is_running, test_artifact_handoff));
     expect(test_is_running_checked.count == 0);
 }
 

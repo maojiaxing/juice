@@ -411,8 +411,10 @@ test_transpile_front :: (stage: *Test_Transpile_Stage) -> bool {
     for file: stage.files {
         if prestep_is_dropped(stage.prestep, file.rel_path) continue;
         compiled := file;
-        replacement, substituted := prestep_substitution_for(stage.prestep, file.rel_path);
-        if substituted {
+        // The logical path (rel_path) stays the original; only the physical
+        // read source follows this round's registration (spec 0087 decision 24).
+        replacement, derived := prestep_derived_source_for(stage.prestep, file.rel_path);
+        if derived {
             compiled.abs_path = path_slashes(replacement);
         }
         array_add(*active_files, compiled);
@@ -558,7 +560,10 @@ test_prepared_workspace :: (
     // The registration file feeds both the PRESTEP host (member hooks) and
     // the generated test metaprogram (member lint / options); the COMPILE
     // front consumes the returned path and never scans again.
-    plugin_prepare := prepare_workspace_plugins(prepared);
+    preparation: Plugin_Preparation;
+    preparation.environment = prepared.environment;
+    plugin_view := plugin_prepare_once_for(*preparation, prepared, prepared.discovery.root_package);
+    plugin_prepare := plugin_prepare_result(plugin_view);
     report_plugin_prepare(plugin_prepare);
     if !plugin_prepare.ok return false;
 
@@ -598,6 +603,10 @@ test_prepared_workspace :: (
     // TRANSPILE front reads the original sources exactly as before.
     pstage: Prestep_Stage;
     pstage.root_dir = prepared.discovery.root_dir;
+    // The package's private derived view (ticket 0092): the test program
+    // consumes this round's registrations only, and every auxiliary output
+    // lands inside this package's own derived area.
+    if !prepare_package_derived_view(plugin_view, *pstage) return false;
     for pkg, index: prepared.discovery.member_packages {
         if index == 0 continue;   // the root package itself
         array_add(*pstage.member_dirs, copy_string(pkg.dir));
@@ -610,7 +619,7 @@ test_prepared_workspace :: (
     // same Prestep_Stage through the stage-level prestep_add_* rules. A
     // table conflict with the caller's in-process hooks is a stage failure.
     if plugin_prepare.member_hooks && plugin_prepare.registration_path != "" {
-        host_options := plugin_host_options(prepared, *pstage, "test");
+        host_options := package_host_options(prepared, prepared.discovery.root_package, plugin_view, *pstage, "test");
         host_records, host_ok := run_plugin_host(host_options, host_spawn);
         if !host_ok return false;
         if !apply_plugin_host_effects(*pstage, host_records, lctx.diagnostics) return false;

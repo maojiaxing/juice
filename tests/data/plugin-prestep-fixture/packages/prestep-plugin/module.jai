@@ -10,6 +10,7 @@
 // juice_core is the tool-provided module face (resolved from the executable's
 // adjacent modules directory); this package declares no tool dependency.
 #import "Basic";
+#import "File";
 #import "juice_core";
 
 Prestep_Plugin_Options :: struct {
@@ -76,10 +77,22 @@ prestep_before_hook :: (ctx: *Lifecycle_Context, state: *void) -> bool {
         array_add(ctx.diagnostics, .{level = .INFO, message = plugin.config.message});
     }
     if plugin.config.entry != "" {
-        // The stage root is already "/"-separated (the host embedded the
-        // command's normalized root); the replacement is package-relative.
-        replacement := tprint("%1/%2", stage.root_dir, plugin.config.replacement);
-        if !prestep_add_substitution(ctx, plugin.config.entry, replacement) return false;
+        // Spec 0087 decision 24 (ticket 0092): the replacement must live in the
+        // consuming package's PRIVATE derived area — the package sources stay
+        // read-only. The fixture ships its replacement text beside the package
+        // (a dot directory, outside every scan); the hook reads it and writes
+        // the derived copy through the view, which owns the landing path, then
+        // registers the substitution of the retained logical input with that
+        // private file.
+        source := tprint("%1/%2", stage.root_dir, plugin.config.replacement);
+        content, read_ok := read_entire_file(source);
+        if !read_ok {
+            array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("fixture plugin could not read the replacement source: %", source)});
+            return false;
+        }
+        physical, written := prestep_write_derived(ctx, plugin.config.entry, content);
+        if !written return false;
+        if !prestep_add_substitution(ctx, plugin.config.entry, physical) return false;
     }
     if plugin.config.drop != "" {
         if !prestep_add_drop(ctx, plugin.config.drop) return false;

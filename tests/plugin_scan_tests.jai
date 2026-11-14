@@ -202,9 +202,11 @@ test "插件扫描：源读取失败 = ok=false 响亮失败（保留诊断 + �
             discovery: Workspace_Discovery;
             discovery.root_dir = "C:/plugin-workspace-read-failure";
             discovery.has_package = true;
+            discovery.has_workspace = true;
             discovery.root_package.name = "read-failure-root";
             discovery.root_package.plugins = Plugin_Reference.[.{id = "read-failure-member", source = .{kind = .WORKSPACE}, module = .{path = "packages/read-failure-member"}}];
-            discovery.member_packages = Normalized_Package.[.{name = "read-failure-member", dir = root}];
+            discovery.member_packages = Normalized_Package.[.{name = "read-failure-member", dir = root,
+                modules = Declared_Product.[.{name = "locked_module", entry = "locked.jai", name_present = true}]}];
             workspace_scan := scan_workspace_plugins(discovery);
             CloseHandle(handle);
 
@@ -266,76 +268,134 @@ test "工作区插件扫描：按 Package.plugins 声明序（优先于目录序
     expect(!file_exists(tprint("%1/plain-member.jai", packages_dir(root))));
 }
 
-test "工作区插件扫描：跨包同名模块同级累积序裁定（先声明者胜）+ 非致命诊断" {
+test "工作区插件扫描：声明 id 即导入名 —— 同名入口文件跨包共存，按声明序" {
     discovery, ok := discover_plugin_workspace_fixture("plugin-workspace-dup");
     expect(ok && discovery.has_package);
     root := plugin_workspace_fixture_root("plugin-workspace-dup");
     defer delete_directory_full(package_target_dir(root));
 
+    // Both providers put their plugin entry in extra.jai. The retired model
+    // derived the #import name from that file stem and arbitrated the
+    // collision by probe rank (one hit dropped, non-fatal diagnostic); a
+    // declaration now selects its own module and the registration imports the
+    // DECLARATION's id, so both enablements survive at their declaration
+    // position and nothing is dropped.
     scan := scan_workspace_plugins(discovery);
     expect(scan.ok);
-    expect(scan.hits.count == 1);
-    expect(scan.hits[0].module_name == "extra");
-    // Equal probe ranks (both hit files are extra.jai): the earlier
-    // declaration's hit stays; the second is dropped.
+    expect(scan.diagnostics.count == 0);
+    expect(scan.hits.count == 2);
+    expect(scan.hits[0].module_name == "first-plugin");
+    expect(scan.hits[0].rel_path == "extra.jai");
     expect(paths_equal(scan.hits[0].abs_path, tprint("%1/packages/first-plugin/extra.jai", root)));
-    expect(scan.diagnostics.count == 1);
-    expect(!scan.diagnostics[0].fatal);
-    expect(scan.diagnostics[0].rel_path == "extra.jai");
-    expect(contains(scan.diagnostics[0].message, "duplicate plugin module name extra"));
+    expect(scan.hits[1].module_name == "second-plugin");
+    expect(scan.hits[1].rel_path == "extra.jai");
+    expect(paths_equal(scan.hits[1].abs_path, tprint("%1/packages/second-plugin/extra.jai", root)));
+    // Each id gets its own import shim pointing at its own provider entry: the
+    // shared file name never becomes an import name.
+    expect(file_contains(tprint("%1/first-plugin.jai", packages_dir(root)), tprint("#load \"%1/packages/first-plugin/extra.jai\"", root)));
+    expect(file_contains(tprint("%1/second-plugin.jai", packages_dir(root)), tprint("#load \"%1/packages/second-plugin/extra.jai\"", root)));
+
+    // The rule that REPLACED the stem arbitration: two ids selecting the SAME
+    // provider module are one actual plugin enabled twice (fatal, decision 21).
+    // A different id or a different source spelling never buys a second
+    // instance.
+    twice: Workspace_Discovery = discovery;
+    twice_plugins: [..] Plugin_Reference;
+    array_add(*twice_plugins, .{id = "first-plugin", source = .{kind = .PATH, path = "packages/first-plugin"}});
+    array_add(*twice_plugins, .{id = "first-copy", source = .{kind = .PATH, path = "packages/../packages/first-plugin"}});
+    twice.root_package.plugins = twice_plugins;
+    twice_scan := scan_workspace_plugins(twice);
+    expect(!twice_scan.ok);
+    expect(twice_scan.hits.count == 0);
+    expect(twice_scan.diagnostics.count == 1);
+    expect(twice_scan.diagnostics[0].fatal);
+    expect(twice_scan.diagnostics[0].rel_path == "first-copy");
+    expect(contains(twice_scan.diagnostics[0].message, "the same plugin is enabled twice"));
 }
 
-test "工作区插件扫描：跨包低探测序胜（与声明序无关）+ 命中位置守声明序 + 非致命诊断" {
+test "工作区插件扫描：模块选择显式化 —— 文件探测序不再裁定，多导出必须点名" {
     discovery, ok := discover_plugin_workspace_fixture("plugin-workspace-rank");
     expect(ok && discovery.has_package);
     root := plugin_workspace_fixture_root("plugin-workspace-rank");
     defer delete_directory_full(package_target_dir(root));
 
-    // alpha-first (declared first) yields module.jai ("alpha-first");
-    // zeta-extra (declared second) yields extra.jai ("extra", rank 3);
-    // packages/extra (declared third) yields module.jai ("extra", rank 1).
-    // The lower probe rank wins the "extra" collision regardless of
-    // declaration order (the rank-3 hit is dropped with a diagnostic) — and
-    // the winner lands at the THIRD package's position: it must follow
-    // alpha-first's surviving hit (declaration order, then intra-package
-    // scan order), never hoist into the dropped hit's slot.
+    // zeta-extra's entry file shares packages/extra's name (extra.jai vs
+    // module.jai — the old probe ranks 3 vs 1). Under the retired model the
+    // lower probe rank won the "extra" module name regardless of declaration
+    // order. A declaration now names its module and imports its id, so the
+    // three enablements coexist in declaration order and no rank is consulted.
     scan := scan_workspace_plugins(discovery);
     expect(scan.ok);
-    expect(scan.hits.count == 2);
+    expect(scan.diagnostics.count == 0);
+    expect(scan.hits.count == 3);
     expect(scan.hits[0].module_name == "alpha-first");
+    expect(scan.hits[0].rel_path == "module.jai");
     expect(paths_equal(scan.hits[0].abs_path, tprint("%1/packages/alpha-first/module.jai", root)));
-    expect(scan.hits[1].module_name == "extra");
-    expect(paths_equal(scan.hits[1].abs_path, tprint("%1/packages/extra/module.jai", root)));
-    expect(scan.diagnostics.count == 1);
-    expect(scan.diagnostics[0].rel_path == "extra.jai");
-    expect(contains(scan.diagnostics[0].message, "duplicate plugin module name extra"));
+    expect(scan.hits[1].module_name == "zeta-extra");
+    expect(scan.hits[1].rel_path == "extra.jai");
+    expect(paths_equal(scan.hits[1].abs_path, tprint("%1/packages/zeta-extra/extra.jai", root)));
+    expect(scan.hits[2].module_name == "extra");
+    expect(scan.hits[2].rel_path == "module.jai");
+    expect(paths_equal(scan.hits[2].abs_path, tprint("%1/packages/extra/module.jai", root)));
+
+    // The rule that replaced the probe precedence: packages/extra exports TWO
+    // public modules, so a declaration that omits the module name is rejected
+    // as ambiguous (never guessed, never ranked).
+    ambiguous: Workspace_Discovery = discovery;
+    ambiguous_plugins: [..] Plugin_Reference;
+    array_add(*ambiguous_plugins, .{id = "extra", source = .{kind = .PATH, path = "packages/extra"}});
+    ambiguous.root_package.plugins = ambiguous_plugins;
+    ambiguous_scan := scan_workspace_plugins(ambiguous);
+    expect(!ambiguous_scan.ok);
+    expect(ambiguous_scan.hits.count == 0);
+    expect(ambiguous_scan.diagnostics.count == 1);
+    expect(ambiguous_scan.diagnostics[0].fatal);
+    expect(ambiguous_scan.diagnostics[0].message == "Plugin 'extra' source: Module selection is ambiguous; the provider exposes several modules.");
+
+    // An export name the provider does not have fails the same way: the
+    // selection is checked against the declared public module list.
+    unknown: Workspace_Discovery = discovery;
+    unknown_plugins: [..] Plugin_Reference;
+    array_add(*unknown_plugins, .{id = "extra", source = .{kind = .PATH, path = "packages/extra"}, module = .{name = "no_such_module"}});
+    unknown.root_package.plugins = unknown_plugins;
+    unknown_scan := scan_workspace_plugins(unknown);
+    expect(!unknown_scan.ok && unknown_scan.hits.count == 0);
+    expect(unknown_scan.diagnostics.count == 1);
+    expect(unknown_scan.diagnostics[0].message == "Plugin 'extra' source: Provider does not export module 'no_such_module'.");
 }
 
-test "工作区插件扫描：不可扫成员根 = ok=false 响亮失败通道" {
+test "工作区插件扫描：声明来源根消失 = ok=false 响亮失败通道" {
     missing := path_slashes(tprint("%1/missing-member", plugin_scan_scratch_root()));
     delete_directory_full(missing);
 
     // A constructed snapshot stands in for a stale discovery result whose
-    // member directory disappeared: the scan must fail loudly, not degrade
-    // into "no plugins".
+    // declared provider directory disappeared: the source resolution must fail
+    // loudly, not degrade into "no plugins". The path normalizes (it is already
+    // absolute), so the failure is the missing DECLARATION inside it.
     discovery: Workspace_Discovery;
     discovery.root_dir = "C:/plugin-workspace-ghost";
     discovery.has_package = true;
+    discovery.has_workspace = true;
     discovery.root_package.name = "ghost-root";
-    discovery.root_package.plugins = Plugin_Reference.[.{id = "ghost-member"}];
-    discovery.member_packages = Normalized_Package.[.{name = "ghost-member", dir = missing}];
+    discovery.root_package.dir = "C:/plugin-workspace-ghost";
+    discovery.root_package.plugins = Plugin_Reference.[.{id = "ghost-member", source = .{kind = .PATH, path = missing}}];
 
     scan := scan_workspace_plugins(discovery);
     expect(!scan.ok);
+    expect(scan.hits.count == 0);
+    expect(scan.diagnostics.count == 1);
+    expect(scan.diagnostics[0].fatal);
+    expect(scan.diagnostics[0].message == tprint("Plugin 'ghost-member' source: provider package has no declaration: %", missing));
 }
 
-test "工作区插件扫描：未知成员插件 id = 致命诊断" {
-    // "mystery" is neither a built-in id nor a workspace member: the
-    // declaration-driven scan rejects it loudly (the command fails before
-    // any compile).
+test "工作区插件扫描：缺失/未知来源 = 致命诊断（无 PATH/GIT/WORKSPACE 不猜测）" {
+    // "mystery" declares no source at all: the retired model accepted the id
+    // as a member name; a plugin enablement now names its own source, so the
+    // declaration is rejected before any I/O or compile (decision 21).
     discovery: Workspace_Discovery;
     discovery.root_dir = "C:/plugin-workspace-unknown";
     discovery.has_package = true;
+    discovery.has_workspace = true;
     discovery.root_package.name = "unknown-root";
     discovery.root_package.plugins = Plugin_Reference.[.{id = "mystery"}];
     discovery.member_packages = Normalized_Package.[.{name = "unknown-root", dir = "C:/plugin-workspace-unknown"}];
@@ -346,50 +406,83 @@ test "工作区插件扫描：未知成员插件 id = 致命诊断" {
     expect(scan.diagnostics.count == 1);
     expect(scan.diagnostics[0].fatal);
     expect(scan.diagnostics[0].rel_path == "mystery");
-    expect(scan.diagnostics[0].message == "Plugin source unavailable: mystery (explicit PATH/WORKSPACE required by this implementation stage)");
+    expect(scan.diagnostics[0].message == "Plugin 'mystery' source: an explicit PATH, GIT or WORKSPACE source is required");
+
+    // The three typed sources each have their own missing-payload failure: an
+    // empty PATH, a workspace source on a package with no workspace, and an
+    // empty Git URL. None of them falls back to a member name or a guess.
+    typed: Workspace_Discovery;
+    typed.root_dir = "C:/plugin-workspace-typed";
+    typed.has_package = true;
+    typed.root_package.name = "typed-root";
+    typed.root_package.plugins = Plugin_Reference.[
+        .{id = "empty-path", source = .{kind = .PATH}},
+        .{id = "no-workspace", source = .{kind = .WORKSPACE}},
+        .{id = "empty-git", source = .{kind = .GIT}},
+    ];
+    typed_scan := scan_workspace_plugins(typed);
+    expect(!typed_scan.ok && typed_scan.hits.count == 0);
+    expect(typed_scan.diagnostics.count == 3);
+    expect(typed_scan.diagnostics[0].message == "Plugin 'empty-path' source: path source is empty");
+    expect(typed_scan.diagnostics[1].message == "Plugin 'no-workspace' source: workspace source needs a workspace declaration");
+    expect(typed_scan.diagnostics[2].message == "Plugin 'empty-git' source: Git source has an empty URL");
 }
 
-test "工作区插件扫描：成员包必须恰好提供一个插件（零个/多个 = 致命诊断）" {
+test "工作区插件扫描：选中模块零入口/多入口 = 致命诊断（不扫描其他文件或模块）" {
     root := path_slashes(tprint("%1/decl-checks", plugin_scan_scratch_root()));
     delete_directory_full(root);
     defer delete_directory_full(root);
+    // empty-member: its declared public module carries no anchor, while a
+    // DIFFERENT file of the same package does. The enablement selects the
+    // module, so the unselected file's anchor must never activate (decision
+    // 21: 不扫描其他模块猜测).
+    expect(build_seam_write(root, "packages/empty-member/package.jai",
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"0.1.0\",\n    modules = .[.{name = \"empty_module\", entry = \"module.jai\"}],\n    name    = \"empty-member\",\n\n};\n"));
     expect(build_seam_write(root, "packages/empty-member/module.jai", "PLAIN_MEMBER_MARKER :: true;\n"));
-    expect(build_seam_write(root, "packages/multi-member/module.jai", ANCHORED_SOURCE));
-    expect(build_seam_write(root, "packages/multi-member/extra.jai", ANCHORED_SOURCE));
+    expect(build_seam_write(root, "packages/empty-member/anchored-elsewhere.jai", ANCHORED_SOURCE));
+    // multi-member: its selected module carries TWO anchors.
+    expect(build_seam_write(root, "packages/multi-member/package.jai",
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"0.1.0\",\n    modules = .[.{name = \"multi_module\", entry = \"module.jai\"}],\n    name    = \"multi-member\",\n\n};\n"));
+    expect(build_seam_write(root, "packages/multi-member/module.jai", tprint("%1%1", ANCHORED_SOURCE, ANCHORED_SOURCE)));
 
-    // A declared member without a plugin anchor: declaration = activation,
-    // so a member that is not a plugin package is a loud error.
+    // A declared provider whose selected module has no plugin entry: the
+    // capability is missing, and the anchor sitting in an UNDECLARED file of
+    // the same package does not save it.
     empty_discovery: Workspace_Discovery;
     empty_discovery.root_dir = root;
     empty_discovery.has_package = true;
+    empty_discovery.has_workspace = true;
     empty_discovery.root_package.name = "decl-checks-root";
     empty_discovery.root_package.plugins = Plugin_Reference.[.{id = "empty-member", source = .{kind = .WORKSPACE}, module = .{path = "packages/empty-member"}}];
     empty_discovery.member_packages = Normalized_Package.[
         .{name = "decl-checks-root", dir = root},
-        .{name = "empty-member", dir = tprint("%1/packages/empty-member", root)},
+        .{name = "empty-member", dir = tprint("%1/packages/empty-member", root),
+          modules = Declared_Product.[.{name = "empty_module", entry = "module.jai", name_present = true}]},
     ];
     empty_scan := scan_workspace_plugins(empty_discovery);
     expect(!empty_scan.ok && empty_scan.hits.count == 0);
     expect(empty_scan.diagnostics.count == 1);
     expect(empty_scan.diagnostics[0].fatal);
-    expect(empty_scan.diagnostics[0].message == "Member package provides no plugin: empty-member");
+    expect(empty_scan.diagnostics[0].message == "Plugin capability missing: module 'empty_module' of package 'empty-member' has no plugin entry");
 
-    // A declared member with two anchored plugin modules: v1 allows exactly
-    // one plugin per package.
+    // Two entries in ONE selected module: the entry the enablement selects
+    // must be unique, so the module-level count rejects the ambiguity.
     multi_discovery: Workspace_Discovery;
     multi_discovery.root_dir = root;
     multi_discovery.has_package = true;
+    multi_discovery.has_workspace = true;
     multi_discovery.root_package.name = "decl-checks-root";
     multi_discovery.root_package.plugins = Plugin_Reference.[.{id = "multi-member", source = .{kind = .WORKSPACE}, module = .{path = "packages/multi-member"}}];
     multi_discovery.member_packages = Normalized_Package.[
         .{name = "decl-checks-root", dir = root},
-        .{name = "multi-member", dir = tprint("%1/packages/multi-member", root)},
+        .{name = "multi-member", dir = tprint("%1/packages/multi-member", root),
+          modules = Declared_Product.[.{name = "multi_module", entry = "module.jai", name_present = true}]},
     ];
     multi_scan := scan_workspace_plugins(multi_discovery);
     expect(!multi_scan.ok && multi_scan.hits.count == 0);
     expect(multi_scan.diagnostics.count == 1);
     expect(multi_scan.diagnostics[0].fatal);
-    expect(multi_scan.diagnostics[0].message == "Member package provides multiple plugins: multi-member");
+    expect(multi_scan.diagnostics[0].message == "ambiguous plugin entry: module 'multi_module' of package 'multi-member' has 2 entries");
 }
 
 test "工作区插件扫描：内置 id 跳过扫描（无成员也无 I/O）" {
@@ -465,8 +558,10 @@ test "工作区插件扫描：真实仓库根声明面（生产发现 + 扫描�
     expect(scan.hits.count == 2);
     expect(scan.hits[0].module_name == "juice-plugin-lint");
     expect(scan.hits[0].rel_path == "module.jai");
+    expect(paths_equal(scan.hits[0].abs_path, path_slashes(tprint("%1/packages/juice-plugin-lint/module.jai", otter_root()))));
     expect(scan.hits[1].module_name == "juice-plugin-jaix");
     expect(scan.hits[1].rel_path == "module.jai");
+    expect(paths_equal(scan.hits[1].abs_path, path_slashes(tprint("%1/packages/juice-plugin-jaix/module.jai", otter_root()))));
     // The jaix member carries the hooks face: the prepare's conservative
     // host trigger reports it on the repository root.
     expect(scan.has_hooks);
@@ -588,8 +683,8 @@ test "E2E：fixture 插件包全链（扫描→注册文件→真编译→合并
     // generates the driver, spawns the real jai compiler. The configs are
     // the fixture's declared plugin ids (the resolver input, ticket 056).
     result, output, errors := run_plugin_scan_child("plugin-fixture", "fixture_mark", Plugin_Config.[
-        .{id = "extra", version = "1.0.0"},
-        .{id = "plugin-fixture", version = "1.0.0"},
+        .{id = "extra"},
+        .{id = "plugin-fixture"},
     ]);
     if expect_exit("plugin-scan", result, 0) {
         ok := true;
@@ -644,7 +739,7 @@ test "E2E：坏 fixture 插件包全链（扫描→注册→合并/解析响亮�
     // generates the driver, spawns the real jai compiler. The declared id is
     // the duplicate both fixture plugins claim.
     result, output, errors := run_plugin_scan_child("plugin-fixture-bad", "bad_mark", Plugin_Config.[
-        .{id = "bad-shared", version = "1.0.0"},
+        .{id = "bad-shared"},
     ]);
     if expect_exit("plugin-scan-bad", result, 0) {
         ok := true;

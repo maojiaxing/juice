@@ -535,7 +535,7 @@ test "E2E: an installed juice fails loudly when the jaix member is missing" {
 
     result, output, _, _ := run_command(installed_exe, "build", working_directory = root, capture_and_return_output = true);
     expect(expect_exit("jaix-installed missing-member", result, 1));
-    expect(child_output_contains("jaix-installed missing-member", output, "[juice ERROR] juice-plugin-jaix: Plugin source unavailable: juice-plugin-jaix (explicit PATH/WORKSPACE required by this implementation stage)"));
+    expect(child_output_contains("jaix-installed missing-member", output, "[juice ERROR] juice-plugin-jaix: Plugin 'juice-plugin-jaix' source: provider package has no declaration:"));
     expect(child_output_contains("jaix-installed missing-member", output, "[juice ERROR] Could not prepare the workspace's plugin declarations."));
     expect(!file_exists(target_artifact_path(package_target_dir(root), "missing_member")));
     // No host was spawned, no registration landed.
@@ -543,7 +543,7 @@ test "E2E: an installed juice fails loudly when the jaix member is missing" {
     expect(!file_exists(workspace_plugin_registration_path(package_target_dir(root))));
 }
 
-test "E2E: an installed juice fails loudly when the member shim cannot land" {
+test "E2E: an installed juice fails loudly when the declared plugin module has no export" {
     expect(file_exists(jp_jaix_exe()));
     bin_dir, _ := jp_install_layout("missing-shim");
     expect(bin_dir != "");
@@ -552,12 +552,14 @@ test "E2E: an installed juice fails loudly when the member shim cannot land" {
     root := path_slashes(otter_scratch("jaix-installed-e2e/missing-shim-workspace"));
     jp_delete_dir(root);
     defer jp_delete_dir(root);
-    // The declared member package has no importable entry layout (no
-    // module.jai / src/module.jai / <name>.jai): the member link writes no
-    // import shim, so the generated registration's module import cannot
-    // resolve and the host compile fails. This is the "missing shim" face —
-    // a declared plugin whose value can never be imported must never degrade
-    // into a silent zero-plugin run.
+    // The declared provider package exports NO public module (its modules list
+    // is explicitly empty), so the enablement cannot select a module at all.
+    // Under the retired model the member link wrote no import shim and the
+    // failure surfaced later as a host compile error; a plugin comes from a
+    // DECLARED public module (spec 0087 decision 21), so the declaration is
+    // rejected before any hook or compile. Either way a declared plugin whose
+    // value can never be imported must never degrade into a silent zero-plugin
+    // run.
     expect(build_seam_write(root, "packages/jaix-copy/package.jai",
         "#import \"Juice\";\n\nPACKAGE :: Package.{\n    modules = .[],\n    executables = .[],\n    name    = \"jaix-copy\",\n    version = \"0.1.0\",\n    \n};\n"));
     expect(build_seam_write(root, "packages/jaix-copy/plugin.jai",
@@ -566,12 +568,14 @@ test "E2E: an installed juice fails loudly when the member shim cannot land" {
         "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"missing-shim\",\n    version = \"0.1.0\",\n    \n    executables = .[.{name = \"missing_shim\", entry = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"packages/jaix-copy\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"jaix-copy\", source = .{kind = .PATH, path = \"packages/jaix-copy\"}},\n    ],\n};\n"));
     expect(build_seam_write(root, "src/main.jai", "main :: () {}\n"));
 
-    result, output, errors, _ := run_command(installed_exe, "build", working_directory = root, capture_and_return_output = true);
+    result, output, _, _ := run_command(installed_exe, "build", working_directory = root, capture_and_return_output = true);
     expect(expect_exit("jaix-installed missing-shim", result, 1));
-    expect(child_output_contains("jaix-installed missing-shim", output, "[juice ERROR] Plugin host failed (exit "));
-    // The host compiler names the unresolvable plugin module import.
-    expect(child_output_contains("jaix-installed missing-shim", errors, "Unable to find a module called 'plugin'"));
+    expect(child_output_contains("jaix-installed missing-shim", output, "[juice ERROR] jaix-copy: Plugin 'jaix-copy' source: Provider exposes no modules; name the export explicitly."));
+    expect(child_output_contains("jaix-installed missing-shim", output, "[juice ERROR] Could not prepare the workspace's plugin declarations."));
     expect(!file_exists(target_artifact_path(package_target_dir(root), "missing_shim")));
-    // The link really wrote nothing: the member has no recognized entry.
+    // No host, no registration and no import shim: the rejection happens at
+    // declaration validation, before any member link is written.
+    expect(!file_exists(plugin_host_path(package_target_dir(root))));
+    expect(!file_exists(workspace_plugin_registration_path(package_target_dir(root))));
     expect(!file_exists(tprint("%1/jaix-copy.jai", packages_dir(root))));
 }
