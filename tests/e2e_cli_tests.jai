@@ -16,9 +16,9 @@
 
 // The rendered overview (print_usage): the registry in declaration order,
 // "  %-12  %" formatting.
-EXPECTED_HELP_OVERVIEW :: "Usage: juice [command] [args]\n\nAvailable commands:\n  build         Build all targets in the root package\n  run           Build and run an executable target\n  clean         Remove Juice outputs and local dependency links\n  test          Run unit tests in the root package\n  version       Print juice and jai version information\n  help          Show command help\n";
+EXPECTED_HELP_OVERVIEW :: "Usage: juice [command] [args]\n\nAvailable commands:\n  build         Build all targets in the root package\n  run           Build and run an executable target\n  clean         Remove Juice outputs and local dependency links\n  test          Run unit tests in the root package\n  update        Refresh dependency resolution selections without compiling\n  version       Print juice and jai version information\n  help          Show command help\n";
 
-test "E2E: help prints the six-command overview" {
+test "E2E: help prints the seven-command overview" {
     result, output, _ := run_otter_child(string.["help"]);
     expect(expect_exit("help overview", result, 0));
     expect(child_output_equals("help overview", output, EXPECTED_HELP_OVERVIEW));
@@ -32,6 +32,10 @@ test "E2E: help <command> prints the usage line" {
     result, output, _ = run_otter_child(string.["help", "run"]);
     expect(expect_exit("help run", result, 0));
     expect(child_output_equals("help run", output, "juice run [target]\n"));
+
+    result, output, _ = run_otter_child(string.["help", "update"]);
+    expect(expect_exit("help update", result, 0));
+    expect(child_output_equals("help update", output, "juice update\n"));
 }
 
 test "E2E: help rejects an unknown command" {
