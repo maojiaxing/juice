@@ -176,10 +176,17 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     //    any relocated modules/ tree (no build-machine path is published).
     //    The same list drives the generated #load lines and these copies —
     //    there is no second file list. Every build regenerates the whole set
-    //    (never edit — the published juice_core header says so). All six
+    //    (never edit — the published juice_core header says so). All eight
     //    sources are read before anything is written, so a missing or
     //    unreadable source fails the publish step with exit 1 before a
-    //    partial set can land (006 decision 5; 048 decisions 3/7). Then the
+    //    partial set can land (006 decision 5; 048 decisions 3/7). Ticket
+    //    0094 adds the installation marker: modules/juice_internal/
+    //    install_manifest.txt records the release contract (marker format,
+    //    compatibility epoch, plugin ABI) and one content digest per
+    //    published artifact, so the executable can prove at startup that the
+    //    modules beside it are the ones it was built against
+    //    (publish_install_set owns the whole set, producer and verifier
+    //    alike). Then the
     //    bootstrap window's flat Juice.jai seed retires: a stale copy must
     //    not coexist with the directory module (no flat/directory ambiguity
     //    at the modules dir, 005 US 14) — the deletion runs right here so
@@ -207,6 +214,16 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
         }
         array_add(*closure_sources, closure_source);
     }
+    plugin_source, plugin_read_ok := read_entire_file(tprint("%1/src/plugin.jai", root));
+    if !plugin_read_ok {
+        print("[Build System] ❌ 无法读取插件 ABI 源 src/plugin.jai（发布步骤）\n");
+        exit(1);
+    }
+    plugin_abi_line, plugin_abi_ok := extract_constant_line(plugin_source, "JUICE_PLUGIN_ABI_VERSION");
+    if !plugin_abi_ok {
+        print("[Build System] ❌ 未找到 JUICE_PLUGIN_ABI_VERSION 常量声明（安装标记）\n");
+        exit(1);
+    }
     juice_text, juice_ok := publish_juice_module(module_source);
     if !juice_ok {
         print("[Build System] ❌ 发布 Juice 模块失败（段标记契约破坏）\n");
@@ -222,40 +239,20 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
         print("[Build System] ❌ 发布 juice_core 模块失败（内置 id 常量缺失）\n");
         exit(1);
     }
-    if !make_directory_if_it_does_not_exist(juice_module_dir(target_dir), recursive = true) {
-        print("[Build System] ❌ 无法创建发布目录 %1\n", juice_module_dir(target_dir));
+    // The installation unit (ticket 0094): every artifact in
+    // install_artifact_paths order, then the compatibility marker that
+    // describes them. One writer for producer and verifier, so the published
+    // set and the marker can never disagree.
+    published_texts: [..] string;
+    array_add(*published_texts, juice_text);
+    array_add(*published_texts, testing_text);
+    array_add(*published_texts, core_text);
+    array_add(*published_texts, discovery_source);
+    for closure_source: closure_sources array_add(*published_texts, closure_source);
+    publish_failure, published_ok := publish_install_set(modules_dir, plugin_abi_line, published_texts);
+    if !published_ok {
+        print("[Build System] ❌ 发布安装单元失败: %1\n", publish_failure);
         exit(1);
-    }
-    if !make_directory_if_it_does_not_exist(juice_internal_dir(modules_dir), recursive = true) {
-        print("[Build System] ❌ 无法创建发布目录 %1\n", juice_internal_dir(modules_dir));
-        exit(1);
-    }
-    if !make_directory_if_it_does_not_exist(juice_plugin_face_dir(modules_dir), recursive = true) {
-        print("[Build System] ❌ 无法创建发布目录 %1\n", juice_plugin_face_dir(modules_dir));
-        exit(1);
-    }
-    if !write_entire_file(juice_module_path(target_dir), juice_text) {
-        print("[Build System] ❌ 无法写入 %1\n", juice_module_path(target_dir));
-        exit(1);
-    }
-    if !write_entire_file(testing_module_path(target_dir), testing_text) {
-        print("[Build System] ❌ 无法写入 %1\n", testing_module_path(target_dir));
-        exit(1);
-    }
-    if !write_entire_file(juice_core_module_path(target_dir), core_text) {
-        print("[Build System] ❌ 无法写入 %1\n", juice_core_module_path(target_dir));
-        exit(1);
-    }
-    if !write_entire_file(test_discovery_module_path(modules_dir), discovery_source) {
-        print("[Build System] ❌ 无法写入 %1\n", test_discovery_module_path(modules_dir));
-        exit(1);
-    }
-    for file, index: JUICE_CORE_LOAD_FILES {
-        face_path := juice_plugin_face_file_path(modules_dir, file);
-        if !write_entire_file(face_path, closure_sources[index]) {
-            print("[Build System] ❌ 无法写入 %1\n", face_path);
-            exit(1);
-        }
     }
     flat_seed := tprint("%1/modules/Juice.jai", target_dir);
     if file_exists(flat_seed) {
