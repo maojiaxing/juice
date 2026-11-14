@@ -4,9 +4,45 @@ COMMAND_REGISTRY :: Command.[
     RUN_COMMAND,
     CLEAN_COMMAND,
     TEST_COMMAND,
+    UPDATE_COMMAND,
     VERSION_COMMAND,
     HELP_COMMAND,
 ];
+
+// The one resolution flag commands understand in this stage: --offline forces
+// the OFFLINE resolution mode (spec 0087 decision 14). Package/workspace
+// selection flags belong to ticket 0093. Any other flag-shaped argument is
+// rejected so a typo cannot silently change resolution semantics.
+// Argument validation for commands that take only resolution flags and an
+// optional positional argument. The dispatcher validates before the handler,
+// so the flag must be accepted here as well as stripped there.
+resolution_flag_arguments_are_valid :: (arguments: [] string, max_positional: int) -> bool {
+    positionals := 0;
+    for argument: arguments {
+        if argument == "--offline" continue;
+        if starts_with(argument, "--") return false;
+        positionals += 1;
+    }
+    return positionals <= max_positional;
+}
+
+build_arguments_are_valid :: (arguments: [] string) -> bool {
+    return resolution_flag_arguments_are_valid(arguments, 0);
+}
+
+split_offline_flag :: (arguments: [] string) -> (mode: Resolution_Mode, remaining: [..] string, rejected: bool) {
+    mode := Resolution_Mode.NORMAL;
+    remaining: [..] string;
+    for argument: arguments {
+        if argument == "--offline" {
+            mode = .OFFLINE;
+            continue;
+        }
+        if starts_with(argument, "--") return mode, remaining, true;
+        array_add(*remaining, argument);
+    }
+    return mode, remaining, false;
+}
 
 Command_Handler :: #type (ctx: *Command_Context, arguments: [] string) -> bool;
 Command_Argument_Validator :: #type (arguments: [] string) -> bool;

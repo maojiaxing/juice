@@ -54,10 +54,15 @@ BUILD_COMMAND :: Command.{
     usage         = "juice build",
     prerequisites = string.[],
     handler       = build_command,
+    validate_arguments = build_arguments_are_valid,
 };
 
 build_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
-    if !command_arguments_are_valid(BUILD_COMMAND, arguments) return false;
+    // --offline is the only accepted flag here; full selection wiring belongs
+    // to ticket 0093.
+    mode, remaining, rejected := split_offline_flag(arguments);
+    if rejected || remaining.count > 0 || !command_arguments_are_valid(BUILD_COMMAND, remaining) return false;
+    ctx.workspace.environment.mode = mode;
     prepared := ensure_workspace_prepared(ctx.root_dir, ctx.cache_dir, *ctx.workspace);
     if prepared == null return false;
     if !build_prepared_workspace(prepared) return false;

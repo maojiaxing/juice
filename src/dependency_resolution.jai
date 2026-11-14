@@ -179,15 +179,15 @@ resolution_path_within :: (boundary: string, candidate: string) -> bool {
 }
 
 // Workspace membership visible from a declaring package, bounded by its source
-// boundary: a local package sees the consumer workspace; a package inside a Git
-// checkout sees only a workspace declared inside that same checkout and never
-// borrows the consumer's members (decision 12).
-resolution_membership_for :: (graph: *Resolution_Graph, request: Dependency_Preparation_Request, boundary_root: string, start_dir: string) -> Workspace_Membership {
+// boundary: a local package may find an ancestor workspace of its own project,
+// while a package inside a Git checkout sees only a workspace declared inside
+// that same checkout and never borrows the consumer's members (decision 12).
+resolution_membership_for :: (graph: *Resolution_Graph, request: Dependency_Preparation_Request, ceiling_root: string, start_dir: string) -> Workspace_Membership {
     for membership: graph.memberships {
-        if membership.boundary_root == boundary_root return membership;
+        if membership.boundary_root == ceiling_root return membership;
     }
     membership: Workspace_Membership;
-    membership.boundary_root = boundary_root;
+    membership.boundary_root = ceiling_root;
     candidate := start_dir;
     while candidate != "" {
         if file_exists(tprint("%/package.jai", candidate)) {
@@ -204,6 +204,17 @@ resolution_membership_for :: (graph: *Resolution_Graph, request: Dependency_Prep
                     array_add(*graph.memberships, membership);
                     return membership;
                 }
+                // The declaring package must actually belong to that workspace;
+                // a workspace declaration elsewhere in the tree is not enough.
+                declaring_is_member := false;
+                for member: discovery.member_packages {
+                    if paths_equal(member.dir, start_dir) declaring_is_member = true;
+                }
+                if !declaring_is_member {
+                    membership.error = tprint("The declaring package % is not a member of the workspace at %", start_dir, candidate);
+                    array_add(*graph.memberships, membership);
+                    return membership;
+                }
                 membership.workspace_root = candidate;
                 membership.packages = discovery.member_packages;
                 membership.valid = true;
@@ -211,10 +222,10 @@ resolution_membership_for :: (graph: *Resolution_Graph, request: Dependency_Prep
                 return membership;
             }
         }
-        if paths_equal(candidate, boundary_root) || !path_is_within(boundary_root, candidate) break;
+        if paths_equal(candidate, ceiling_root) || !path_is_within(ceiling_root, candidate) break;
         candidate = workspace_parent_directory(candidate);
     }
-    membership.error = tprint("WORKSPACE source requires a workspace member; none is declared within %", boundary_root);
+    membership.error = tprint("WORKSPACE source requires a workspace member; none is declared within %", ceiling_root);
     array_add(*graph.memberships, membership);
     return membership;
 }
@@ -465,8 +476,11 @@ resolution_resolve_node :: (graph: *Resolution_Graph, request: Dependency_Prepar
                 return resolution_fail(graph, tprint("Dependency '%' WORKSPACE source must select a member module.", dependency.name));
             }
             start := node.dir;
-            membership_boundary := ifx node.boundary_root != "" then node.boundary_root else graph.consumer_root;
-            membership = resolution_membership_for(graph, request, membership_boundary, start);
+            // A local declaring package may find an ancestor workspace of its own
+            // project (the sibling boundary is that project's parent); a provider
+            // inside a Git checkout can only see a workspace inside the checkout.
+            membership_ceiling := ifx node.source_kind == .GIT then node.boundary_root else resolution_sibling_boundary(graph.consumer_root);
+            membership = resolution_membership_for(graph, request, membership_ceiling, start);
             if !membership.valid return resolution_fail(graph, membership.error);
             for selection: dependency.modules {
                 logical := normalize_package_relative_path(selection.path);
@@ -516,12 +530,14 @@ resolution_resolve_node :: (graph: *Resolution_Graph, request: Dependency_Prepar
             export, selection_error := resolution_select_export(provider.exports, selection);
             if selection_error != "" return resolution_fail(graph, tprint("Dependency '%': %", dependency.name, selection_error));
             local_name := ifx selection.alias == "" then export.name else selection.alias;
+            // Every selection is recorded, even when the provider node is already
+            // resolved: selecting the same actual module twice must still fail.
+            if node_index == graph.consumer_index {
+                if !resolution_add_consumer_module(graph, provider_index, export.name, local_name, export.source_path, dependency.name) return false;
+            } else {
+                if !resolution_add_provider_module(graph, node_index, provider_index, export.name, local_name, export.source_path, dependency.name) return false;
+            }
             if !graph.nodes[provider_index].resolved {
-                if node_index == graph.consumer_index {
-                    if !resolution_add_consumer_module(graph, provider_index, export.name, local_name, export.source_path, dependency.name) return false;
-                } else {
-                    if !resolution_add_provider_module(graph, node_index, provider_index, export.name, local_name, export.source_path, dependency.name) return false;
-                }
                 if !resolution_resolve_node(graph, request, provider_index) return false;
                 graph.nodes[provider_index].visiting = false;
                 graph.nodes[provider_index].resolved = true;
@@ -587,7 +603,9 @@ resolution_rewrite_imports :: (source: string, keys: [..] string, values: [..] s
         if replacement == "" continue;
         append(*builder, slice(source, cursor, string_token.start - cursor));
         print_to_builder(*builder, "\"%\"", replacement);
-        cursor = string_token.end + 1;
+        // Token end is one past the closing quote, so the cursor keeps the
+        // following `;` in the copied remainder.
+        cursor = string_token.end;
         changes += 1;
     }
     if changes == 0 return source, 0;
@@ -809,7 +827,10 @@ resolution_resolve_consumer :: (request: Dependency_Preparation_Request, consume
     node.visiting = true;
     array_add(*graph.nodes, node);
 
-    if !resolution_resolve_node(*graph, request, 0) return graph;
+    if !resolution_resolve_node(*graph, request, 0) {
+        graph.success = false;
+        return graph;
+    }
     resolution_register_private_exports(*graph);
 
     // Views, in provider order, then shims, then state: a failure anywhere keeps

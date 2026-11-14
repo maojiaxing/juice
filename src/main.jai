@@ -90,6 +90,7 @@
 #load "commands/run.jai";
 #load "commands/clean.jai";
 #load "commands/test.jai";
+#load "commands/update.jai";
 #load "commands/version.jai";
 #load "dispatcher.jai";
 #load "commands/help.jai";
