@@ -610,3 +610,42 @@ dependency_resolution_own_module_workspace_members :: () {
     sibling_combined := tprint("%\n%", sibling_output, sibling_errors);
     expect(contains(sibling_combined, "Unable to find a module called 'sibling_only'"));
 } @test
+
+// The test command compiles the package's test program through the same import
+// path, so a test source uses the package's own public modules by name too.
+dependency_resolution_own_module_in_test_source :: () {
+    scratch := dr_scratch("own-module-test");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+
+    tested := dr_path(scratch, "tested");
+    // The module entry lives under the package's own modules/ directory: the
+    // test scan #loads every package file outside root target/, modules/ and
+    // tests/data/, so a module the test program also imports must not sit in
+    // that scanned set (the same rule any #load of a package file obeys).
+    expect(dr_write_file(tested, "package.jai", dr_package_source("tested", "    modules = .[.{name = \"subject\", entry = \"modules/subject.jai\"}],\n")));
+    expect(build_seam_write(tested, "modules/subject.jai", "Subject_Value :: 3;\n"));
+    expect(build_seam_write(tested, "tests/subject_test.jai", "#import \"Testing\";\n#import \"subject\";\n\nown_module_bound :: () {\n    expect(Subject_Value == 3);\n} @test\n"));
+
+    result, output, errors := dr_run(tested, string.["test"]);
+    combined := tprint("%\n%", output, errors);
+    expect(expect_exit("own-module-test", result, 0));
+    expect(output_matches("own-module-test", combined, .["[test] own_module_bound", "1 passed, 0 failed"]));
+
+    // The same holds for a selected workspace member, whose test program is
+    // compiled with that member as the package being tested.
+    workspace := dr_path(scratch, "ws");
+    workspace_declaration := "#import \"Juice\";\n\nPACKAGE :: Package.{\n    workspace = .{members = string.[\"members/*\"]},\n};\n";
+    expect(dr_write_file(workspace, "package.jai", workspace_declaration));
+    member := dr_path(workspace, "members/tested");
+    member_declaration := dr_package_source("member_tested", "    modules = .[.{name = \"subject\", entry = \"modules/subject.jai\"}],\n");
+    expect(build_seam_write(member, "package.jai", member_declaration));
+    expect(build_seam_write(member, "modules/subject.jai", "Subject_Value :: 7;\n"));
+    member_test := "#import \"Testing\";\n#import \"subject\";\n\nmember_own_module_bound :: () {\n    expect(Subject_Value == 7);\n} @test\n";
+    expect(build_seam_write(member, "tests/member_own_test.jai", member_test));
+
+    member_result, member_output, member_errors := dr_run(workspace, string.["test", "-p", "member_tested"]);
+    member_combined := tprint("%\n%", member_output, member_errors);
+    expect(expect_exit("own-module-member-test", member_result, 0));
+    expect(output_matches("own-module-member-test", member_combined, .["[test] member_own_module_bound", "1 passed, 0 failed"]));
+} @test

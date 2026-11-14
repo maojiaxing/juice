@@ -413,6 +413,9 @@ generate_test_metaprogram :: (options: Test_Metaprogram_Options) -> string {
 // hooks; the built-in COMPILE front below consumes it.
 Test_Compile_Stage :: struct {
     prepared:            *Prepared_Workspace;
+    // The package being tested: its own declared modules are import names of
+    // that package, so their shim directory joins this compile's import path.
+    package_root:        string;
     files:               [] Scan_File;
     view_paths:          [] string;
     transpile_dir:       string;
@@ -537,9 +540,12 @@ test_compile_front :: (stage: *Test_Compile_Stage, spawn: #type (runner_path: st
     metaprogram_options.intermediate_path  = test_build_dir;
     // compiler_import_directories is shared with build: target/packages (the
     // dependency shim directory) must be on the search path so the root test
-    // program can #import dependencies (including workspace members).
+    // program can #import dependencies (including workspace members), and the
+    // tested package's own target/packages so its own declared modules are
+    // importable by their public name (story 37).
+    own_packages_dir := ifx stage.package_root != "" then packages_dir(stage.package_root) else "";
     import_dirs: [..] string;
-    for dir: compiler_import_directories(packages_dir(root_dir)) array_add(*import_dirs, dir);
+    for dir: compiler_import_directories(packages_dir(root_dir), own_packages_dir) array_add(*import_dirs, dir);
     metaprogram_options.import_dirs        = import_dirs;
     metaprogram_options.driver_source      = driver_source;
     metaprogram_options.package_view_paths = stage.view_paths;
