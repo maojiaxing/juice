@@ -330,8 +330,14 @@ git_captured_value :: (arguments: [] string, working_directory := "") -> (string
     return trim(output), true;
 }
 
+// The content-cache directory name for one source. The prefix stays short on
+// purpose: a materialized checkout path is content/<key>/<40-character commit>/
+// <in-repository package path>, and Windows file APIs (GetFileAttributesW,
+// FindFirstFileExW) reject paths at MAX_PATH unless long paths are opted in.
+// A shorter readable prefix plus the 48-bit digest leaves several dozen
+// characters of headroom for those in-repository paths.
 resolution_source_key :: (url: string) -> string {
-    return resolution_sanitized_key(url, 48);
+    return resolution_sanitized_key(url, 24);
 }
 
 git_content_repository_directory :: (environment: Resolution_Environment, url: string) -> string {
