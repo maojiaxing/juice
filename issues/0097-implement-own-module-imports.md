@@ -1,6 +1,6 @@
 ---
 title: 实施：本包公开模块按公开名可用
-status: open
+status: closed
 labels: [ready-for-agent]
 assignee: maojiaxing
 parent: "0087"
@@ -41,3 +41,14 @@ Story 37「同包公开模块可以相互引用，以便拆分公共接口不改
 ## Integration
 
 自己的独立 worktree/branch 从 integration/package-declaration-semantics 最新 tip 开始；路径与执行纪律见 C:/Users/maojiaxing/DevTools/msys/tmp/juice-package-implementation/README.md。不要写主 checkout 或其它 agent 文件。完成前 merge 最新 integration、验证并 commit，返回精确命令/exit/计数/限制和接口说明；由 merger 核对合入并写 Resolution 关闭。
+
+## Resolution
+
+- 实现分支 `implement/own-module-imports`（基于 `4e6b3c5`），提交 `48e2492`（本包自身导出成为该包导入名）、`2d5952f`（被测包自身模块进入 test 程序导入路径）、`71692a3`（文档改为已交付）、`be4aa1e`（合入集成分支）、`9f480d2`（修正 `docs/spec.md` 残留旧表述）。经 `725aac7`（--no-ff）合入 `integration/package-declaration-semantics`。
+- 机制：被选包自身的导出按**公开名**规划为 shim，且不重写（与提供方不同）。`Import_Shim` 增加 `directory` 字段，使名字按目录唯一：本包模块写入该包自己的 `target/packages`，依赖导入名与提供方内部私有名仍留在消费根目录（0091 路径不变）。`resolution_write_shims` 整体重建其拥有的每个目录（被删除的模块会丢掉 shim，已验证）。`compiler_import_directories(packages_dir, own_packages_dir := "")` 把被编译包自己的目录排在消费根目录之前；`build` 从 `plan.target_dir` 取、`test` 从新增的 `Test_Compile_Stage.package_root` 取。
+- 每包独立目录而非共享目录的原因：共享会让两个声明同名模块的成员冲突，也会让某成员的自身模块被同级成员导入。已否决的替代方案是为根包新建独立 target 区（`target_layout` 是已被测试固定的契约），作为限制登记。
+- 真实缺陷：除了本票的目标缺口（改动前用安装单元复现），还发现所选工作区成员的 `test` 程序仍失败——`test_compile_front` 只从消费根推导导入目录，根包此前“碰巧”可用（其自身目录就是消费根目录）；在 `2d5952f` 修复并留下红绿记录。
+- 验收（仓库外安装单元 exe + 相邻 `modules`，隔离 XDG，脚本 `acceptance.sh`，exit 0）：A 本包程序 `#import "calc"` build/run 0/0，输出 `calc=41 more=42`；B 既有 `#load` 路径 build/run 0/0，输出 `adder 42`；C 工作区成员 build/run/run 0/0/0（`one helper=5`、`two helper=500`）；D 成员 `test` 0（`1 passed, 0 failed`）；E 传递依赖不泄漏 build/run 0/0，泄漏探针 **1**（`Unable to find a module called 'Cipher'`）；F 本包模块与依赖导入名并存 build 0（`own=1 dep=7`），遮蔽探针 **1**（`shadows a module of the consuming package`）。
+- 门禁证据（Windows）：fresh `jai.exe build.jai` exit 0；聚焦 `dependency_resolution_` 17/0、`workspace_` 13/0、`command_selection_` 7/0、`plugin_derived_` 16/0、`declaration_schema_` 11/0、`run_selection_` 12/0、`publication_install` 15/0、`module_` 6/0；完整套件两轮 380 passed / 0 failed、EXIT 0，合入后再次两轮 380/0 EXIT 0（主检出 `target/evidence/verify-0097-full-1.log`、`-2.log`）。新增 3 条测试在两轮日志中按名字确认存在（打印的套件合计不是总数，因 `tests/module_tests.jai` 会调用 `finish()`）。
+- 文档同步：`docs/migrations/package-declarations.md` §4.3、已知限制第 3 条、E03 说明与证据行改为“已交付”；`docs/spec.md` §2.5 的旧限制表述一并修正。
+- 已知限制：根包自身的 shim 与消费根共享同一目录，因此在 `--workspace` 下一个成员可以导入根包的自身模块名，反向不成立（两个方向都已实测）。依赖导入名在所选包之间仍是共享命名空间（既有行为）。`test` 仍无法使用落在测试扫描集合内的模块入口（既有行为：扫描到的源码再被 `#load` 会重复声明）。仅 Windows 证据，无 Linux 执行。验收留 0096；本票不构成 0087 全部交付。
