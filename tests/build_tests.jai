@@ -194,6 +194,7 @@ test "The built-in compile loop forwards each plan with its chosen entry" {
     prepared.artifact_plans = plans;
     cstage: Build_Compile_Stage;
     cstage.prepared = *prepared;
+    cstage.plans = plans;
     entries: [..] string;
     array_add(*entries, "entry-alpha");
     array_add(*entries, "entry-beta");
@@ -218,6 +219,7 @@ test "The built-in compile loop fails fast on a compile failure" {
     prepared.artifact_plans = plans;
     cstage: Build_Compile_Stage;
     cstage.prepared = *prepared;
+    cstage.plans = plans;
     entries: [..] string;
     array_add(*entries, "entry-alpha");
     array_add(*entries, "entry-beta");
@@ -414,10 +416,16 @@ test "E2E: build-empty short-circuits on a zero plan" {
 
     result, output, _ := run_otter_child_at(fixture_root, string.["build"]);
     expect(expect_exit("build-empty", result, 0, "build child"));
-    expect(child_output_contains("build-empty", output, "[juice] No executable targets; nothing to build."));
+    // Ticket 0093 (decision 19) replaces the old "nothing to build" line: a
+    // zero-program package validates declarations and dependencies and then says
+    // exactly what it did not check.
+    expect(child_output_contains("build-empty", output, "[juice] Package '.' has no executable program; declarations and dependencies validated, module sources are not type-checked."));
     expect(child_output_contains("build-empty", output, "[juice] Build completed successfully!"));
-    // The short circuit creates nothing under target/.
-    expect(!file_exists(package_target_dir(fixture_root)));
+    // The zero-program build validates the dependency graph, so target/ may hold
+    // the dependency preparation outputs (target/packages) — what it must never
+    // hold is a compile driver or an artifact.
+    expect(!file_exists(target_build_dir(package_target_dir(fixture_root))));
+    expect(!file_exists(target_artifact_path(package_target_dir(fixture_root), "build_empty")));
 }
 
 test "E2E: a compile failure exits nonzero without an artifact" {

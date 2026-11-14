@@ -1,39 +1,45 @@
 #import "Basic";
 
-// `juice update` (spec 0087 decision 19): refresh the dependency resolution
-// graph only — no compilation, no test execution. It resolves every Git source
-// in the complete direct/transitive graph of the selected consumer packages,
-// records the new selections, and reports the outcome.
+// `juice update` (spec 0087 decisions 19 and 20): refresh the dependency
+// resolution graph of the selected packages only — no compilation, no test
+// execution and no build hook (decision 23: 更新不因解析插件来源而执行构建 hook).
 //
-// Full command selection and flag wiring (--workspace/-p/--package-path) belongs
-// to ticket 0093; this command carries only the resolution mode switch this
-// ticket must prove end to end, plus the offline conflict rule (decision 14:
-// update and offline are mutually exclusive).
+// Offline is rejected before anything is resolved (decision 14: update 与
+// offline 冲突): an update always contacts its Git sources, so a conflict is a
+// usage error rather than an offline resolution attempt.
+//
+// The selected packages' complete direct/transitive graphs are resolved as one
+// operation: a failure leaves the previous records untouched and fails the
+// command (decision 15), and a member that resolved earlier is not rolled back.
 
 UPDATE_COMMAND :: Command.{
     name          = "update",
     description   = "Refresh dependency resolution selections without compiling",
     usage         = "juice update",
+    flag_help     = "  Selection: --workspace | -p/--package <name> | --package-path <dir>",
     prerequisites = string.[],
     handler       = update_command,
-    validate_arguments = build_arguments_are_valid,
+    validate_arguments = update_arguments_are_valid,
 };
 
+update_arguments_are_valid :: (arguments: [] string) -> bool {
+    return command_selection_arguments_are_valid(arguments, 0, false);
+}
+
 update_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
-    mode, remaining, rejected := split_offline_flag(arguments);
-    if rejected || remaining.count > 0 {
-        print("[juice ERROR] Usage: %\n", UPDATE_COMMAND.usage);
+    flags, flags_ok := parse_command_flags(arguments, 0, false);
+    if !flags_ok {
+        print_command_usage(UPDATE_COMMAND);
         return false;
     }
-    if mode == .OFFLINE {
+    if flags.offline {
         print("[juice ERROR] update cannot run offline: an update always contacts the Git sources.\n");
         return false;
     }
-    ctx.workspace.environment.mode = .UPDATE;
-    // update refreshes the graph even for a package with no executable, so the
-    // preparation step is forced (the same flag Test uses for its shim needs).
-    prepared := ensure_workspace_prepared(ctx.root_dir, ctx.cache_dir, *ctx.workspace, force_dependencies = true);
-    if prepared == null return false;
+    // The update resolves every selected package's graph, whether or not the
+    // package declares a program.
+    selection, selected := select_command_packages(ctx, flags, .UPDATE, force_dependencies = true);
+    if !selected return false;
     print("[juice] Dependency resolution graph updated.\n");
     return true;
 }

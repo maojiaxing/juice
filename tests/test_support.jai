@@ -956,18 +956,21 @@ make_test_link :: (link: string, target: string, directory: bool, junction: bool
 }
 
 // ---------------------------------------------------------------------------
-// Run test support: the recording launch seam (the old juice test_launch_*
-// semantics — run_prepared_workspace's launch seam).
+// Run test support: the recording launch seam (launch_selected_plan's seam,
+// ticket 0093: the program's separator arguments travel through unchanged).
 // ---------------------------------------------------------------------------
 test_launch_count: s64;
 test_launched_plan: Artifact_Plan;
 test_launched_root: string;
+test_launched_arguments: [..] string;
 test_launch_success: bool;
 
-test_launch_artifact :: (plan: Artifact_Plan, package_root: string) -> bool {
+test_launch_artifact :: (plan: Artifact_Plan, package_root: string, arguments: [] string) -> bool {
     test_launch_count += 1;
     test_launched_plan = plan;
     test_launched_root = package_root;
+    array_reset(*test_launched_arguments);
+    for argument: arguments array_add(*test_launched_arguments, argument);
     return test_launch_success;
 }
 
@@ -975,6 +978,7 @@ reset_run_seam :: () {
     test_launch_count = 0;
     test_launched_plan = .{};
     test_launched_root = "";
+    array_reset(*test_launched_arguments);
     test_launch_success = true;
 }
 
@@ -989,7 +993,7 @@ test_test_collect_calls: s64;
 test_test_collect_files: [] Scan_File;
 test_test_collect_ok: bool;
 
-test_collect_test_files :: (prepared: *Prepared_Workspace) -> ([] Scan_File, bool) {
+test_collect_test_files :: (prepared: *Prepared_Workspace, package_root: string) -> ([] Scan_File, bool) {
     test_test_collect_calls += 1;
     return test_test_collect_files, test_test_collect_ok;
 }

@@ -47,30 +47,42 @@
 
 TEST_COMMAND :: Command.{
     name          = "test",
-    description   = "Run unit tests in the root package",
+    description   = "Run the selected packages' unit tests",
     usage         = "juice test [pattern]",
+    flag_help     = "  Selection: --workspace | -p/--package <name> | --package-path <dir>, and --offline",
     prerequisites = string.[],
     handler       = test_command,
     validate_arguments = test_arguments_are_valid,
 };
 
 test_arguments_are_valid :: (arguments: [] string) -> bool {
-    return resolution_flag_arguments_are_valid(arguments, 1);
+    return command_selection_arguments_are_valid(arguments, 1, false);
 }
 
 test_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
-    // --offline joins the single optional pattern argument; full selection
-    // wiring belongs to ticket 0093.
-    mode, remaining, rejected := split_offline_flag(arguments);
-    if rejected || !command_arguments_are_valid(TEST_COMMAND, remaining) return false;
-    ctx.workspace.environment.mode = mode;
-    // force_dependencies: a LIB package has no effective target, yet its
-    // test program still references dependencies through import shims — Test
-    // must prepare dependencies (the old juice posture).
-    prepared := ensure_workspace_prepared(ctx.root_dir, ctx.cache_dir, *ctx.workspace, force_dependencies = true);
-    if prepared == null return false;
-    pattern := ifx remaining.count == 1 then remaining[0] else "";
-    return test_prepared_workspace(prepared, pattern);
+    flags, flags_ok := parse_command_flags(arguments, 1, false);
+    if !flags_ok {
+        print_command_usage(TEST_COMMAND);
+        return false;
+    }
+    // Every selected package needs its dependency shims even when it declares
+    // no product at all (decision 19: test never requires a public product).
+    selection, selected := select_command_packages(ctx, flags, resolution_mode_for(flags), force_dependencies = true);
+    if !selected return false;
+    pattern := ifx flags.positionals.count == 1 then flags.positionals[0] else "";
+
+    batch: Package_Batch;
+    batch.operation = "test";
+    batch.total = selection.packages.count;
+    for selected_package, index: selection.packages {
+        if !test_package(selection.prepared, selected_package.package, pattern) {
+            package_batch_fail(*batch, *selection, index);
+            package_batch_report_failure(*batch);
+            return false;
+        }
+        array_add(*batch.completed, selected_package.relative_path);
+    }
+    return true;
 }
 
 // The test scratch zone (target/tests) is owned by the test command: every
@@ -101,13 +113,19 @@ prune_test_scratch :: (root_dir: string) -> bool {
 // into its subdirectories (lexicographic).
 // ---------------------------------------------------------------------------
 
-collect_test_files :: (prepared: *Prepared_Workspace) -> [] Scan_File, bool {
+collect_test_files :: (prepared: *Prepared_Workspace, package_root: string) -> [] Scan_File, bool {
+    // A missing scan root would make the walk start at the filesystem root; the
+    // scan is always rooted at an absolute package directory.
+    if package_root == "" {
+        print("[juice ERROR] Could not scan package root for test sources: the package directory is unknown.\n");
+        return Scan_File.[], false;
+    }
     collect: Test_Collect_Context;
-    collect.root = prepared.discovery.root_dir;
+    collect.root = package_root;
     // Member boundaries come from the workspace discovery snapshot (root
     // package first); the scan consumes it without merging into discovery.
-    for pkg, index: prepared.discovery.member_packages {
-        if index == 0 continue;
+    for pkg: prepared.discovery.member_packages {
+        if paths_equal(pkg.dir, package_root) continue;   // the package being tested
         array_add(*collect.member_dirs, copy_string(pkg.dir));
     }
     files, ok := collect_scan_files(collect.root, *collect, collect_directory_is_excluded, collect_file_is_excluded);
@@ -378,6 +396,11 @@ testing_module_support_block :: (support_view: string) -> string {
 // fills them through t3/t5-t9/t11.
 Test_Transpile_Stage :: struct {
     prepared:            *Prepared_Workspace;
+    // The package being tested: its directory is the scan root of the collected
+    // files and the anchor for the in-package Testing module (decision 20/23);
+    // the prepared workspace still supplies the consumer root for the shared
+    // dependency shims and the transpile tree.
+    package_root:        string;
     files:               [] Scan_File;
     pipeline:            [] Transpile_Plugin;
     pipeline_omitted:     bool = true;
@@ -444,7 +467,7 @@ test_transpile_front :: (stage: *Test_Transpile_Stage) -> bool {
     for file, index: stage.files {
         if file.rel_path == "tests/test_support.jai" support_view = stage.outputs[index].view;
     }
-    module_result, module_ok := testing_module_view(root_dir, support_view, next_number);
+    module_result, module_ok := testing_module_view(stage.package_root, support_view, next_number);
     if !module_ok return false;
     if module_result.enabled {
         stage.testing_module_dir = module_result.dir;
@@ -529,20 +552,42 @@ test_prepared_workspace :: (
     prepared: *Prepared_Workspace,
     pattern: string,
     hook_table: [] Hook_Registration = .[],
-    collect: #type (prepared: *Prepared_Workspace) -> ([] Scan_File, bool) = collect_test_files,
+    collect: #type (prepared: *Prepared_Workspace, package_root: string) -> ([] Scan_File, bool) = collect_test_files,
+    spawn: #type (runner_path: string, import_dirs: [] string) -> Process_Result = spawn_test_compiler,
+    host_spawn: #type (host_path: string, import_dirs: [] string) -> Process_Result = spawn_plugin_host
+) -> bool {
+    return test_package(prepared, root_package_of(prepared), pattern, hook_table, collect, spawn, host_spawn);
+}
+
+// One selected package's test run (ticket 0093). The package is explicit so a
+// batch tests every selected member with its own sources, plugins and private
+// derived view, while the prepared workspace keeps supplying the consumer root
+// for the shared dependency shims.
+test_package :: (
+    prepared: *Prepared_Workspace,
+    package: Normalized_Package,
+    pattern: string,
+    hook_table: [] Hook_Registration = .[],
+    collect: #type (prepared: *Prepared_Workspace, package_root: string) -> ([] Scan_File, bool) = collect_test_files,
     spawn: #type (runner_path: string, import_dirs: [] string) -> Process_Result = spawn_test_compiler,
     host_spawn: #type (host_path: string, import_dirs: [] string) -> Process_Result = spawn_plugin_host
 ) -> bool {
     // Runs once before every test run: the scratch zone (target/tests) is
     // tool-owned test state, so the previous run's fixture roots and E2E
     // caches never accumulate. The crash-recovery zone (target/recovery) is
-    // deliberately outside it and survives the prune.
-    if !prune_test_scratch(prepared.discovery.root_dir) {
-        print("[juice ERROR] Could not prune the test scratch directory: %\n",
-              target_tests_dir(package_target_dir(prepared.discovery.root_dir)));
+    // deliberately outside it and survives the prune. The package directory must
+    // be known before the prune: an empty root would address a drive-absolute
+    // path.
+    if package.dir == "" {
+        print("[juice ERROR] The package directory of the test selection is unknown.\n");
         return false;
     }
-    files, ok := collect(prepared);
+    if !prune_test_scratch(package.dir) {
+        print("[juice ERROR] Could not prune the test scratch directory: %\n",
+              target_tests_dir(package_target_dir(package.dir)));
+        return false;
+    }
+    files, ok := collect(prepared, package.dir);
     if !ok return false;
 
     // Zero collected files: no test program can exist (the old juice t4
@@ -562,7 +607,7 @@ test_prepared_workspace :: (
     // front consumes the returned path and never scans again.
     preparation: Plugin_Preparation;
     preparation.environment = prepared.environment;
-    plugin_view := plugin_prepare_once_for(*preparation, prepared, prepared.discovery.root_package);
+    plugin_view := plugin_prepare_once_for(*preparation, prepared, package);
     plugin_prepare := plugin_prepare_result(plugin_view);
     report_plugin_prepare(plugin_prepare);
     if !plugin_prepare.ok return false;
@@ -574,7 +619,7 @@ test_prepared_workspace :: (
     // values only — member values live in the PRESTEP host and the generated
     // metaprogram). The resolved pipeline is the view key's pipeline
     // description.
-    resolved := resolve_package_plugins(prepared.discovery.root_package.plugins, prepared.discovery.root_package.plugins_omitted);
+    resolved := resolve_package_plugins(package.plugins, package.plugins_omitted);
     if !resolved.ok {
         for diagnostic: resolved.diagnostics print("[juice ERROR] %\n", diagnostic.message);
         print("[juice ERROR] Invalid plugin declarations.\n");
@@ -602,13 +647,13 @@ test_prepared_workspace :: (
     // empty and both tables stay empty — the undeclared no-op, so the
     // TRANSPILE front reads the original sources exactly as before.
     pstage: Prestep_Stage;
-    pstage.root_dir = prepared.discovery.root_dir;
+    pstage.root_dir = package.dir;
     // The package's private derived view (ticket 0092): the test program
     // consumes this round's registrations only, and every auxiliary output
     // lands inside this package's own derived area.
     if !prepare_package_derived_view(plugin_view, *pstage) return false;
-    for pkg, index: prepared.discovery.member_packages {
-        if index == 0 continue;   // the root package itself
+    for pkg: prepared.discovery.member_packages {
+        if paths_equal(pkg.dir, package.dir) continue;   // the package being tested
         array_add(*pstage.member_dirs, copy_string(pkg.dir));
     }
     lctx.prestep = *pstage;
@@ -619,7 +664,7 @@ test_prepared_workspace :: (
     // same Prestep_Stage through the stage-level prestep_add_* rules. A
     // table conflict with the caller's in-process hooks is a stage failure.
     if plugin_prepare.member_hooks && plugin_prepare.registration_path != "" {
-        host_options := package_host_options(prepared, prepared.discovery.root_package, plugin_view, *pstage, "test");
+        host_options := package_host_options(prepared, package, plugin_view, *pstage, "test");
         host_records, host_ok := run_plugin_host(host_options, host_spawn);
         if !host_ok return false;
         if !apply_plugin_host_effects(*pstage, host_records, lctx.diagnostics) return false;
@@ -633,6 +678,7 @@ test_prepared_workspace :: (
     // travel with the stage into the per-file EXPAND.
     tstage: Test_Transpile_Stage;
     tstage.prepared = prepared;
+    tstage.package_root = package.dir;
     tstage.files = files;
     tstage.pipeline = resolved.pipeline;
     tstage.pipeline_omitted = false;

@@ -264,6 +264,10 @@ Workspace_State :: struct {
     // it). Discovery keeps it so preparation can select packages without
     // consulting process-global state.
     invocation_dir: string;
+    // The command's validated package selection (ticket 0093). Preparation
+    // publishes it to the dependency resolution seam, so only the selected
+    // packages' graphs are resolved. A zero value keeps the location default.
+    selection: Package_Selection;
     // The explicit dependency resolution environment (content cache root,
     // state root and mode). The command layer fills it before preparation; it
     // is never derived from a global "current project".
@@ -337,6 +341,7 @@ prepare_workspace :: (
             invocation_dir = ifx state.invocation_dir != "" then state.invocation_dir else root_dir,
             cache_dir      = cache_dir,
             environment    = state.environment,
+            selection      = state.selection,
         };
         if !prepare_dependencies(request) {
             print("[juice ERROR] Dependency resolution failed.\n");

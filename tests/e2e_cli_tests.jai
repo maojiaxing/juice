@@ -16,7 +16,7 @@
 
 // The rendered overview (print_usage): the registry in declaration order,
 // "  %-12  %" formatting.
-EXPECTED_HELP_OVERVIEW :: "Usage: juice [command] [args]\n\nAvailable commands:\n  build         Build all targets in the root package\n  run           Build and run an executable target\n  clean         Remove Juice outputs and local dependency links\n  test          Run unit tests in the root package\n  update        Refresh dependency resolution selections without compiling\n  version       Print juice and jai version information\n  help          Show command help\n";
+EXPECTED_HELP_OVERVIEW :: "Usage: juice [command] [args]\n\nAvailable commands:\n  build         Build the selected packages' programs\n  run           Compile and run one selected program\n  clean         Remove Juice outputs and local dependency links\n  test          Run the selected packages' unit tests\n  update        Refresh dependency resolution selections without compiling\n  version       Print juice and jai version information\n  help          Show command help\n";
 
 test "E2E: help prints the seven-command overview" {
     result, output, _ := run_otter_child(string.["help"]);
@@ -24,18 +24,26 @@ test "E2E: help prints the seven-command overview" {
     expect(child_output_equals("help overview", output, EXPECTED_HELP_OVERVIEW));
 }
 
-test "E2E: help <command> prints the usage line" {
+test "E2E: help <command> prints the usage line and the flag surface" {
     result, output, _ := run_otter_child(string.["help", "build"]);
     expect(expect_exit("help build", result, 0));
-    expect(child_output_equals("help build", output, "juice build\n"));
+    expect(child_output_contains("help build", output, "juice build\n"));
+    expect(child_output_contains("help build", output, "Selection: --workspace | -p/--package <name> | --package-path <dir>"));
+
+    // A command without options keeps its bare usage line (no rewritten
+    // clean/version behavior).
+    result, output, _ = run_otter_child(string.["help", "clean"]);
+    expect(expect_exit("help clean", result, 0));
+    expect(child_output_equals("help clean", output, "juice clean\n"));
 
     result, output, _ = run_otter_child(string.["help", "run"]);
     expect(expect_exit("help run", result, 0));
-    expect(child_output_equals("help run", output, "juice run [target]\n"));
+    expect(child_output_contains("help run", output, "juice run [program] [-- args...]\n"));
+    expect(child_output_contains("help run", output, "arguments after '--' reach the program"));
 
     result, output, _ = run_otter_child(string.["help", "update"]);
     expect(expect_exit("help update", result, 0));
-    expect(child_output_equals("help update", output, "juice update\n"));
+    expect(child_output_contains("help update", output, "juice update\n"));
 }
 
 test "E2E: help rejects an unknown command" {
@@ -89,11 +97,11 @@ test "E2E: the test command guards and requires a package" {
 
 test "E2E: run and version reject extra arguments" {
     // plan_command validates the requested command's arguments before any
-    // prerequisite executes, so the run guard rejects at plan time without
-    // triggering a build.
+    // prerequisite executes; run's contract is one program name plus the `--`
+    // passthrough, so two positionals are rejected at plan time.
     result, output, _ := run_otter_child(string.["run", "extra", "more"]);
     expect(expect_exit("run args", result, 1));
-    expect(output_matches("run args", output, string.["[juice ERROR] Usage: juice run [target]"]));
+    expect(output_matches("run args", output, string.["[juice ERROR] Usage: juice run [program] [-- args...]"]));
 
     result, output, _ = run_otter_child(string.["version", "extra"]);
     expect(expect_exit("version args", result, 1));

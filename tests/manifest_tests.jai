@@ -421,5 +421,8 @@ test "E2E: an unknown plugin id fails plugin preparation byte-for-byte" {
     expect(child_output_contains("bad-manifest-plugin-id", output,
         "[juice ERROR] Could not prepare the workspace's plugin declarations."));
     expect(output_matches("bad-manifest-plugin-id", output, string.["[juice] Build completed successfully!"], want = false));
-    expect(!file_exists(package_target_dir(fixture_root)));
+    // A zero-program build validates the dependency graph, so target/packages may
+    // exist; no compile driver and no artifact may.
+    expect(!file_exists(target_build_dir(package_target_dir(fixture_root))));
+    expect(!file_exists(target_artifact_path(package_target_dir(fixture_root), "bad_plugin_id")));
 }
