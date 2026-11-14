@@ -38,9 +38,17 @@
 #load "xdg.jai";
 #load "path_safety.jai";
 #load "manifest.jai";
+#load "resolution_state.jai";
 #load "workspace.jai";
 #load "target.jai";
+// The typed dependency resolution state (spec 0087 decisions 13-15) and the
+// resolver (decisions 9-12) land after dependency.jai: the resolution state
+// keeps Git selections apart from the shared content cache, and the resolver
+// consumes the shim format and the strip front. dependency_resolution.jai is
+// the production preparation seam's default, so it must be visible to
+// workspace.jai's seam type.
 #load "dependency.jai";
+#load "dependency_resolution.jai";
 #load "transpile.jai";
 #load "transpile_plugin.jai";
 #load "transpile_cache.jai";
@@ -104,6 +112,25 @@ main :: () {
     // owners. ctx.workspace zero-initializes to the EMPTY phase; discovery
     // fills it on the first command that prepares the workspace.
     ctx.cache_dir = tprint("%1/juice", get_cache_home());
+    // The typed roots (spec 0087 decision 15): Git source content and the
+    // per-consumer resolution state live in separate XDG-derived roots. A
+    // relative or unusable XDG value falls back with a warning; it never
+    // switches juice to cwd or a temporary directory.
+    content_cache := get_juice_content_cache_root();
+    if content_cache.warning {
+        print("[juice WARNING] XDG_CACHE_HOME is not an absolute path; using the platform default content cache.\n");
+    }
+    state_root := get_juice_resolution_state_root();
+    if state_root.warning {
+        print("[juice WARNING] XDG_STATE_HOME is not an absolute path; using the platform default resolution state.\n");
+    }
+    ctx.content_cache_dir = content_cache.path;
+    ctx.state_dir = state_root.path;
+    ctx.workspace.environment = .{
+        content_cache_root = content_cache.path,
+        state_root         = state_root.path,
+        mode               = .NORMAL,
+    };
     result := dispatch_command(COMMAND_REGISTRY, command, *ctx, command_arguments);
     if !result.success exit(1);
 }

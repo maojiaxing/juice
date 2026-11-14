@@ -447,15 +447,17 @@ test_resolved_plans: [] Artifact_Plan;
 test_dependency_attempts: s64 = 0;
 test_dependency_ok: bool = false;
 test_dependency_snapshot: [] Normalized_Package;
+test_dependency_request: Dependency_Preparation_Request;
 
 test_fake_resolve :: (pkg: Normalized_Package) -> Artifact_Plan_Result {
     if !test_plan_resolution_success return .{success = false, error_message = copy_string("resolution failure")};
     return .{success = true, plans = test_resolved_plans};
 }
 
-test_fake_prepare_dependencies :: (root_dir: string, cache_dir: string, member_packages: [] Normalized_Package) -> bool {
+test_fake_prepare_dependencies :: (request: Dependency_Preparation_Request) -> bool {
     test_dependency_attempts += 1;
-    test_dependency_snapshot = member_packages;
+    test_dependency_request = request;
+    test_dependency_snapshot = request.discovery.member_packages;
     return test_dependency_ok;
 }
 
@@ -468,6 +470,7 @@ reset_preparation_test :: () {
     test_dependency_attempts = 0;
     test_dependency_ok = false;
     test_dependency_snapshot = Normalized_Package.[];
+    test_dependency_request = .{};
 }
 
 // ---------------------------------------------------------------------------

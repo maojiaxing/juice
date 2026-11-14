@@ -21,6 +21,12 @@ Command_Context :: struct {
     // filled by discovery (ticket 008).
     root_dir:  string;
     cache_dir: string;
+    // The typed dependency roots (spec 0087 decision 15): shared Git content
+    // and the per-consumer resolution state, resolved once at startup from the
+    // XDG contract. The workspace state carries the same values into the
+    // dependency preparation seam.
+    content_cache_dir: string;
+    state_dir:         string;
     workspace: Workspace_State;
 }
 
