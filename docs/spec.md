@@ -8,16 +8,18 @@
 >
 > **设计修订（2026-10-22，testing 迁移 effort，未实施）**：测试库面（Testing 断言模块、两套 test-block 转换、测试发现面）迁入仓库根独立包 `testing/`，juice 只保留集成接口/协议。已定决策（0066/0067）与进行中/待定项（0068/0075）见 `issues/0065-map-test-migration-to-testing-package.md` 与 §13；**实施尚未开始**，落地前各章节仍以当前实现为准。
 
+> **设计修订（2026-11-15，package-declaration-semantics effort）**：包声明面按 `issues/0087-spec-package-declaration-semantics.md` 的 29 条实施决策重写，**§2 整节以新语义为准**。旧字段 `type`、`targets`/`main_file`、依赖 `version`/`package` 搜索、插件成员名猜测/`version`、`build_script` 已从公开面删除并在求值或校验期被拒绝，不保留兼容解析、不自动改写；`workspace` 保留为 `Package` 的普通嵌套字段，并获得 `default_members` 与单层 `*` 成员匹配。本文其余章节中描述旧声明面（互斥 LIB/BIN 角色、`Target` 名单、按包名解析依赖、插件声明 version 门、传递依赖需重复声明）的语句均以 §2 与 `docs/migrations/package-declarations.md` 为准；转译、测试、lifecycle、发布与自举章节未因本 effort 改变。逐字段迁移表、E01–E10 完整人工迁移示例、A01–A16 验收对照与运行证据见 `docs/migrations/package-declarations.md`。
+
 ## 0. 方案概要
 
-juice 重构版：cargo 式 monorepo 仓库（根 BIN 包 + `packages/` 插件成员），四阶段自举。内置命令 = build/clean/run/test/version/help（六命令；用户定稿 2026-10-19，§4.1）；test 用 `@test` 注记发现（metaprogram 消息循环枚举 + 生成显式调用表）；插件 = transpile/lint（+ test 五 at 钩子覆盖面），第三方插件经构建工具侧扫描标记 → 生成显式有序注册文件；**设计修订（2026-10-21）**：插件声明面统一为 `Package.plugins`（id + version + options），声明即激活/配置/排序；成员插件 id = 成员包名，根 `dependencies` 不再承担插件激活面；jaix 前置 = `juice-plugin-jaix` 的 PRESTEP 插件（Phase 1 静态内置；执行级现实 2026-10-21，061 起 Phase 2 成员包 + PRESTEP-only host 已交付）；**执行级现实（2026-10-21，040 收尾）**：真实第三方成员 = `packages/juice-plugin-lint`（lint，全链已交付）；内置 transpile 插件仍静态驻 `src/`，`juice-plugin-test`/`juice-plugin-transpile` 成员未创建；lifecycle 挂载 = 阶段枚举 + before/at/after + 声明序确定性 + 显式 ctx；运行期发布 = 三份模块面 `target/modules/Juice/module.jai`（大写目录模块）+ `Testing.jai` 平铺 + `juice_core.jai` 生成模块 + 一份内部发现源件 `target/modules/juice_internal/test_discovery.jai`（`src/test_discovery.jai` 逐字复制；私有目录契约——只被生成的测试 metaprogram 以绝对路径 `#load`，不发布为公开 import 面（编译器导入路径仍可见该目录，非强制不可导入）；执行级订正 2026-10-20，阶段 3 终态）+ 四份插件面闭包副本 `target/modules/juice_internal/plugin_face/{transpile,transpile_plugin,lifecycle,plugin}.jai`（`src/` 同名源逐字复制，`juice_core.jai` 以模块相对路径 `#load`；发布树可整体搬迁；2026-10-21，048 收尾，§9）；安装契约 = 可执行文件 + 相邻 `modules/` 目录（递归含 `juice_internal/`），不要求也不读取同级 `src/`/`target/`；插件引根 = 工具提供的模块面 `juice_core`（由 `<exe>/modules` 在每个编译子进程的导入路径上解析，插件成员不声明该依赖，§3.3）。
+juice 重构版：cargo 式 monorepo 仓库（根包 + `packages/` 插件成员），四阶段自举。内置命令 = build/clean/run/test/update/version/help（七命令；update 由 0091 加入，其余用户定稿 2026-10-19，§4.1）；test 用 `@test` 注记发现（metaprogram 消息循环枚举 + 生成显式调用表）；插件 = transpile/lint（+ test 五 at 钩子覆盖面），第三方插件经构建工具侧扫描标记 → 生成显式有序注册文件；**设计修订（2026-10-21）**：插件声明面统一为 `Package.plugins`（id + version + options），声明即激活/配置/排序；成员插件 id = 成员包名，根 `dependencies` 不再承担插件激活面；jaix 前置 = `juice-plugin-jaix` 的 PRESTEP 插件（Phase 1 静态内置；执行级现实 2026-10-21，061 起 Phase 2 成员包 + PRESTEP-only host 已交付）；**执行级现实（2026-10-21，040 收尾）**：真实第三方成员 = `packages/juice-plugin-lint`（lint，全链已交付）；内置 transpile 插件仍静态驻 `src/`，`juice-plugin-test`/`juice-plugin-transpile` 成员未创建；lifecycle 挂载 = 阶段枚举 + before/at/after + 声明序确定性 + 显式 ctx；运行期发布 = 三份模块面 `target/modules/Juice/module.jai`（大写目录模块）+ `Testing.jai` 平铺 + `juice_core.jai` 生成模块 + 一份内部发现源件 `target/modules/juice_internal/test_discovery.jai`（`src/test_discovery.jai` 逐字复制；私有目录契约——只被生成的测试 metaprogram 以绝对路径 `#load`，不发布为公开 import 面（编译器导入路径仍可见该目录，非强制不可导入）；执行级订正 2026-10-20，阶段 3 终态）+ 四份插件面闭包副本 `target/modules/juice_internal/plugin_face/{transpile,transpile_plugin,lifecycle,plugin}.jai`（`src/` 同名源逐字复制，`juice_core.jai` 以模块相对路径 `#load`；发布树可整体搬迁；2026-10-21，048 收尾，§9）；安装契约 = 可执行文件 + 相邻 `modules/` 目录（递归含 `juice_internal/`），不要求也不读取同级 `src/`/`target/`；插件引根 = 工具提供的模块面 `juice_core`（由 `<exe>/modules` 在每个编译子进程的导入路径上解析，插件成员不声明该依赖，§3.3）。
 
 ```
-juice/（开发代号 otter）                 # 工作区根 + 根包（BIN: juice 工具）
+juice/（开发代号 otter）                 # 工作区根 + 根包（juice 工具）
 ├── package.jai                         # name="juice"；workspace.members 逐条列举（juice 无 glob）
 ├── src/module.jai                      # 库面唯一定义源（Package 兼容面 + Juice_Plugin API + Testing API）
 ├── src/main.jai                        # CLI（target juice → juice.exe）
-├── packages/juice-plugin-lint/         # 唯一真实第三方插件成员（LIB；零依赖——juice_core 由工具提供；v1 lint 规则）
+├── packages/juice-plugin-lint/         # 唯一真实第三方插件成员（零依赖——juice_core 由工具提供；v1 lint 规则）
 │                                       # （内置 transpile 插件静态驻 src/；test/transpile 插件成员未创建）
 ├── packages/juice-plugin-jaix/         # 真实 PRESTEP 插件成员（061 交付；Phase 1 的 src/jaix_plugin.jai 已删除）
 ├── tests/                              # 根包测试
@@ -32,7 +34,7 @@ juice/（开发代号 otter）                 # 工作区根 + 根包（BIN: ju
 
 ## 1. 目标与设计原则
 
-1. **juice 声明兼容不变式**：存量 `package.jai`（`#import "Juice"` + `PACKAGE :: Package.{...}`）的模块名与 `PACKAGE` 形状原样可消费——模块名 `"Juice"` 是 load-bearing 的（R§1.2、C§7 E3 双面并存验证）。**设计修订（2026-10-21）**：字段级兼容例外——`jaix` 与 `transpile` 两个字段硬切为 `plugins`（breaking change，§2.1/§11.12）；其余 Package 字段不变。
+1. **juice 声明接口不变式**：公共模块名 `"Juice"` 与唯一 `PACKAGE` 入口保持不变——模块名是 load-bearing 的（R§1.2、C§7 E3 双面并存验证）。**字段面按 §2 的 2026-11-15 修订**：旧的互斥 `type`/`targets`/`main_file` 与依赖/插件旧字段被删除并拒绝，属于 breaking change；不保留声明级兼容开关。。**设计修订（2026-10-21）**：字段级兼容例外——`jaix` 与 `transpile` 两个字段硬切为 `plugins`（breaking change，§2.1/§11.12）；其余 Package 字段不变。
 2. **确定性**：一切收集/派发/执行的顺序由固定规则给定（扫描 DFS 词法序 C§2/scan_walk；声明序 = 管线序 R§2.2；note 收集排序 N§3.2；阶段序硬编码 L§4.3）。
 3. **逐字节/逐行保真**：转译视图「1 行换 1 行 + 以 token 为界」（ADR 0005，R§2.2、A§4.3 转引）；注记/注释在非编辑行原样幸存（N§3.3）。
 4. **test-free bootstrap 闭包**：bootstrap `#load` 集必须 test-free 且随仓库分发（R§5.1；L§5.1）——内置骨架静态、第三方插件永不进闭包。
@@ -40,58 +42,135 @@ juice/（开发代号 otter）                 # 工作区根 + 根包（BIN: ju
 6. **失败即停 + 无部分状态**：任一阶段/钩子失败 → 命令失败 → 退出码；prepare「全部成功才发布」、clean「先全量校验后删除」（L§1.2/§1.5）。
 7. **Windows-first**：所有机制在 Windows 已验证（LNK1104 副本、`cmd /c`、子进程 CWD 绝对路径、大小写近匹配拒绝——C§7）。
 
-## 2. package 声明兼容面规格
+## 2. 包声明规格（2026-11-15 修订，权威）
 
-### 2.1 Package 字段全集（结构层 = otter 必须原样实现）
+本节是 `issues/0087-spec-package-declaration-semantics.md` Implementation Decisions 1–27 的可观察契约。逐字段迁移表、E01–E10 完整人工迁移示例、A01–A16 验收对照及运行证据见 `docs/migrations/package-declarations.md`；本节只陈述最终语义，不重复示例。
 
-| 字段 | 类型 | 默认 | 证据 |
+### 2.1 公开声明面
+
+唯一入口仍是 `package.jai` 里的 `#import "Juice"` + `PACKAGE :: Package.{...}`。不新增 `Manifest`/`Some`/`Configured_List` 包装、用户 presence 开关或独立 `WORKSPACE` 入口；辅助常量与纯编译期表达式允许，只有 `PACKAGE` 参与声明读取。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `name` / `version` | `string` | 包存在时必填且非空。`name` 语法 `[A-Za-z0-9][A-Za-z0-9._-]*`；`version` 是包元数据，不是依赖版本约束 |
+| `description` | `string` | 可选，允许显式空 |
+| `modules` | `[] Product` | 公开导入模块清单；`Product {name, entry}` |
+| `executables` | `[] Product` | 可执行产物清单；同一 `Product` 类型 |
+| `dependencies` | `[] Dependency` | 普通依赖的统一清单，模块/程序/测试共用；`Dependency {name, source, modules}` |
+| `plugins` | `[] Plugin_Declaration` | 插件启用/配置/顺序面；`Plugin_Declaration {id, builtin, source, module, options}` |
+| `workspace` | `Workspace_Config` | 普通嵌套字段；`{members, exclude, default_members}` |
+| `default_run` | `string` | 可选的默认运行程序名 |
+
+配套类型：`Source {kind, path, git}`、`Source_Kind {UNSPECIFIED, PATH, GIT, WORKSPACE}`、`Git_Source {url, branch, tag, rev}`、`Module_Selection {path, name, alias}`、`Plugin_Option {key, value}`。`dir`、物理绝对路径、已解析提交和派生路径都不回填公开声明（Decision 7）。省略状态用不与合法值相交的内部保留默认标记表达，标记只属于实现，用户写普通字符串与数组（Decision 3）。
+
+### 2.2 包存在性与三种状态
+
+- 包身份或能力字段任一显式出现（`name`/`version`/`description`/`default_run`，或任一能力清单显式给出）即视为存在包，此时 `name` 与 `version` 必须同时合法；显式空的能力清单同样算包配置。
+- 只有 `workspace` 存在而包字段全部省略 = 纯工作区：不建立根包，不为根自动发现产物，也不启用默认插件。`workspace = .{}` 是已声明的空工作区（合法，但根调用选包为 0 失败）；既无包字段也无 `workspace` 的 `Package.{}` 得到 `PACKAGE must declare a package or workspace.`
+- 每个可省略字段区分**省略 / 显式空 / 显式非空**；数组零长度和空字符串都不是省略判据。
+
+| 字段 | 省略 | 显式空 | 显式非空 |
 | --- | --- | --- | --- |
-| `name` / `version` | `string` | 必填 | R§1.1（`juice/modules/Juice.jai:98-99`） |
-| `type` | `Package_Type {LIB; BIN; UNSPECIFIED}` | `.UNSPECIFIED` | R§1.1；UNSPECIFIED 推导序 = targets → src/main.jai → import entry → BIN（C§6.1，`target.jai:118-125`） |
-| `description` | `string` | `""` | 装饰，无消费方（R§1.1） |
-| `targets` | `[] Target {name, main_file}` | 空 | LIB 声明 targets = 硬错误 `LIBRARY_TARGET_CONFLICT`（C§6.1，`target.jai:129-139`） |
-| `dependencies` | `[] Dependency {name, version="", source="", package=""}` | 空 | DEP.name 无校验（C§7.1）——异名 DEP 是官方形态 |
-| `workspace` | `{members: [] string, exclude: [] string}` | 空 | members 字面路径、无 glob（C§2）；exclude 零消费方（R§1.1） |
-| `build_script` | `string` | `""` | 死字段，容忍不实现（R§1.1） |
-| `jaix` | 已移除（设计修订 2026-10-21） | — | 原 pre-step 标记；迁移到 `plugins` 的 `juice-plugin-jaix` options（breaking change，§11.12） |
-| `transpile` | 已移除（设计修订 2026-10-21） | — | 原管线声明；迁移到 `plugins` 同序条目 |
-| `plugins` | `[] Plugin_Declaration {id, version, options: [] {key, value}}` | 空 = 缺省管线 + 无 hooks/lint | **设计修订（2026-10-21）**：唯一插件声明/配置/顺序面。声明 = 可用 + 激活 + 配置 + 顺序；成员插件 id = 成员包名，内置 id `load`/`test-block` 保留；声明序 = 管线序 / hooks 序 / lint 序 |
-| `dir` | `string` | loader 填入 | 不在声明（R§1.1） |
+| `modules` | 自动发现 `module.jai` 或 `src/module.jai`；零候选 = 零模块，两者并存 = 歧义失败，唯一候选采用且名称取包名 | `Product.[]` = 零模块 | 完全替代自动发现；逐项 `entry` 必填，单项可省略 `name`（取包名），多项必须逐项命名 |
+| `executables` | 自动发现且只认 `src/main.jai`（不扫描 `src/bin`） | `Product.[]` = 零程序 | 同上 |
+| `dependencies` | 无依赖 | 无依赖 | 逐条解析 |
+| `plugins` | 内置 `load` + `test-block` | `Plugin_Declaration.[]` = 无插件（test block 不再被转译） | 完全替代，不补默认 |
+| `members` / `exclude` | 零显式成员 / 无排除 | 同省略 | 展开、去重、排除后逐个校验 |
+| `default_members` | 位置默认（§2.6、§2.8） | 根调用没有默认选择（零选包 = 失败） | 只接受明确成员目录，无通配 |
+| `default_run` | 按程序数选择 | 不允许 | 必须匹配已声明程序（ASCII 大小写不敏感） |
 
-**设计修订（2026-10-21，jaix-plugin effort）**：`Package.jaix`、`Package.transpile`、`Jaix_Prestep`、`Transpile_Plugin_Declaration` 从发布面移除；旧 package.jai 在 manifest 求值期以未知成员失败。迁移 = 原 `jaix {config, exe}` 改写为 `plugins` 里 `juice-plugin-jaix` 的 `config`/`exe` options；原 `transpile.plugins` 改写为 `plugins` 的同序条目。v1 一个插件包只提供一个插件；声明 version 必须等于插件自身 version。**执行级现实（2026-10-21，055）**：`Package.plugins` / `Plugin_Declaration` / `Plugin_Option` 已进定义源与发布面，退役字段与类型零残留；旧 package.jai 在求值期失败与 fixture 迁移有 E2E 钉住（`tests/manifest_tests.jai`）。
+### 2.3 产物
 
-### 2.2 KEY=VALUE 协议与校验门
+- `modules` 与 `executables` 各自独立，没有包级互斥角色。
+- 自动发现只使用固定候选：模块 = 包根 `module.jai` 或 `src/module.jai`；程序 = 仅 `src/main.jai`。
+- 显式 item 的 `entry` 是包内现存普通 `.jai` 文件；不存在、是目录、含链接、落到包外都是错误，不回退到自动候选。
+- 同类产物名称判重（ASCII 大小写不敏感），同一入口文件重复也失败；模块与程序跨类同名允许。
+- `default_run` 始终校验：即使从不调用 `run`，无效值也是声明错误。
 
-- 求值器 = 生成子进程（`#load` manifest + `#run main()` 打印行记录）；记录全集 = `NAME/VERSION/TYPE/DESCRIPTION/BUILD_SCRIPT/PLUGIN/PLUGIN_OPTION/TARGET/MEMBER/EXCLUDE/DEP`（设计修订 2026-10-21：`JAIX_CONFIG`/`JAIX_EXE`/`TRANSPILE_PLUGIN` 移除；新增 `PLUGIN=<id>|<version>` 与 `PLUGIN_OPTION=<id>|<key>|<value>`；值里的 `%`/`|`/CR/LF 用 `%XX` 编码）。
-- 父进程严格解析：未知键/重复单值/形状错/重复 option key = 错误 + 行号；语义校验（未知 id、版本不匹配、options schema、跨插件冲突）移到插件解析/合并期（§5.2）。
-- 两道旧校验门移除：`validate_jaix_marker` 由 `juice-plugin-jaix` 的 options validate 承担；`validate_transpile_pipeline` 由 `resolve_plugin_configs` 承担。失败仍发生在编译前，但错误阶段从 manifest 加载变为 build/test 的插件准备。**执行级现实（2026-10-21，055/056）**：manifest 只做结构解析（未知键/重复/形状/重复 option key），语义校验（未知 id、版本、options schema、跨插件冲突）在插件准备/合并期落地。
-- 每个 manifest 一个 jai 子进程求值；写盘失败退出码 2、父重试至多两次（R§1.2）。**设计修订（2026-10-21）**：options 现在跨进程（`PLUGIN_OPTION` 行），旧「options 不跨进程」约束退役。
+### 2.4 名称与路径
 
-### 2.3 结构层 vs juice 专属层与 bootstrap 扩展纪律
+- 包名、依赖引用名、插件 `id`：首字符 ASCII 字母或数字，后续 ASCII 字母、数字、`.`、`_`、`-`。
+- 模块名、程序名、导入名/alias、`options` 键：首字符 ASCII 字母或下划线，后续字母、数字、下划线。
+- 比较键统一 ASCII 大小写不敏感，保留原拼写；不修剪、不自动改名、不做 Unicode 转写。
+- 自动名称仍须合法：含连字符的包名不能自动变成模块名或程序名，必须显式命名。
+- 包内入口与成员目录拒绝绝对路径、`..` 越界、符号链接/junction；路径链必须无链接。
+- 普通 `path` 依赖相对声明包根，可指向兄弟目录（消费包根的父目录范围内）；Git 提供方内部的相对引用只能留在检出内。
 
-- 结构层（otter 全量实现）：§2.1 全部 + 派生语义（LIB 禁 targets、UNSPECIFIED 推导、依赖只经 shim 消费、workspace member 须 root 内 + 被引用须声明依赖、无传递闭包）（R§1.4、ADR 0001）。
-- juice 专属层（otter 决策 = 兼容容忍/语义重解释）：`plugins` 声明面（设计修订 2026-10-21，取代 `jaix` 标记 + `transpile` 管线）、`build_script`（死字段容忍）。
-- **bootstrap 期扩展纪律**：otter 专属声明（如插件声明面）只能以 `PACKAGE` 之外的兄弟常量存在（求值器编译整个文件、未知顶层常量不影响协议）（R§1.2）；Package 字段扩展只在自举切换后（R§6 风险 4）。**设计修订（2026-10-21）**：自举已完成（阶段 3），`plugins` 字段进入 Package 面；旧 `TRANSPILE_PLUGIN id ⊆ juice 合法集` 约束随旧协议退役（`PLUGIN` 记录为 otter 自托管求值器协议；根包自身不声明插件）。
+### 2.5 依赖
+
+- 来源显式且互斥：`PATH` 需要 `path`，`GIT` 需要 `git.url`，`WORKSPACE` 需要空 `path`/`url`/selector。缺类型、多来源、载荷与类型不符在协议解析期失败（Decision 9）。
+- Git 的 `branch` / `tag` / `rev` 至多一个；全部省略 = 仓库默认分支；显式空 selector 失败。没有版本范围、提供方包名断言或锁文件。
+- 模块选择：每项 `path`（来源根内包目录，省略 = `.`）+ `name`（提供方导出名，省略 = 唯一导出）+ `alias`（可选导入名）。`modules` 整体省略 = 把来源根当提供方包目录并采用唯一导出简写；根不是包、零导出、多导出都失败。显式空模块清单 = 能力不匹配。WORKSPACE 来源必须显式选择成员模块。
+- 同一实际模块在一个消费包内最多被选择一次；引用名、alias 或路径写法不同不豁免。不同来源/修订的同名包可在明确别名下并存。
+- 最终导入名不得覆盖本包模块、其他直接导入或编译器标准模块。
+- 提供方自行声明其依赖；提供方内部模块不会泄漏为消费方的直接导入名。依赖图必须无环并报告完整链路。
+- 已解析的 Git 选择由普通 build/run/test 复用，不追新；`juice update` 刷新所选消费包的完整 Git 图；`--offline` 只用记录与完整内容，缺记录时只有“完整提交 + 内容已缓存”可建立选择。内容缓存与选择状态分目录，遵守 XDG 契约（§11）。
+- 相对 `path` 以声明包根为基准，与命令 CWD 无关；移动工程根产生新解析上下文，只改 CWD 不变。
+- 提供方包内模块可互相按公开名引用（解析器重写到私有名并生成消费工程私有 shim）。声明包**自己**的模块入口目前没有同名 shim：包内程序或模块要使用本包模块时用文件级加载（`#load`），公开名导入只保证“作为提供方被依赖”时可用。
+
+### 2.6 工作区
+
+- `members`：工作区内相对明确目录，以及不跨路径分隔符的单层 `*`；递归与其他模式语法不支持。明确成员目录无效或模式无匹配失败。
+- `exclude` 命中目录及其候选子树；无匹配的 exclude 合法。
+- 根包（存在时）自动是成员且不能被排除；纯工作区没有隐含成员。
+- 独立内层工作区形成归属边界：外层收录其根或成员且未排除时失败，不静默跳过。一个包至多属于最近合法工作区；未收录或被排除的包作为独立包，不继续向外寻找归属。
+- 重叠成员匹配按实际目录去重；成员目录必须是工作区根内的安全真实目录且含 `package.jai`。
+
+### 2.7 插件
+
+- 插件通过已声明的公开模块提供，不是第三类包产物。`id` 是消费包内的引用名；内置引用用 `builtin = "load"` / `"test-block"`（`id` 可省略，显式时必须等于 `builtin`），外部插件必须给出显式 `source` 与 `module` 选择。
+- 选中的模块入口必须有且只有一个 `get_juice_plugin` 声明并带 `@juice_plugin` 尾注；零入口 = 能力缺失，多入口 = 歧义。
+- 声明不再有 `version`。入口兼容性由插件自身的 `Juice_Plugin.abi_version` 与安装单元的 `plugin_abi` 独立检查，与包版本和 Git selector 无关。
+- 同一实际插件不能通过不同名字、来源拼写或配置启用多次；同一插件模块也不能同时被普通依赖选择（同一提供方的**另一个**导出作为普通 API 合法）。零公开模块的包不能作为插件提供方。
+- 省略 `plugins` = 内置 `load` + `test-block`；`Plugin_Declaration.[]` = 全禁用；非空清单完全替换且不补默认。
+- `options` 由插件 schema 定义默认值、解析与校验；省略/空 options 都使用默认，不等于禁用；重复键、未知键、必填缺失、非法值在 hook 之前失败。
+- 插件只在各被选包自身启用：根/工作区配置不继承给成员，依赖包与未选成员的插件不自动获取或执行。一次包操作只准备一次。
+- 固定生命周期阶段决定先后，同阶段按声明顺序；没有优先级、插件间排序图或自动重排。
+- 派生视图限于消费工程 `target/` 私有派生区，共享检出与包源只读；只消费本轮注册的输出。插件不得修改包身份、产物、依赖、插件清单、工作区成员或命令程序选择。尚不存在的公开入口必须先由独立脚本生成；`build_script` 不再存在。
+
+### 2.8 选包与命令
+
+- 命令从 CWD 向上找最近 `package.jai`（`src/workspace.jai` 的 `locate_declaration_root`）；最近声明无效时立即失败，不跳过到上层。
+- 位置默认：成员内调用只选当前成员；根调用、有根包且 `default_members` 省略 = 只选根包；根调用、纯工作区且省略 = 全体成员；`default_members` 显式则替换默认，空清单 = 没有默认选择。
+- 显式选包：`--workspace`（全体成员含根包，与 `-p`/`--package-path` 互斥）、`-p/--package`（包名）、`--package-path`（工作区相对目录）。显式集合替代默认，按包身份去重并按相对目录稳定排序；未知/歧义/非成员/零选包都在执行前失败。
+- `build` 编译所选包全部程序；零程序仍校验声明与依赖后报告没有可执行产物。`run` 必须恰好一个包，程序选择序为显式名 → `default_run` → 唯一程序，只编译该程序，`--` 之后原样转交，子进程退出码成为命令退出码。
+- `test` 不需要公开产物，过滤条件逐包应用（子串、大小写敏感），零测试/零命中成功报告；`update` 只刷新解析图并拒绝 `--offline`。
+- 批量操作在首个失败停止，报告已完成/失败/未执行范围；已成功包不回滚。每包测试扫描遇到下级声明即剪除该子树。
+
+### 2.9 求值协议与诊断
+
+- 求值器是生成的 `jai` 子进程：`#load` 声明文件、把 `PACKAGE` 的求值结果打印为记录（`SCHEMA=2`）。记录键为 `SCHEMA/NAME/VERSION/DESCRIPTION/DEFAULT_RUN/WORKSPACE/MEMBERS/EXCLUDE/DEFAULT_MEMBERS/MODULES/MODULE/EXECUTABLES/EXECUTABLE/DEPENDENCIES/DEP/DEP_MODULE/PLUGINS/PLUGIN/PLUGIN_OPTION`；值里的 `%`、`|`、CR、LF 用 `%XX` 编码。
+- 列表计数 `-1` 表示省略、`0` 表示显式空、正数表示显式条目数；父进程严格校验计数、重复单值记录、来源变体、selector 互斥与记录形状。
+- 校验分阶段：求值（Jai 编译器错误原样保留）→ 协议结构 → 字段/省略状态 → 名称/路径/来源规范化 → 语义 → 入口/文件系统检查。前一阶段失败不继续下游，也不发布部分可执行结果。
+- 协议诊断给稳定字段与列表顺序，不伪造源码坐标；可靠时使用编译器给出的源坐标。成员按路径排序报告。
+- 求值失败时打印迁移指引，指向 `docs/migrations/package-declarations.md`；未知协议记录同样指向该文件。
+
+### 2.10 迁移与边界
+
+- 首版人工迁移：`type`/`targets`/`main_file`、依赖 `version`/`package` 搜索、插件成员名猜测/`version`、`build_script` 全部删除；`workspace` 保留。不部分接受旧字段，不自动推断来源，不自动追新兼容修订。
+- 根包与全部成员声明一起迁移；错误给出引用链，作者显式选择兼容修订或补声明。
+- 可执行文件与相邻 `modules/` 构成完整安装单元，缺失或混装失败，没有其他安装目录回退（§9、§11.11）。
+- 独立的 Testing 迁移 effort（§13）不在本规格内改写；本规格不改变其已关闭决策。
 
 ## 3. 仓库布局规格
 
 最终树 = §0 架构图（C§4 定稿 + 命名定稿修订）。职责与规则：
 
-1. **根包** = BIN，`name="juice"`、`targets=[{name="juice", main_file="src/main.jai"}]` → `target/juice.exe`。根包同时是导入源：`src/module.jai` 是库面唯一定义源（Package 兼容结构体 + Testing API + Juice_Plugin API）（C§4、C§6.3 裁决 (a)；混合形态支持 = C§6.2 E1）。
-2. **成员**（执行级现实 2026-10-21，040 收尾；分发契约 048 收尾；设计修订 2026-10-21）= `packages/juice-plugin-lint`（真实第三方插件成员；LIB 包：`package.jai` + 根部 `module.jai`（test-free）+ `tests/`；零工具依赖——不声明 `juice_core`，该模块面由工具提供，见 §3.3）；**`packages/juice-plugin-jaix`（PRESTEP 插件；执行级现实 2026-10-21，061：成员包已交付，Phase 1 静态 `src/jaix_plugin.jai` 已删除）**；内置 transpile 插件（`load` / `test 块`）仍静态驻 `src/`，`juice-plugin-test`/`juice-plugin-transpile` 成员未创建。`workspace.members` 逐条列举（juice 无 glob，C§2；glob = 未来特性 C§5 缺口 1）。成员测试各自为 root 跑（juice 不聚合，C§2/C§3；阶段 0 CI = 根 + 逐成员脚本循环，gs_test 式脚本层聚合先例）。
-3. **成员 DEP 纪律与分发契约**（执行级订正 2026-10-21，048 收尾；设计修订 2026-10-21，jaix-plugin effort）：插件包 = 工作区内的普通可复制源码成员包；`juice_core` 是**工具提供的模块面**，由 `<exe>/modules` 在每个编译子进程的导入路径上解析（导入路径第一顺位，不新增解析代码），成员包按名 `#import "juice_core"` 但**不声明该依赖**、不携带 juice 检出路径。**激活面改为根 `workspace.members` + `Package.plugins` 声明**：成员插件 id = 成员包名；声明即激活/配置/排序，插件准备阶段为已声明成员写 import shim；根 `dependencies` 不再承担插件激活（运行时依赖与插件声明分离）。成员间引用 = 按名 DEP（根 prep 期按名链接短路，C§2）；**根 prep 期成员的非成员相对 DEP 按根 CWD 静默解析错**——纪律：相对 DEP 只指向成员或根（根 CWD 下可解析的路径），其余路径一律根包同名声明兜底（C§3 缺口 3 实验）。
+1. **根包**：`name="juice"`、`executables = .[{name = "juice", entry = "src/main.jai"}]` → `target/juice.exe`。根包同时是导入源：`src/module.jai` 是库面唯一定义源（Package 兼容结构体 + Testing API + Juice_Plugin API）（C§4、C§6.3 裁决 (a)；混合形态支持 = C§6.2 E1）。
+2. **成员**（执行级现实 2026-10-21，040 收尾；分发契约 048 收尾；设计修订 2026-10-21）= `packages/juice-plugin-lint`（真实第三方插件成员；包：`package.jai` + 根部 `module.jai`（test-free）+ `tests/`；零工具依赖——不声明 `juice_core`，该模块面由工具提供，见 §3.3）；**`packages/juice-plugin-jaix`（PRESTEP 插件；执行级现实 2026-10-21，061：成员包已交付，Phase 1 静态 `src/jaix_plugin.jai` 已删除）**；内置 transpile 插件（`load` / `test 块`）仍静态驻 `src/`，`juice-plugin-test`/`juice-plugin-transpile` 成员未创建。`workspace.members` 逐条列举（juice 无 glob，C§2；glob = 未来特性 C§5 缺口 1）。成员测试各自为 root 跑（juice 不聚合，C§2/C§3；阶段 0 CI = 根 + 逐成员脚本循环，gs_test 式脚本层聚合先例）。
+3. **成员 DEP 纪律与分发契约**（执行级订正 2026-10-21，048 收尾；设计修订 2026-10-21，jaix-plugin effort）：插件包 = 工作区内的普通可复制源码成员包；`juice_core` 是**工具提供的模块面**，由 `<exe>/modules` 在每个编译子进程的导入路径上解析（导入路径第一顺位，不新增解析代码），成员包按名 `#import "juice_core"` 但**不声明该依赖**、不携带 juice 检出路径。**激活面 = 各被选包自身的 `Package.plugins` 声明**；声明即激活/配置/排序，插件准备阶段为该声明选中的来源写 import shim，普通 `dependencies` 不承担插件激活（运行时依赖与插件声明分离）。**2026-11-15 修订**：外部插件不再按成员名猜测——声明给出显式 `source`（PATH/GIT/WORKSPACE）与 `module` 选择（§2.7），成员包与普通提供方走同一来源规则；成员间引用同样用显式来源，`path` 相对声明包根。
 4. **命名碰撞纪律**（C§7 全部判死面）：库面 import 名不得与 "Juice" 大小写近匹配（`#import "juice"` = 平铺/目录两种发布形态下均为 "Non-matching Windows file case" 硬错误，C§7.2 E1 / C§7.4 E5）；平铺与目录模块同点并存 = 歧义硬错误（C§7.4 E6）——发布流程只写目录形态天然避免；模块面（`Juice`）与库面（`juice_core`）双面并存合法（C§7.2 E3）。
 5. **共享 target/ 语义**：每包独立 `target/`（`target_dir = <包根>/target`，C§2）；clean 清根 + 各成员 target/。cargo 单 target 不实现（C§5 缺口 6）。**执行级现实（2026-10-22，架构审查 C3/C5）**：target/ 区根由 `src/target_layout.jai` 单一拥有——`build/`（构建会话区：生成的构建驱动 bootstrap-meta/version-check、build-<target>.jai，以及 build/test 程序的编译中间件 `.obj/.lib/.exp/.pdb/.added_strings_*`；PDB 经链接器 `/PDB:` 重定向，exe 仍留 artifact 根）、`modules/`（发布模块面）、`transpile/`（内容寻址视图树 + `testing-module/` 编译视图 + test_runner）、`plugins/`（注册/host 会话产物）、`packages/`（依赖 shim）、`tests/`（测试 scratch，test 启动整区 prune）、`recovery/`（崩溃恢复备份，prune 排除）、`evidence/`（人工证据日志）；artifact 根与 LNK1104 副本仍在 target/ 顶层（`modules_dir = <exe>/modules` 推导要求）。
-6. **依赖闭包**：无传递性——每包显式全闭包 DEP（ADR 0001；jaix-cli 先例，C§5 缺口 4）。
+6. **依赖闭包**：提供方自行声明其依赖；消费方不需要复述完整传递依赖图，提供方内部模块也不会成为消费方的直接导入名（§2.5；Decision 11、35–37）。
 7. **测试组织**：库面模块 test-free（bootstrap #load 集纪律），测试驻 `tests/` 姊妹文件 + 内嵌 test 块（0053 规则，R§5.1）。
 
 ## 4. 命令架构规格
 
-1. **静态命令注册表**：`COMMAND_REGISTRY :: Command.[BUILD_COMMAND, RUN_COMMAND, CLEAN_COMMAND, TEST_COMMAND, VERSION_COMMAND, HELP_COMMAND]`（R§2.1 形状；run/test 内置 = 本规格定稿；version/help 内置 = 用户定稿 2026-10-19，随阶段 1a 收口折回——六命令为命令全集）。`Command :: {name, description, usage, prerequisites: [] string, handler: #type (ctx: *Command_Context, arguments: [] string) -> bool, validate_arguments}`（`command.jai:14-21`）。version = juice 自身版本 + jai 编译器版本（编译期 `compiler_get_version_info` 填充 `Version_Info` 三元组经 `#run` 常量烘入 exe——2026-10-19 spike 实证：字符串返回 = 全横幅，三元组才是版本串）；help = registry 元数据渲染（零参总览 + `juice help <命令>` 单命令 usage 行，零前置零副作用）。
+1. **静态命令注册表**：`COMMAND_REGISTRY :: Command.[BUILD_COMMAND, RUN_COMMAND, CLEAN_COMMAND, TEST_COMMAND, UPDATE_COMMAND, VERSION_COMMAND, HELP_COMMAND]`（R§2.1 形状；run/test 内置 = 本规格定稿；version/help 内置 = 用户定稿 2026-10-19，随阶段 1a 收口折回；`update` 由 0091 加入——七命令为命令全集）。`Command :: {name, description, usage, prerequisites: [] string, handler: #type (ctx: *Command_Context, arguments: [] string) -> bool, validate_arguments}`（`command.jai:14-21`）。version = juice 自身版本 + jai 编译器版本（编译期 `compiler_get_version_info` 填充 `Version_Info` 三元组经 `#run` 常量烘入 exe——2026-10-19 spike 实证：字符串返回 = 全横幅，三元组才是版本串）；help = registry 元数据渲染（零参总览 + `juice help <命令>` 单命令 usage 行，零前置零副作用）。
 2. **dispatcher 语义**（R§2.1，`dispatcher.jai:35-121`）：`validate_registry`（无效声明/重名/未知前置拒绝）→ `plan_command` DFS 全图规划（环检测、菱形去重、前置命令恒收空参数）→ 按序执行（前置失败 = PREREQUISITE_FAILED、目标失败 = HANDLER_FAILED，立即中止）。
-3. **前置链**：唯一前置关系 = `run` 依赖 `build`（R§2.1，`registry.jai:31` 测试钉住）——**run 保留内置**（用户定稿 2026-10-19；早前拟经 at_EXECUTE 复现删除的立场已废弃）。
+3. **前置链**：没有前置命令关系。`run` 不再依赖 `build`：它在所选包内只编译被选中的那一个程序（§2.8；Decision 19、73；ticket 0093）。
 4. **Command_Context** = `{root_dir, cache_dir, workspace: Workspace_State}`（`command.jai:4-12`）——两个进程级路径 + workspace 相位机。
-5. **workspace 状态机**（L§1.2，`workspace.jai:108-207`）：`EMPTY → DISCOVERED → PREPARED`；幂等；「全部成功才发布」（失败留在 DISCOVERED 可重试）；三 seam（discover/resolve/prepare_dependencies）是 at 挂载点（§6）。
+5. **workspace 状态机**（L§1.2，`src/workspace.jai`）：`EMPTY → DISCOVERED → PREPARED`；幂等；「全部成功才发布」（失败留在 DISCOVERED 可重试）。`Workspace_State` 另带调用目录、命令的 `Package_Selection` 与 `Resolution_Environment`（内容缓存根、状态根与模式）；选包在 discovery 之后、编译之前完成（§2.8）。
 6. **命令级生命周期序**（阶段清单表见 L§1，全部一手核验）：build = b1 参数校验 → b2 workspace 准备 → b3 零 plan 短路 → b4 批量重校验 → b5 依赖剥离前端 → b6 [marker] jaix 前置 → b7 逐 plan 入口选择 → b8 逐 plan 编译（metaprogram 生成 + spawn jai + artifact 存在性检查）；test = 参数校验（≤1 pattern）→ t0 workspace 准备（force_dependencies）→ t1 文件收集（scan_walk + 排除集）→ t4 零文件短路 → t10 driver/metaprogram 生成 → t12 spawn jai（编译 = 执行）→ 退出码透传（t1-t12 的 1b 子集，2026-10-19 执行级订正：1b 无转译层——t2 jaix 前置/t3 EXPAND 转译/t5-t9 视图面/t11 依赖剥离归 1c；t3 编号续号与 t7 零匹配语义收在生成 metaprogram 内，见 §7.3；**2026-10-20 执行级订正（阶段 1c 收口）**：t3 EXPAND 转译 + t5-t9 视图面 + t11 依赖剥离已由 1c 接管落地（004）；**t2 jaix 前置归后续票**——PRESTEP 阶段枚举保留、b6/t2 恒等占位不动（004 决定 1 拍板，2026-10-19 的「归 1c」表述以此为准））；clean = 发现（不 prepare）→ 路径收集 → 先全量校验后删除。
 
 **设计修订（2026-10-21，jaix-plugin effort）**：b6/t2 不再是 jaix marker 分支，而是 PRESTEP 阶段——命令级插件准备（`Package.plugins` 解析 + 成员插件扫描/链接 + 注册文件）→ PRESTEP `before` 钩子（源替换表 + 剔除集）→ TRANSPILE（b5/b7、t3/t5-t9/t11 消费替换表）→ COMPILE（b8/t12）。零 plan / 零文件短路先于 PRESTEP；PRESTEP 无内置实现，未声明 hook 插件 = no-op。旧 t2 表述（「jaix 前置归后续票」）由本条接替。**执行级现实（2026-10-21，057/060）**：命令级插件准备（声明解析 + 成员扫描/链接 + 注册文件）→ PRESTEP `before`（host）→ TRANSPILE 消费替换表/剔除集已在 build/test 两条链落地；零 plan / 零文件短路先于 PRESTEP。
@@ -102,7 +181,7 @@ juice/（开发代号 otter）                 # 工作区根 + 根包（BIN: ju
 
 ```
 Juice_Plugin :: struct {
-    id:            string;                     // 身份（进管线描述/缓存键）；成员插件 id = 成员包名
+    id:            string;                     // 身份（进管线描述/缓存键）；声明 id 是消费包内的引用名
     version:       string;
     transpile:     *Transpile_Plugin = null;   // 转译管线贡献面（可空；非空则注册进声明序管线，
                                                //   继承行号保真契约与成对探测钩子——R§3.1/L§3.2）
@@ -129,7 +208,7 @@ Lint_Plugin :: struct {
 }
 ```
 
-**设计修订（2026-10-21，jaix-plugin effort）**：`Config_Option` 增加 `apply(options: *void, key: string, value: string) -> string`——插件自己把字符串 option 行写进类型化字段，未知 key = 错误；所有行应用后跑 `validate`。hook 通过 `plugin_state` 槽拿到同一 options 指针并 cast。v1 一个插件包只提供一个插件；声明 version 必须等于 `Juice_Plugin.version`。**执行级现实（2026-10-21，056）**：`Juice_Plugin.options` 指针 + `Config_Option.apply`/`validate` 已在 `resolve_plugin_configs` 单一落点交付；hook 的 `plugin_state` 槽对齐同一 options 指针。
+**设计修订（2026-10-21，jaix-plugin effort）**：`Config_Option` 增加 `apply(options: *void, key: string, value: string) -> string`——插件自己把字符串 option 行写进类型化字段，未知 key = 错误；所有行应用后跑 `validate`。hook 通过 `plugin_state` 槽拿到同一 options 指针并 cast。v1 一个插件包只提供一个插件；声明侧不再有 version，兼容性由 `Juice_Plugin.abi_version` 与安装单元的 `plugin_abi` 检查（§2.7）。**执行级现实（2026-10-21，056）**：`Juice_Plugin.options` 指针 + `Config_Option.apply`/`validate` 已在 `resolve_plugin_configs` 单一落点交付；hook 的 `plugin_state` 槽对齐同一 options 指针。
 
 **零值安全决定（2026-10-21，复查修复 F4）**：`Lint_Level` 文序 = `WARNING; ERROR; INFO;`，WARNING 是零值成员（`cast(Lint_Level) 0 == .WARNING`）；`Lint_Finding.level` 默认 `.WARNING`。零初始化或漏写级别的 finding 恒为 advisory、不改变退出码，ERROR 必须显式书写。该面序属 pre-release 变更；041 Resolution 的 `Lint_Level（ERROR/WARNING/INFO）` 文序与 040 决定 5 的原型枚举以本条为准（记录修正不改已关票）。
 
@@ -138,8 +217,8 @@ Lint_Plugin :: struct {
 ### 5.2 发现两级机制（A§4 推荐 + C§7 官方形态）
 
 - **内置件**（build/clean/run/test 命令 + 内置 transpile 插件 test 块/load）：静态注册表 + 显式 `#load` 列表——自动发现对内置件无收益且违反 bootstrap 纪律（A§4.1；R§2.1 现状）。
-- **插件声明面**（设计修订 2026-10-21，jaix-plugin effort）：唯一激活/配置/顺序面 = 根包 `Package.plugins`（id + version + options）。内置 id（`load` / `test-block`）解析到静态注册表；成员插件 id = 成员包名，解析到 `workspace.members` 的成员包；未知 id、声明 version 与插件 version 不匹配、一个包提供多个插件、options schema 拒绝 = 插件准备期错误（编译前失败）。**face 默认值**：transpile 管线 = 声明的 transpile face；一个 transpile face 都没声明时用缺省 `[load, test-block]`；hooks 与 lint 只对声明插件生效。声明序 = transpile 管线序 = hooks 注册序 = lint 观察序。**执行级现实（2026-10-21，055/056/060）**：声明解析（`PLUGIN`/`PLUGIN_OPTION`）、成员扫描/链接与 `target/plugins/registration.jai` 生成、`resolve_plugin_configs` 的管线/钩子/lint/options 选择均已落地；未声明插件不参与行为面。
-- **成员插件扫描**：插件准备阶段按声明序对每个成员插件 id 定位成员包，经 `scan_walk` 确定性 DFS 词法序扫描，词法锚点识别 `@juice_plugin` 尾注挂 `get_juice_plugin` 声明（lexer 锚点判定 = juice `is_test_anchor` 同款手法）；跨包同名模块按探测序裁定（`module.jai` 低秩胜；同级先者胜），丢弃项产生非致命诊断。读取/扫描失败 = `ok=false` 响亮失败。已声明成员写 import shim（复用成员链接），供注册文件/测试 metaprogram/host 按名导入；根 `dependencies` 不参与插件激活。
+- **插件声明面**（2026-11-15 修订）：唯一激活/配置/顺序面 = 被选包自身的 `Package.plugins`（`id` + `builtin` | `source`+`module` + `options`）。`builtin = "load"` / `"test-block"` 解析到静态注册表；外部插件逐项解析自己的 PATH/GIT/WORKSPACE 来源与公开模块选择，不按成员名或包名搜索。未声明来源、模块入口为零或多、同一插件重复启用、插件模块同时被普通依赖选择、options schema 拒绝 = 插件准备期错误（编译前失败）。**face 默认值**：transpile 管线 = 声明的 transpile face；一个 transpile face 都没声明时用缺省 `[load, test-block]`；hooks 与 lint 只对声明插件生效。声明序 = transpile 管线序 = hooks 注册序 = lint 观察序。**执行级现实（2026-10-21，055/056/060）**：声明解析（`PLUGIN`/`PLUGIN_OPTION`）、成员扫描/链接与 `target/plugins/registration.jai` 生成、`resolve_plugin_configs` 的管线/钩子/lint/options 选择均已落地；未声明插件不参与行为面。
+- **插件来源解析与入口判定**（2026-11-15 修订）：插件准备阶段按声明序解析每个外部插件自己的来源与模块选择，只在该模块入口文件里做词法锚点判定（`get_juice_plugin` + `@juice_plugin`；lexer 锚点 = juice `is_test_anchor` 同款手法），不扫描其他模块、传递依赖或未选成员。零入口 = 能力缺失，多入口 = 歧义；读取失败 = `ok=false` 响亮失败。解析出的模块写 import shim，供注册文件/测试 metaprogram/host 按名导入；普通 `dependencies` 不参与插件激活。
 - **合并 vs 选择**（设计修订 2026-10-21）：`merge_plugins` 负责 registry 合并与查重（重复 id/版本冲突/挂点冲突/transpile 名冲突/lint 名冲突 → ERROR + 拒绝），返回 registry + lint 列表 + 诊断；`resolve_plugin_configs(registry, declarations)` 按声明序过滤并产出 transpile 管线、钩子表（槽对齐）与 options 应用结果。未声明的插件不参与行为面；lint 也由声明驱动（不再以 DEP 作为 lint 激活面）。工作区级合并注册文件落 `<root>/target/plugins/registration.jai`（会话产物：每次命令重生、`clean` 随 `target/` 整删、不进 bootstrap 闭包），内容 = 按声明序的显式调用（两段 codegen：逐名 import + 钩子装配）：
   ```
   JUICE_PLUGIN_<i> :: #import "<模块名>";              // Metaprogram_Plugins 逐名 codegen 形状
@@ -265,12 +344,12 @@ test 块 → 内置 test 块转译插件 EXPAND 生成 `juice_test_N` + `@test` 
 - **观察面**：`Juice_Plugin.lint`（`Lint_Plugin.inspect_test_header`）。每个被收集的测试过程收到其已类型检查的 header + 扁平化子表达式（`[] *Code_Node`），观察者返回 `[..] Lint_Finding`（1 基 line/column），不直接依赖 `compiler_report` 内部。
 - **宿主报告**：生成的 metaprogram 在 `.TYPECHECKED` 收集期、测试注记判定与 `source_path_allowed` 隔离判定（与发现同一谓词）之后，按合并序调用各 lint 观察者；findings 由宿主把 `WARNING/ERROR/INFO` 映射到 `compiler_report` 三汇，路径经嵌入的 `path_pairs` 映射回原始包相对路径（不暴露 `target/transpile/` 视图路径），坐标取 findings 原值（插件负责换算，宿主不二次换算）。隔离集之外的导入模块不会被观察。
 - **时点与退出码**：lint 与发现共用同一收集点（runner 注入之前），pattern 过滤发生在收集之后，因此过滤不可能隐藏 finding。v1 lint 为 advisory：WARNING 不改变退出码（`Lint_Level` 零值安全，见 §5.1）；只有显式 ERROR finding 导致编译失败。
-- **v1 规则（真实成员包 `packages/juice-plugin-lint`）**：测试过程名必须 snake_case（非空、`[a-z0-9_]`）；违反 = 一条 WARNING，消息含过程名并锚定过程 header。生成的 `juice_test_N` 与手写 snake_case 名天然通过。**设计修订（2026-10-21）**：lint 插件 id 改为成员包名 `juice-plugin-lint`；根包在 `Package.plugins` 声明它（不再以根 DEP 激活）。
+- **v1 规则（真实成员包 `packages/juice-plugin-lint`）**：测试过程名必须 snake_case（非空、`[a-z0-9_]`）；违反 = 一条 WARNING，消息含过程名并锚定过程 header。生成的 `juice_test_N` 与手写 snake_case 名天然通过。**设计修订（2026-11-15）**：lint 插件的声明 id 为 `juice-plugin-lint`，来源显式指向提供方包目录；根包在 `Package.plugins` 声明它（不再以根 DEP 激活）。
 - **已废弃**：原稿「lint 的 lifecycle 面 = `at_RUNNER_GEN` 邻接（决定注入哪些观察逻辑）与 `after_COMPILE`（收集诊断转成报告）」为未落地的设计草案；实际形态 = 上述 `.TYPECHECKED` 收集期观察 + 宿主 `compiler_report`，不新增 at 挂载点。
 
 ### 8.3 jaix pre-step 插件（设计修订 2026-10-21，jaix-plugin effort；执行级现实 2026-10-21，061/062）
 
-- **身份与形态**：`juice-plugin-jaix`，一个 `Juice_Plugin`，只贡献 PRESTEP `before` hook 与 options schema（`config`、`exe`）；声明 = `Package.plugins` 里 `{id="juice-plugin-jaix", version, options=[config, exe?]}`；未声明 = 无前置。**执行级现实（2026-10-21，061）**：实现 = 成员包 `packages/juice-plugin-jaix/`——`package.jai`（LIB、零工具依赖、无 targets）+ 根部 test-free `module.jai`（`#import "juice_core"`、`get_juice_plugin` + `@juice_plugin`、PRESTEP hook、options schema、插件自带扫描/spawn/镜像/litter）+ `tests/`（17 个单元测试，以成员根为包根）；Phase 1 的 `src/jaix_plugin.jai` 与其装载行已删除。
+- **身份与形态**：`juice-plugin-jaix`，一个 `Juice_Plugin`，只贡献 PRESTEP `before` hook 与 options schema（`config`、`exe`）；声明 = `Package.plugins` 里 `{id="juice-plugin-jaix", source=..., options=[config, exe?]}`（声明侧无 `version`；2026-11-15 修订）；未声明 = 无前置。**执行级现实（2026-10-21，061）**：实现 = 成员包 `packages/juice-plugin-jaix/`——`package.jai`（零工具依赖）+ 根部 test-free `module.jai`（`#import "juice_core"`、`get_juice_plugin` + `@juice_plugin`、PRESTEP hook、options schema、插件自带扫描/spawn/镜像/litter）+ `tests/`（17 个单元测试，以成员根为包根）；Phase 1 的 `src/jaix_plugin.jai` 与其装载行已删除。
 - **职责**：插件自带整包扫描（自己的排除规则：dot/target/非 .jai/根 package.jai/member 子树/config 文件/含 juice test block 的文件）、逐文件 spawn `jaix transpile`（全绝对路径、stderr 透传、CWD = `target/jaix-drivers/`）、镜像 `target/jaix/`（sidecar `.map` 随落）、exe 解析（options.exe 或 PATH）。失败 = PRESTEP 失败 = command 失败。**执行级现实（2026-10-21，061）**：成员自带确定性 DFS 枚举、路径助手与 Windows/POSIX 环境探测——`scan_walk` / `path_safety` / `xdg.get_env` 不在 `juice_core` 发布面，成员不复用工具内部模块。
 - **阶段效果**：镜像内的 test-free 文件填 `substitutions`（原相对路径 → `target/jaix/<rel>`）；config 文件填 `drops`；test block 文件不替换（juice 原路径 EXPAND）；member 子树不扫。build 入口命中替换则直编镜像入口并跳过闭包探测；test 已收集文件命中替换则 EXPAND 于镜像视图，`rel_path` / 编号 / `path_mapping` 不变。**执行级现实（2026-10-21，061）**：命令级 prepare 按声明定位成员（`workspace.members`）、写 import shim 与 `target/plugins/registration.jai`；host 应用 options、执行 PRESTEP，记录 `SUBSTITUTE` / `DROP` / `OK=1`；build/test 两条链与安装布局全链 E2E 全绿（真实 jaix CLI，绝对 exe option 不依赖 PATH）。
 - **核心零 jaix 知识**：无 `Package.jaix`、无 `JAIX_*` 记录、无 jaix mirror 路径、无 `is_jaix_driver_litter`、无命令分支；jaix 的 litter 与旧文件清理归插件。**执行级现实（2026-10-21，061）**：`src/` 守卫白名单为空（059 的 Phase 1 白名单曾为 `src/jaix_plugin.jai` 整文件 + `src/main.jai` 装载行；061 清空），`tests/jaix_guard_tests.jai` 全量文本扫描零命中并保留空白名单负向自测。
@@ -328,9 +407,9 @@ test 块 → 内置 test 块转译插件 EXPAND 生成 `juice_test_N` + `@test` 
 13. **PRESTEP host 的额外 spawn 与协议**：Phase 2 在有声明 hooks 插件时每个 build/test 多 spawn 一次 `jai`（生成 host driver，嵌入输入、记录文件输出）；零声明 hooks = 不 spawn。协议值用 `%XX` 编码；非零退出/输出缺失 = 命令失败；host 只跑 PRESTEP，不承担通用第三方宿主。
 14. **成员插件工具面与 litter**：成员插件不发布 `scan_walk`，jaix 插件自带扫描；jaix CLI 的 CWD 固定到 `target/jaix-drivers/`，核心删除 `is_jaix_driver_litter`；旧包遗留 litter 由插件清理，未启用插件的包可能把遗留 litter 当源码扫描（迁移说明）。
 15. **声明驱动的 lint 迁移**：lint 不再以根 DEP 激活，根包与 fixture 需在 `Package.plugins` 声明 `juice-plugin-lint`；成员仍由 `workspace.members` 提供，插件准备写 import shim。未声明的插件不参与行为面。
-16. **插件 id 与一包一插件**：成员插件 id = 成员包名；v1 一个插件包只提供一个插件；声明 version 必须等于插件 version。未来外部插件需要 `source`/`package` 坐标时再扩展 plugin entry，不新增 devDependencies 分类。
+16. **插件 id 与一包一插件**：~~成员插件 id = 成员包名；v1 一个插件包只提供一个插件；声明 version 必须等于插件 version~~ **已被 2026-11-15 修订取代**：声明 `id` 是消费包内的引用名，外部插件用显式 `source` + `module` 定位，声明侧没有 `version`；一个插件模块只提供一个入口。不新增 devDependencies 分类。
 
-**jaix-plugin effort 终态处置（2026-10-21，062）**：12 已交付（055 硬切——`Package.plugins` / `PLUGIN` / `PLUGIN_OPTION` 落地，旧字段/记录/两道门移除；旧 package.jai 在 manifest 求值期失败，无兼容 shim；迁移说明见 §2.1/§8.3）；13 已交付（060 host + 061 成员链——声明 hooks 插件时每次 build/test 多 spawn 一次 `jai`，零声明 hooks = 不 spawn；记录协议 `%XX` 编码 + 父进程严格解析 + 非零退出/缺失即失败；根包无 options 的 jaix 声明 = 每次多一次零效果 host spawn）；14 已交付（058/059 核心 litter 谓词删除；061 成员自带扫描与 litter 清理；jaix CLI CWD 固定 `target/jaix-drivers/`）；15 已交付（056 声明驱动 lint；根包与 lint fixture 在 `Package.plugins` 声明 `juice-plugin-lint`，成员由 `workspace.members` 提供）；16 已交付（056 一包一插件 + 声明 version 必须等于插件 version；成员插件 id = 成员包名）。本 effort 的未来项登记在 `docs/implementation/jaix-plugin-map.md` 的 Not yet specified（外部插件坐标/抓取、通用 lifecycle host、非插件 devDependencies、Candidate 3、lint/插件面扩展、`.map` 消费方），不在本 effort 交付。
+**jaix-plugin effort 终态处置（2026-10-21，062）**：12 已交付（055 硬切——`Package.plugins` / `PLUGIN` / `PLUGIN_OPTION` 落地，旧字段/记录/两道门移除；旧 package.jai 在 manifest 求值期失败，无兼容 shim；迁移说明见 §2.1/§8.3）；13 已交付（060 host + 061 成员链——声明 hooks 插件时每次 build/test 多 spawn 一次 `jai`，零声明 hooks = 不 spawn；记录协议 `%XX` 编码 + 父进程严格解析 + 非零退出/缺失即失败；根包无 options 的 jaix 声明 = 每次多一次零效果 host spawn）；14 已交付（058/059 核心 litter 谓词删除；061 成员自带扫描与 litter 清理；jaix CLI CWD 固定 `target/jaix-drivers/`）；15 已交付（056 声明驱动 lint；根包与 lint fixture 在 `Package.plugins` 声明 `juice-plugin-lint`，成员由 `workspace.members` 提供）；16 已交付（056 一包一插件；成员插件 id 当时取成员包名）。该条目的声明 version 门与成员名/id 绑定已由 2026-11-15 修订移除（见 §2.7）。本 effort 的未来项登记在 `docs/implementation/jaix-plugin-map.md` 的 Not yet specified（外部插件坐标/抓取、通用 lifecycle host、非插件 devDependencies、Candidate 3、lint/插件面扩展、`.map` 消费方），不在本 effort 交付。
 
 **阶段 3 终态处置（2026-10-20，039）**：1 出范围（特性请求素材，交付形态 = 静态内置注册表）；2 保留并记录（note 文本与消息面绑定 beta 0.2.009；精确匹配策略保留，官方 framework 落地后复核）；3 零使用（语义 spike 未做，本 effort 不消费；未来启用前先 spike）；4 已文档化（替换实现 = 换视图键；driver/metaprogram 会话产物不进键）；5 三汇与钩子失败中止语义已交付；观察类（lint）最终诊断形状已随 040 effort 交付（§8.2：findings 三汇 + 原始包相对路径 + 1 基坐标）；6 已兑现（封闭枚举只增不改 + 版本化注释）；7 出范围（第三方宿主）；8 出范围（未来特性）；9 已交付（键成分 + otter 独立版本分量）；10 已按既有解法交付（LNK1104 副本 hand-off、`cmd /c`、子进程 CWD 绝对路径、大小写近匹配拒绝）；11 已交付（2026-10-21，048 effort：插件面闭包随发布、成员零工具依赖、安装布局插件全链 E2E）。逐项处置表与证据见 `docs/implementation/old-juice-exit.md` §5。
 
@@ -348,6 +427,8 @@ test 块 → 内置 test 块转译插件 EXPAND 生成 `juice_test_N` + `@test` 
 
 **jaix-plugin effort 设计锚点（2026-10-21，otter 工作树）**：`src/lifecycle.jai`（PRESTEP/阶段状态）、`src/plugin.jai`（Juice_Plugin/options/merge）、`src/plugin_scan.jai`（声明驱动扫描/注册）、`src/manifest.jai`（PLUGIN/PLUGIN_OPTION 协议）、`src/module.jai`（Package.plugins 定义源）、`src/commands/build.jai`、`src/commands/test.jai`（阶段编排）、`src/scan_walk.jai`（扫描骨架；litter 谓词移除）、`src/test_runner.jai`（driver/metaprogram 生成与 COMPILE front；注册消费）、`src/publication.jai`（插件面闭包发布）；`docs/implementation/jaix-plugin-map.md`（effort map + 054-062 票）；`CONTEXT.md`（领域词汇）。
 
+**package-declaration-semantics effort 锚点（2026-11-15）**：`src/module.jai`（`Package`/`Product`/`Source`/`Dependency`/`Plugin_Declaration`/`Workspace_Config` 定义源）；`src/package_model.jai`（运行期归一化类型）；`src/manifest.jai`（`SCHEMA=2` 求值协议、`parse_manifest_data_strict`、迁移指引）；`src/target.jai`（产物发现与 `default_run`）；`src/workspace.jai`（最近声明、成员展开/排除、`select_workspace_packages`）；`src/dependency_resolution.jai`（来源、模块选择、可见性、环、Git 复用/离线）；`src/resolution_state.jai`（内容缓存/状态/XDG）；`src/plugin_scan.jai` + `src/plugin_host.jai`（插件来源、入口锚点、按包准备）；`src/commands/selection.jai`（共享选包与批量）；`src/publication.jai`（安装单元与兼容标记）；`docs/migrations/package-declarations.md`（迁移指南、E01–E10、A01–A16、证据索引）；`docs/design/package-declaration-presence-check.md`（省略状态实验）。
+
 Jai 发行版（`C:/Users/maojiaxing/DevTools/jai`，beta 0.2.009）：`modules/Compiler/Compiler.jai`（Message_Typechecked 327-372、Code_Note 964-969、Code_Declaration 674-711、Code_Procedure_Header 1045-1099、Location.enclosing_load 545-560、compiler_report_errors_for_untyped_declarations_with_these_notes 1536）；`how_to/460`（@command 先例/排序指导/TYPECHECKED_ALL_WE_CAN 注入）；`modules/Metaprogram_Plugins.jai:22-87`；`modules/Autorun.jai`；`modules/Basic/module.jai`（目录模块入口惯例）
 
 实验目录（本机，全部输出原文已录进研究文档）：
@@ -363,7 +444,7 @@ Jai 发行版（`C:/Users/maojiaxing/DevTools/jai`，beta 0.2.009）：`modules/
 本 effort（地图 `juice/issues/0065-map-test-migration-to-testing-package.md`）把测试库面迁入仓库根独立包 `jai/testing/`。**实施尚未开始**；本节只记录已定决策与对既有章节的影响面。落地前 §3/§7/§8/§9/§10 的现状描述仍以当前实现为准；落地后由收口票 0074 回写对应章节。
 
 1. **Testing 定义源（0066 已定）**：`src/module.jai` 的 `// [PUBLICATION-SECTION testing]` 段保留为 juice 内 vendored prefixed 镜像（API + 自测）；testing 的裸名 `Testing.jai` 为权威面；juice `tests/` 新增整文件逐字节同步测试（testing 缺席 SKIP，漂移失败）。bootstrap/Build/Test 的 Testing 特例与发布树 8 件不变。
-2. **testing 包布局（0067 已定）**：`testing/` = root LIB 包；Testing 权威面 `testing/modules/Testing.jai`；包入口根 `testing/module.jai`（不提供 `#import "testing"` 面）；jaix AST 插件 = `testing/packages/Jaix_Plugin_Test_Block/` 成员包（`PACKAGE.name` 不变，零依赖，不作为独立 test root）。runtime 定位零改动（`testing_module_source` 的 in-package/global 两分支）；testing 源不随 juice 发布树携带。dev-time 定位 = `src/testing_location.jai`（`JUICE_TESTING_ROOT` > 兄弟 `../testing`）。
+2. **testing 包布局（0067 已定）**：`testing/` = root 包；Testing 权威面 `testing/modules/Testing.jai`；包入口根 `testing/module.jai`（不提供 `#import "testing"` 面）；jaix AST 插件 = `testing/packages/Jaix_Plugin_Test_Block/` 成员包（`PACKAGE.name` 不变，零依赖，不作为独立 test root）。runtime 定位零改动（`testing_module_source` 的 in-package/global 两分支）；testing 源不随 juice 发布树携带。dev-time 定位 = `src/testing_location.jai`（`JUICE_TESTING_ROOT` > 兄弟 `../testing`）。
 3. **文本 test-block 转换（0068 进行中）**：API 形状未定；推荐 host-neutral hook + 共享内核（testing 拥有转换与所需中立类型/lexer；juice 保留 `Transpile_Plugin` / runner / load 插件 / 保真门，薄适配；vendored 副本逐字节同步）。落位（root `modules/` vs `packages/` 成员）与发布树件数待定。
 4. **测试发现（0075/0076 待决策）**：发现面迁入 testing 的切面、接口/协议、自包含与发布形态未定；文件扫描与 test 命令编排留在 juice。
 
