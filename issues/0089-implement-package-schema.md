@@ -1,6 +1,6 @@
 ---
 title: 实施：新 Package 声明与求值边界切换
-status: open
+status: closed
 labels: [ready-for-agent]
 assignee: maojiaxing
 parent: "0087"
@@ -32,3 +32,16 @@ blocked-by: ["0088"]
 ## Handoff
 
 将新公开类型和内部加载/模型/产物签名，新增load接线，已完成与后续语义清晰写到仓库外共享目录 `C:/Users/maojiaxing/DevTools/msys/tmp/juice-package-implementation/schema-handoff.md`。完成前merge integration/package-declaration-semantics最新tip，提交，返回精确证据，由merger关闭。不能把后续依赖/插件尚未完成说成完整规格交付。
+
+## Resolution
+
+- 实现提交 `aa752016e5fb11f39a6ba1f72718a739dab9a8aa`，已通过 `0252db77ec4147773e12d5719289457295a876c9` 串行合入 `integration/package-declaration-semantics`。
+- 公开 Package 精确保留九字段，模块与程序独立；退休字段由真实声明编译器拒绝。运行时路径、presence、产物计划和工作区快照移到不发布的 `src/package_model.jai`。Testing 公开实现及其测试段未变。
+- schema-2 求值协议保留省略/显式空/非空，Dependency、Plugin 和 Workspace 默认标记完整匹配。计算生成声明只改 `workspace.default_members` 的回归先失败后通过；不再丢失显式空默认成员。
+- loader 成功前规范化并校验真实无链接包根、包身份、产物入口和 default_run。三个真实 `clean` 负例确认非法声明失败且保留目标文件。纯 workspace 可以通过准备入口，不产生根包或根产物。
+- 插件省略状态贯穿解析、配置、转换与缓存；显式空禁用默认插件，非空列表完全替换。依赖生成 driver 显式传递发布模块目录，保留工作区三参数回调契约。
+- 测试迁移保留并恢复准确错误文本/协议行号、完整静态发布字节基准和实际产物缺失断言。修复 publication smoke 中未断言子进程退出码造成的假绿；smoke 现以公开 `Juice.Package` 编译并运行。未删除整类测试、降低断言或新增跳过。
+- 最终实现门禁 `package-schema-merge-gate-20261114-104810.json`：fresh `jai build.jai` exit 0；同目录 exe 副本完整 `test` exit 0，末尾 `339 passed, 0 failed`。合入后独立验证 `merged-0089-20261114-105246.json`：fresh build exit 0，schema 11/11，loader 3/3，full exit 0，221.47 秒，末尾 339/0，无被掩盖的子进程退出失败。
+- 全量日志包含 594 个测试开始行（含嵌套 Testing 自测）。Testing 的 `finish()` 会重置计数，339 是末尾汇总，不是全部执行总数；不能据此推断新增测试遗漏。exe 副本均在实际进程退出后删除。
+- 日志及 JSON 保存于仓库外 `C:/Users/maojiaxing/DevTools/msys/tmp/juice-package-implementation/schema-evidence/`；接口与分工交接见同级 `schema-handoff.md`。0088 三个受保护文件无变化，publication/plugin_host CRLF 保留，diff-check 通过。
+- 后续边界：0090 完成成员展开/归属/cwd/选包/扫描剪枝，0091–0093 完成依赖、插件和命令语义，0094–0096 完成发布兼容、迁移文档及总体验收。本票不是 0087 全部交付。Linux/case-sensitive runtime 仍未验证，现有 WSL 工具链限制不变。
