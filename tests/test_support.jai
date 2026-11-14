@@ -157,21 +157,32 @@ ensure_published_modules :: () -> bool {
         if !closure_read_ok return false;
         array_add(*closure_sources, closure_source);
     }
-    if !make_directory_if_it_does_not_exist(juice_module_dir(target_dir), recursive = true) return false;
+    // The plugin ABI's own declaration line (ticket 0094): the installation
+    // marker carries it, and every executable compares it against the
+    // constant it compiled with.
+    plugin_source, plugin_read_ok := read_entire_file(tprint("%1/src/plugin.jai", otter_root()));
+    if !plugin_read_ok return false;
+    plugin_abi_line, plugin_abi_ok := extract_constant_line(plugin_source, "JUICE_PLUGIN_ABI_VERSION");
+    if !plugin_abi_ok return false;
     juice_text, juice_ok := publish_juice_module(source);
     if !juice_ok return false;
     testing_text, testing_ok := publish_testing_module(source);
     if !testing_ok return false;
     core_text, core_ok := publish_juice_core(source);
     if !core_ok return false;
-    if !make_directory_if_it_does_not_exist(juice_internal_dir(modules_dir), recursive = true) return false;
-    if !make_directory_if_it_does_not_exist(juice_plugin_face_dir(modules_dir), recursive = true) return false;
-    if !write_entire_file(juice_module_path(target_dir), juice_text) return false;
-    if !write_entire_file(testing_module_path(target_dir), testing_text) return false;
-    if !write_entire_file(juice_core_module_path(target_dir), core_text) return false;
-    if !write_entire_file(test_discovery_module_path(modules_dir), discovery_source) return false;
-    for file, index: JUICE_CORE_LOAD_FILES {
-        if !write_entire_file(juice_plugin_face_file_path(modules_dir, file), closure_sources[index]) return false;
+    // One writer for the whole installation unit — every artifact plus the
+    // compatibility marker — so the test scaffolding and the bootstrap
+    // metaprogram cannot publish different sets.
+    published_texts: [..] string;
+    array_add(*published_texts, juice_text);
+    array_add(*published_texts, testing_text);
+    array_add(*published_texts, core_text);
+    array_add(*published_texts, discovery_source);
+    for closure_source: closure_sources array_add(*published_texts, closure_source);
+    failure, published_ok := publish_install_set(modules_dir, plugin_abi_line, published_texts);
+    if !published_ok {
+        print("[test support] publishing the installation set failed: %\n", failure);
+        return false;
     }
     flat_seed := tprint("%1/Juice.jai", target_modules_dir(target_dir));
     if file_exists(flat_seed) {

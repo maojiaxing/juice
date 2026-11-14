@@ -103,6 +103,15 @@
 main :: () {
     auto_release_temp();
 
+    // The installation unit gate (spec 0087 decision 28 / A16; ticket 0094):
+    // the executable and the modules directory beside it are delivered,
+    // upgraded and rolled back as one set. Verifying the compatibility marker
+    // here — before any command reads a package — turns a missing, mixed or
+    // other-release installation into one clear failure instead of a
+    // downstream compile error. There is no fallback: the marker is only ever
+    // read from this executable's own modules directory.
+    if !require_compatible_install(juice_modules_dir(), JUICE_PLUGIN_ABI_VERSION) exit(1);
+
     args := get_command_line_arguments();
     command := ifx args.count > 1 then args[1] else "build";
     command_arguments: [..] string;
