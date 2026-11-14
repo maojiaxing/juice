@@ -261,15 +261,26 @@ find_resolved_selection :: (state: Resolution_State, declaring_key: string, url:
     return -1;
 }
 
+// Remove a directory tree and only return once it is really gone. Windows
+// recursive deletion (and `rmdir /S /Q`) reports completion while the tree is
+// still being unlinked, so a caller that immediately re-uses the same path can
+// observe a partially deleted directory and fail with "Access is denied". The
+// bounded wait turns that race into a predictable result; it is a wait, not a
+// retry of the caller's own work.
 resolution_remove_directory :: (path: string) -> bool {
     if !file_exists(path) && !path_is_symlink(path) return true;
     #if OS == .WINDOWS {
         result := run_command("cmd", "/c", "rmdir", "/S", "/Q", path_backslashes(path));
-        return result.type == .EXITED && result.exit_code == 0;
+        if result.type != .EXITED || result.exit_code != 0 return false;
     } else {
         result := run_command("rm", "-rf", path);
-        return result.type == .EXITED && result.exit_code == 0;
+        if result.type != .EXITED || result.exit_code != 0 return false;
     }
+    for 0..4999 {
+        if !file_exists(path) && !path_is_symlink(path) return true;
+        sleep_milliseconds(1);
+    }
+    return !file_exists(path) && !path_is_symlink(path);
 }
 
 resolution_move_directory :: (source: string, destination: string) -> bool {
@@ -280,6 +291,37 @@ resolution_move_directory :: (source: string, destination: string) -> bool {
         result := run_command("mv", source, destination);
         return result.type == .EXITED && result.exit_code == 0;
     }
+}
+
+// Publish completed content by renaming the partial checkout onto its final
+// name, from any of several resources that may be materializing the same
+// commit at once (two consumers, or a build followed by an update in the same
+// consumer context). The rename is atomic on the same volume, so exactly one
+// winner publishes and the others observe a complete directory. A loser is not
+// an error: it verifies the published checkout instead.
+publish_partial_checkout :: (partial: string, checkout: string, commit: string) -> bool {
+    for attempt: 0..19 {
+        if resolution_move_directory(partial, checkout) return true;
+        if is_directory(checkout) {
+            current, current_ok := git_checkout_commit(checkout);
+            if current_ok && current == commit {
+                resolution_remove_directory(partial);
+                return true;
+            }
+        }
+        sleep_milliseconds(50);
+    }
+    // A concurrent owner may still be mid-rename: accept the published tree only
+    // when it really carries the requested commit.
+    if is_directory(checkout) {
+        current, current_ok := git_checkout_commit(checkout);
+        if current_ok && current == commit {
+            resolution_remove_directory(partial);
+            return true;
+        }
+    }
+    resolution_remove_directory(partial);
+    return false;
 }
 
 // Publish the complete selection set for one consumer context atomically. A
@@ -462,12 +504,8 @@ git_ensure_content :: (environment: Resolution_Environment, url: string, commit:
         return "", tprint("Could not check out commit % in %", commit, url);
     }
     resolution_remove_directory(checkout);
-    if !resolution_move_directory(partial, checkout) {
-        resolution_move_directory(partial, checkout);
-        if !is_directory(checkout) {
-            resolution_remove_directory(partial);
-            return "", tprint("Could not publish Git content for commit %: %", commit, checkout);
-        }
+    if !publish_partial_checkout(partial, checkout, commit) {
+        return "", tprint("Could not publish Git content for commit %: %", commit, checkout);
     }
     return checkout, "";
 }
