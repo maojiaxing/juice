@@ -15,15 +15,19 @@ _Avoid_: manifest（指求值器的 KEY=VALUE 协议）、config
 根包声明在 `workspace.members` 里的另一个包；成员测试以自身为根，不从根包聚合。
 
 **Dependency（依赖）**：
-包编译时导入的包；只影响导入解析，不激活插件。
+包编译时导入的模块引用；只影响导入解析，不激活插件。每条引用写明来源（PATH/GIT/WORKSPACE）与模块选择；`name` 是消费包内的引用名，不是提供方包名。
 _Avoid_: dev dependency（本模型没有独立的 devDependencies；插件声明承担工具面）
 
+**Declaration presence（声明三态）**：
+可省略字段区分省略、显式空与显式非空。用户只写普通字符串与数组；内部保留默认标记只属于加载器，不是公开配置值。数组零长度与空字符串都不是省略判据。
+_Avoid_: 用空数组/空字符串表示省略
+
 **Plugin declaration（插件声明）**：
-`Package.plugins` 的一项：`id` + `version` + `options`。声明即让插件可用、激活、配置，并按声明序参与管线、钩子与 lint。成员插件的 id 是成员包名；内置插件用保留 id。
+`Package.plugins` 的一项：`id` + `builtin` 或 `source`+`module` + `options`。声明即让插件可用、激活、配置，并按声明序参与管线、钩子与 lint。声明侧没有 `version`；内置插件用 `builtin = "load"` / `"test-block"`，外部插件给出显式来源与公开模块选择。
 _Avoid_: plugin config file、transpile declaration、devDependency
 
 **Plugin id**：
-插件的身份。内置插件用保留 id（`load`、`test-block`）；成员插件用成员包名。
+插件的身份，也是消费包内的引用名。内置插件用保留 id（`load`、`test-block`）；外部插件的 `id` 由显式 `source` + `module` 定位，不按成员包名猜测。
 _Avoid_: rule name（lint 规则名是插件内部的另一层身份）
 
 ## Target 目录
@@ -67,7 +71,7 @@ _Avoid_: 单独使用 "pre-step" 指代插件、jaix front
 _Avoid_: mirror table、view map
 
 **Plugin prepare（插件准备）**：
-命令级步骤：解析插件声明、扫描与链接成员插件、写注册文件、决定是否需要 plugin host。
+命令级步骤：解析被选包自身的插件声明、按显式来源解析插件模块并写 import shim、写注册文件、决定是否需要 plugin host；每个被选包只准备一次，根配置不继承给成员。
 _Avoid_: plugin load
 
 **Plugin host（插件宿主）**：
