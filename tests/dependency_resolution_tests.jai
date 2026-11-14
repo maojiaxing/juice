@@ -44,6 +44,17 @@ dr_scratch :: (name: string) -> string {
     return root;
 }
 
+// Delete a directory and wait until it is really gone: Windows recursive delete
+// returns before the filesystem finishes, and a temporary listing race would let a
+// following step observe stale content.
+dr_delete_wait :: (path: string) -> bool {
+    delete_directory_full(path);
+    for 0..2000000 {
+        if !file_exists(path) return true;
+    }
+    return false;
+}
+
 dr_path :: (base: string, name: string) -> string {
     return copy_string(tprint("%1/%2", base, name));
 }
@@ -159,7 +170,7 @@ dr_content_has_commit :: (scratch: string, commit: string) -> bool {
 dr_state_text :: (scratch: string) -> string {
     text := "";
     root := dr_path(scratch, "xdg-state/juice/contexts");
-    names := file_list(root);
+    names := file_list(root, recursive = true);
     for name: names {
         if !ends_with(name, "resolution.state") continue;
         content, ok := read_entire_file(name);
