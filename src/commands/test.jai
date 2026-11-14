@@ -619,7 +619,7 @@ test_prepared_workspace :: (
     // same Prestep_Stage through the stage-level prestep_add_* rules. A
     // table conflict with the caller's in-process hooks is a stage failure.
     if plugin_prepare.member_hooks && plugin_prepare.registration_path != "" {
-        host_options := plugin_host_options(prepared, *pstage, "test");
+        host_options := package_host_options(prepared, prepared.discovery.root_package, plugin_view, *pstage, "test");
         host_records, host_ok := run_plugin_host(host_options, host_spawn);
         if !host_ok return false;
         if !apply_plugin_host_effects(*pstage, host_records, lctx.diagnostics) return false;

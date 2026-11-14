@@ -496,7 +496,7 @@ generate_plugin_host :: (options: Plugin_Host_Options) -> string {
     append(*builder, "    for slot: resolved.slot_options array_add(*lctx.plugin_state, slot);\n");
     append(*builder, "    hooks_ok := run_mounted_hooks(resolved.hook_table, .PRESTEP, .before, *lctx);\n");
     append(*builder, "    for generated: stage.generated {\n");
-    append(*builder, "        print_to_builder(*builder, \"GENERATED=%1|%2\n\", host_escape(generated.logical_path), host_escape(generated.physical_path));\n");
+    append(*builder, "        print_to_builder(*builder, \"GENERATED=%1|%2\\n\", host_escape(generated.logical_path), host_escape(generated.physical_path));\n");
     append(*builder, "    }\n");
     append(*builder, "    for substitution: stage.substitutions {\n");
     append(*builder, "        print_to_builder(*builder, \"SUBSTITUTE=%1|%2\\n\", host_escape(substitution.original), host_escape(substitution.replacement));\n");

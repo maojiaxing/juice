@@ -45,10 +45,12 @@
 #import "Basic";
 // The derived view below is the published plugin face's own path/registration
 // surface, so the file-system checks it performs (retained-source presence,
-// materialized writes) use the standard File module directly instead of the
+// derived writes) use the compiler's standard modules directly instead of the
 // tool-side path helpers — the plugin face closure is exactly the four files
-// publication.jai publishes.
+// publication.jai publishes, and File/File_Utilities/String are compiler
+// modules every consumer has.
 #import "File";
+#import "File_Utilities";
 #import "String";
 
 // ---------------------------------------------------------------------------

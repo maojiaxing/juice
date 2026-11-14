@@ -482,7 +482,7 @@ build_prepared_workspace :: (
     // rules — the host's effects are the PRESTEP before-stage effects. A
     // table conflict with the caller's in-process hooks is a stage failure.
     if plugin_prepare.member_hooks && plugin_prepare.registration_path != "" {
-        host_options := plugin_host_options(prepared, *pstage, "build");
+        host_options := package_host_options(prepared, prepared.discovery.root_package, plugin_view, *pstage, "build");
         host_records, host_ok := run_plugin_host(host_options, host_spawn);
         if !host_ok return false;
         if !apply_plugin_host_effects(*pstage, host_records, lctx.diagnostics) return false;
