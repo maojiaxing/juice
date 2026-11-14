@@ -12,15 +12,15 @@
 // scan order) — never hoisting into the dropped hit's slot. Each declared
 // member provides exactly one plugin (the v1 one-plugin-per-package rule).
 PACKAGE :: Package.{
-    name    = "plugin_ws_rank",
     version = "0.1.0",
-    type    = .BIN,
+    name    = "plugin_ws_rank",
+
     workspace = .{
         members = string.["packages/alpha-first", "packages/zeta-extra", "packages/extra"],
     },
     plugins = .[
-        .{id = "alpha-first", version = "0.1.0"},
-        .{id = "zeta-extra", version = "0.1.0"},
-        .{id = "extra", version = "0.1.0"},
+        .{id = "alpha-first", source = .{kind = .PATH, path = "packages/alpha-first"}},
+        .{id = "zeta-extra", source = .{kind = .PATH, path = "packages/zeta-extra"}},
+        .{id = "extra", source = .{kind = .PATH, path = "packages/extra"}},
     ],
 };

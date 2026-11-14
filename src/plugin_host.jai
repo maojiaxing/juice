@@ -87,7 +87,7 @@ Plugin_Prepare_Result :: struct {
 // order. With hits the merged registration file lands at
 // <root>/target/plugins/registration.jai; zero hits write nothing (the
 // in-process static values need no registration and no host).
-prepare_workspace_plugins :: (prepared: *Juice.Prepared_Workspace) -> Plugin_Prepare_Result {
+prepare_workspace_plugins :: (prepared: *Prepared_Workspace) -> Plugin_Prepare_Result {
     result: Plugin_Prepare_Result;
     scan := scan_workspace_plugins(prepared.discovery);
     result.hits = scan.hits;
@@ -181,7 +181,7 @@ plugin_host_records_path :: (target_dir: string) -> string {
 // configs carry only member declarations — the host's registry is exactly the
 // scanned member values (the static built-in values never cross the process
 // boundary).
-plugin_host_options :: (prepared: *Juice.Prepared_Workspace, stage: *Prestep_Stage, mode: string) -> Plugin_Host_Options {
+plugin_host_options :: (prepared: *Prepared_Workspace, stage: *Prestep_Stage, mode: string) -> Plugin_Host_Options {
     options: Plugin_Host_Options;
     options.root_dir = path_slashes(prepared.discovery.root_dir);
     options.mode = mode;

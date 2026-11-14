@@ -7,23 +7,23 @@
 PACKAGE :: Package.{
     name         = "manifest-fixture",
     version      = "1.2.3",
-    type         = .BIN,
     description  = "Evaluator protocol E2E fixture.",
-    build_script = "build.py",
+    default_run = "app",
 
+    modules = .[
+        .{name = "Api", entry = "src/module.jai"},
+    ],
+    executables = .[
+        .{name = "app", entry = "src/main.jai"},
+    ],
     plugins = .[
-        .{ id = "load",       version = "1" },
-        .{ id = "test-block", version = "2" },
+        .{builtin = "load"},
+        .{builtin = "test-block"},
+        .{id = "external-lint", source = .{kind = .PATH, path = "../lint-plugin"}, module = .{path = "src", name = "Lint", alias = "LintAlias"}, options = .[.{key = "mode", value = "strict"}]},
     ],
-
-    targets     = Target.[
-        .{ name = "app", main_file = "src/main.jai" },
-    ],
-
     dependencies = Dependency.[
-        .{ name = "dep_a", version = "0.1", source = "",          package = "" },
-        .{ name = "dep_b", version = "0.2", source = "../sibling", package = "renamed" },
+        .{name = "dep_a", source = .{kind = .PATH, path = "../a"}, modules = .[.{path = "lib", name = "Api", alias = "LocalApi"}]},
+        .{name = "dep_b", source = .{kind = .GIT, git = .{url = "https://example.test/dep-b.git", tag = "v1"}}},
+        .{name = "dep_member", source = .{kind = .WORKSPACE}, modules = .[.{path = "packages/b", name = "Bee", alias = "BeeAlias"}]},
     ],
-
-    workspace   = .{ members = string.["packages/a", "packages/b"], exclude = string.["packages/skip"] },
-};
+    workspace = .{members = string.["packages/a", "packages/b"], exclude = string.["packages/skip"], default_members = string.["packages/a"]},};

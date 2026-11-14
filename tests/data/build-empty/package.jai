@@ -4,6 +4,6 @@
 // src/main.jai — the package role derives to BIN with zero plans, so the
 // build short-circuits before creating anything under target/.
 PACKAGE :: Package.{
-    name    = "build-empty",
     version = "0.1.0",
+    name    = "build-empty",
 };

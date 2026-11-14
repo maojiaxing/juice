@@ -100,6 +100,7 @@ Transpile_Context :: struct {
     // The registered plugins, declaration order = dispatch order. An empty
     // list means the default pipeline (see resolve_pipeline).
     plugins: [..] Transpile_Plugin;
+    plugins_omitted: bool = true;
     // Per-plugin cross-file state slots, aligned with plugins order: each
     // plugin casts its slot to its own state type; the caller owns the
     // slot's storage, which persists across transpile_source calls. Slots
@@ -399,8 +400,8 @@ default_transpile_pipeline :: () -> [..] Transpile_Plugin {
 // The "empty registry means the default pipeline" convention, in one place:
 // the runner and the cache key both resolve their pipeline through here, so
 // a view and its key always reflect the same pipeline.
-resolve_pipeline :: (plugins: [] Transpile_Plugin) -> [] Transpile_Plugin {
-    if plugins.count == 0 return default_transpile_pipeline();
+resolve_pipeline :: (plugins: [] Transpile_Plugin, plugins_omitted: bool = true) -> [] Transpile_Plugin {
+    if plugins_omitted && plugins.count == 0 return default_transpile_pipeline();
     return plugins;
 }
 
@@ -493,7 +494,7 @@ transpile_source :: (source: string, ctx: Transpile_Context) -> Transpile_Result
     tests: [..] Test_Entry;
     diagnostics: [..] Transpile_Diagnostic;
 
-    pipeline := resolve_pipeline(ctx.plugins);
+    pipeline := resolve_pipeline(ctx.plugins, ctx.plugins_omitted);
 
     scan: Transpile_Scan;
     scan.source = s;

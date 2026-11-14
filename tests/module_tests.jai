@@ -19,104 +19,83 @@
 // implementations consume the published face through the Juice binding).
 // ---------------------------------------------------------------------------
 
-test "Face: zero-value Package carries the declared defaults" {
-    pkg: Package;
-    expect(pkg.name == "");
-    expect(pkg.version == "");
-    expect(pkg.type == .UNSPECIFIED);
-    expect(pkg.description == "");
-    expect(pkg.build_script == "");
-    expect(pkg.targets.count == 0);
-    expect(pkg.dependencies.count == 0);
-    expect(pkg.workspace.members.count == 0);
-    expect(pkg.workspace.exclude.count == 0);
-    expect(pkg.plugins.count == 0);
-    expect(pkg.dir == "");
+test "Face: omitted and explicit empty Package values remain distinct" {
+    omitted: Package;
+    empty: Package = .{name = "", version = "", description = "", modules = .[], executables = .[], dependencies = .[], plugins = .[], workspace = .{}, default_run = ""};
+    expect(omitted.name != empty.name);
+    expect(omitted.version != empty.version);
+    expect(omitted.description != empty.description);
+    expect(omitted.default_run != empty.default_run);
+    expect(omitted.modules.count != empty.modules.count);
+    expect(omitted.executables.count != empty.executables.count);
+    expect(omitted.dependencies.count != empty.dependencies.count);
+    expect(omitted.plugins.count != empty.plugins.count);
+    expect(omitted.workspace.members[0] != empty.workspace.members[0]);
 }
 
-test "Face: Package_Type values match the protocol numbering" {
-    // The evaluator prints the enum's integer value as the TYPE record;
-    // these numbers are part of the protocol (LIB=0, BIN=1, UNSPECIFIED=2).
-    expect(cast(s64) Package_Type.LIB == 0);
-    expect(cast(s64) Package_Type.BIN == 1);
-    expect(cast(s64) Package_Type.UNSPECIFIED == 2);
-
-    pkg: Package;
-    pkg.type = .BIN;
-    expect(cast(s64) pkg.type == 1);
-    pkg.type = .LIB;
-    expect(cast(s64) pkg.type == 0);
+test "Face: Source selects PATH GIT or WORKSPACE explicitly" {
+    source: Source;
+    expect(source.kind == .UNSPECIFIED);
+    source = .{kind = .PATH, path = "../library"};
+    expect(source.kind == .PATH && source.path == "../library");
+    source = .{kind = .GIT, git = .{url = "repo", rev = "commit"}};
+    expect(source.kind == .GIT && source.git.url == "repo" && source.git.rev == "commit");
+    source = .{kind = .WORKSPACE};
+    expect(source.kind == .WORKSPACE);
 }
 
-test "Face: Dependency fields default to empty strings" {
-    dep: Dependency;
-    expect(dep.name == "");
-    expect(dep.version == "");
-    expect(dep.source == "");
-    expect(dep.package == "");
+test "Face: Dependency uses a source and flat module selections" {
+    dependency: Dependency = .{name = "reference", source = .{kind = .PATH, path = "../provider"}, modules = .[.{path = "library", name = "Api", alias = "Local"}]};
+    expect(dependency.name == "reference");
+    expect(dependency.source.kind == .PATH && dependency.source.path == "../provider");
+    expect(dependency.modules.count == 1);
+    expect(dependency.modules[0].path == "library" && dependency.modules[0].name == "Api" && dependency.modules[0].alias == "Local");
 }
 
 test "Face: a full literal declaration round-trips" {
-    // The exact literal shape a package.jai author writes (slice fields
-    // accept fixed-array literals by decay) — every field reads back.
-    pkg := Package.{
-        name         = "face-fixture",
-        version      = "0.9.0",
-        type         = .BIN,
-        description  = "A full declaration.",
-        build_script = "build.py",
-        plugins      = .[
-            .{ id = "load",       version = "1" },
-            .{ id = "test-block", version = "2" },
-        ],
-        targets      = Target.[
-            .{ name = "app", main_file = "src/main.jai" },
-        ],
-        dependencies = Dependency.[
-            .{ name = "dep_a", version = "0.1", source = "",        package = "" },
-            .{ name = "dep_b", version = "0.2", source = "../sib",  package = "renamed" },
-        ],
-        workspace    = .{ members = string.["packages/a", "packages/b"], exclude = string.["packages/skip"] },
+    pkg: Package = .{
+        name = "face-fixture", version = "0.9.0", description = "A full declaration.",
+        modules = .[.{name = "Api", entry = "src/module.jai"}],
+        executables = .[.{name = "app", entry = "src/main.jai"}], default_run = "app",
+        plugins = .[.{builtin = "load"}, .{builtin = "test-block"}],
+        dependencies = .[.{name = "dep_a", source = .{kind = .PATH, path = "../a"}}, .{name = "dep_b", source = .{kind = .WORKSPACE}, modules = .[.{path = "packages/b", name = "B", alias = "Bee"}]}],
+        workspace = .{members = .["packages/a", "packages/b"], exclude = .["packages/skip"], default_members = .["packages/a"]},
     };
-
     expect(pkg.name == "face-fixture");
     expect(pkg.version == "0.9.0");
-    expect(pkg.type == .BIN);
     expect(pkg.description == "A full declaration.");
-    expect(pkg.build_script == "build.py");
+    expect(pkg.modules.count == 1);
+    expect(pkg.modules[0].name == "Api");
+    expect(pkg.modules[0].entry == "src/module.jai");
+    expect(pkg.executables.count == 1);
+    expect(pkg.executables[0].name == "app");
+    expect(pkg.executables[0].entry == "src/main.jai");
+    expect(pkg.default_run == "app");
     expect(pkg.plugins.count == 2);
-    expect(pkg.plugins[0].id == "load" && pkg.plugins[0].version == "1");
-    expect(pkg.plugins[1].id == "test-block" && pkg.plugins[1].version == "2");
+    expect(pkg.plugins[0].builtin == "load");
+    expect(pkg.plugins[1].builtin == "test-block");
     expect(pkg.plugins[0].options.count == 0);
-    expect(pkg.targets.count == 1);
-    expect(pkg.targets[0].name == "app" && pkg.targets[0].main_file == "src/main.jai");
     expect(pkg.dependencies.count == 2);
-    expect(pkg.dependencies[0].name == "dep_a" && pkg.dependencies[0].version == "0.1"
-        && pkg.dependencies[0].source == "" && pkg.dependencies[0].package == "");
-    expect(pkg.dependencies[1].name == "dep_b" && pkg.dependencies[1].version == "0.2"
-        && pkg.dependencies[1].source == "../sib" && pkg.dependencies[1].package == "renamed");
+    expect(pkg.dependencies[0].name == "dep_a");
+    expect(pkg.dependencies[1].name == "dep_b");
+    expect(pkg.dependencies[1].modules[0].alias == "Bee");
     expect(pkg.workspace.members.count == 2);
-    expect(pkg.workspace.members[0] == "packages/a" && pkg.workspace.members[1] == "packages/b");
+    expect(pkg.workspace.members[0] == "packages/a");
+    expect(pkg.workspace.members[1] == "packages/b");
     expect(pkg.workspace.exclude.count == 1 && pkg.workspace.exclude[0] == "packages/skip");
-    expect(pkg.dir == "");
+    expect(pkg.workspace.default_members.count == 1 && pkg.workspace.default_members[0] == "packages/a");
 }
 
 test "Face: built-in plugin id constants" {
-    // The v1 built-in id set (the manifest declaration gate's allowlist
-    // during Phase 1; member plugin ids join it in Phase 2).
     expect(TRANSPILE_PLUGIN_LOAD_ID == "load");
     expect(TRANSPILE_PLUGIN_TEST_BLOCK_ID == "test-block");
 }
 
 test "Face: plugin declaration options are typed rows" {
-    decl: Plugin_Declaration;
-    decl.id = "load";
-    decl.version = "1";
-    rows: [..] Plugin_Option;
-    array_add(*rows, .{ key = "k", value = "v" });
-    decl.options = rows;
-    expect(decl.options.count == 1);
-    expect(decl.options[0].key == "k" && decl.options[0].value == "v");
+    declaration: Plugin_Declaration = .{builtin = "load", options = .[.{key = "k", value = "v"}]};
+    expect(declaration.options.count == 1);
+    expect(declaration.options[0].key == "k");
+    expect(declaration.options[0].value == "v");
 }
 
 // ---------------------------------------------------------------------------

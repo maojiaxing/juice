@@ -6,9 +6,9 @@
 // section 3.5). The fixture never commits target/; test junk is
 // manufactured at runtime.
 PACKAGE :: Package.{
-    name    = "clean_fixture",
     version = "0.1.0",
-    type    = .BIN,
+    name    = "clean_fixture",
+
     workspace = .{
         members = string.["member_lib", "member_extra"],
     },

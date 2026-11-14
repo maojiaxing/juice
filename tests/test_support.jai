@@ -397,25 +397,25 @@ escape_record_value :: (value: string) -> string {
 // ---------------------------------------------------------------------------
 test_discovery_attempts: s64 = 0;
 test_fake_discovery_ok: bool = false;
-test_fake_discovery: Juice.Workspace_Discovery;
+test_fake_discovery: Workspace_Discovery;
 
-test_fake_discover :: (root_dir: string, cache_dir: string, modules_dir: string) -> (Juice.Workspace_Discovery, bool) {
+test_fake_discover :: (root_dir: string, cache_dir: string, modules_dir: string) -> (Workspace_Discovery, bool) {
     test_discovery_attempts += 1;
     return test_fake_discovery, test_fake_discovery_ok;
 }
 
 test_plan_resolution_success: bool = false;
-test_resolved_plans: [] Juice.Artifact_Plan;
+test_resolved_plans: [] Artifact_Plan;
 test_dependency_attempts: s64 = 0;
 test_dependency_ok: bool = false;
-test_dependency_snapshot: [] Juice.Package;
+test_dependency_snapshot: [] Normalized_Package;
 
-test_fake_resolve :: (pkg: Juice.Package) -> Artifact_Plan_Result {
+test_fake_resolve :: (pkg: Normalized_Package) -> Artifact_Plan_Result {
     if !test_plan_resolution_success return .{success = false, error_message = copy_string("resolution failure")};
     return .{success = true, plans = test_resolved_plans};
 }
 
-test_fake_prepare_dependencies :: (root_dir: string, cache_dir: string, member_packages: [] Juice.Package) -> bool {
+test_fake_prepare_dependencies :: (root_dir: string, cache_dir: string, member_packages: [] Normalized_Package) -> bool {
     test_dependency_attempts += 1;
     test_dependency_snapshot = member_packages;
     return test_dependency_ok;
@@ -426,10 +426,10 @@ reset_preparation_test :: () {
     test_fake_discovery_ok = false;
     test_fake_discovery = .{};
     test_plan_resolution_success = false;
-    test_resolved_plans = Juice.Artifact_Plan.[];
+    test_resolved_plans = Artifact_Plan.[];
     test_dependency_attempts = 0;
     test_dependency_ok = false;
-    test_dependency_snapshot = Juice.Package.[];
+    test_dependency_snapshot = Normalized_Package.[];
 }
 
 // ---------------------------------------------------------------------------
@@ -452,6 +452,9 @@ workspace_discovery_driver_code :: (fixture_root: string, cache_dir: string) -> 
     append(*builder, "#import \"Compiler\";\n\n");
     append(*builder, "#load \"");
     append(*builder, path_slashes(tprint("%1/src/juice_module.jai", otter_root())));
+    append(*builder, "\";\n");
+    append(*builder, "#load \"");
+    append(*builder, path_slashes(tprint("%1/src/package_model.jai", otter_root())));
     append(*builder, "\";\n");
     append(*builder, "#load \"");
     append(*builder, path_slashes(tprint("%1/src/path_safety.jai", otter_root())));
@@ -524,12 +527,12 @@ run_workspace_discovery_child :: (fixture_name: string) -> (Process_Result, stri
 // library_fixture_package semantics — a declared-LIB package pointing at the
 // root module.jai layout fixture).
 // ---------------------------------------------------------------------------
-library_fixture_package :: () -> Juice.Package {
-    pkg: Juice.Package;
+library_fixture_package :: () -> Normalized_Package {
+    pkg: Normalized_Package;
     pkg.name    = "libdemo";
     pkg.version = "1";
     pkg.dir     = tprint("%1/tests/data/target-lib-module", otter_root());
-    pkg.type    = .LIB;
+
     return pkg;
 }
 
@@ -543,12 +546,12 @@ test_linked_member_names: [..] string;
 test_fetch_result: bool = false;
 test_link_result: bool = false;
 
-test_fake_fetch :: (root_dir: string, cache_dir: string, dep: Juice.Dependency) -> bool {
+test_fake_fetch :: (root_dir: string, cache_dir: string, dep: Dependency_Reference, modules_dir: string = "") -> bool {
     array_add(*test_fetched_dependency_names, copy_string(dep.name));
     return test_fetch_result;
 }
 
-test_fake_link_member :: (root_dir: string, member: Juice.Package) -> bool {
+test_fake_link_member :: (root_dir: string, member: Normalized_Package) -> bool {
     array_add(*test_linked_member_names, copy_string(member.name));
     return test_link_result;
 }
@@ -586,6 +589,9 @@ dependency_prep_driver_code :: (fixture_root: string, scratch_root: string, cach
     append(*builder, "#import \"Compiler\";\n\n");
     append(*builder, "#load \"");
     append(*builder, path_slashes(tprint("%1/src/juice_module.jai", otter_root())));
+    append(*builder, "\";\n");
+    append(*builder, "#load \"");
+    append(*builder, path_slashes(tprint("%1/src/package_model.jai", otter_root())));
     append(*builder, "\";\n");
     append(*builder, "#load \"");
     append(*builder, path_slashes(tprint("%1/src/path_safety.jai", otter_root())));
@@ -641,18 +647,22 @@ dependency_prep_driver_code :: (fixture_root: string, scratch_root: string, cach
     append(*builder, "\");\n");
     append(*builder, "    print(\"discovery-ok=%\\n\", ok);\n");
     append(*builder, "    if ok && discovery.has_package {\n");
-    append(*builder, "        deps_ok := resolve_and_fetch_dependencies(\"");
+    append(*builder, "        deps_ok := resolve_and_fetch_dependencies_with_modules(\"");
     append(*builder, path_slashes(scratch_root));
     append(*builder, "\", \"");
     append(*builder, path_slashes(cache_dir));
-    append(*builder, "\", discovery.member_packages);\n");
+    append(*builder, "\", discovery.member_packages, \"");
+    append(*builder, path_slashes(plugin_face_modules_dir()));
+    append(*builder, "\");\n");
     append(*builder, "        print(\"deps-ok=%\\n\", deps_ok);\n");
     append(*builder, "    }\n");
     append(*builder, "    rel_ok := fetch_dependency(\"");
     append(*builder, path_slashes(scratch_root));
     append(*builder, "\", \"");
     append(*builder, path_slashes(cache_dir));
-    append(*builder, "\", .{name = \"dep_rel\", source = \"tests/data/dep-fixture/shim-pkg\"});\n");
+    append(*builder, "\", .{name = \"dep_rel\", source = .{kind = .PATH, path = \"tests/data/dep-fixture/shim-pkg\"}, modules = .[.{alias = \"dep_rel\"}], modules_omitted = false}, \"");
+    append(*builder, path_slashes(plugin_face_modules_dir()));
+    append(*builder, "\");\n");
     append(*builder, "    print(\"rel-ok=%\\n\", rel_ok);\n");
     append(*builder, "}\n");
     return builder_to_string(*builder);
@@ -666,6 +676,7 @@ run_dependency_prep_child :: (fixture_name: string, scratch_root: string) -> (Pr
     make_directory_if_it_does_not_exist(cache, recursive = true);
     write_entire_file(driver, dependency_prep_driver_code(fixture_root, scratch_root, cache));
     result, output, errors, _ := run_command("jai", driver, "-import_dir", plugin_face_modules_dir(), "-quiet", working_directory = otter_root(), capture_and_return_output = true);
+    if errors.count > 0 print("[dependency child stderr] %\n", errors);
     return result, output, errors;
 }
 
@@ -679,12 +690,12 @@ run_dependency_prep_child :: (fixture_name: string, scratch_root: string) -> (Pr
 // real filesystem.
 // ---------------------------------------------------------------------------
 test_compile_count: s64;
-test_compiled_plan: Juice.Artifact_Plan;
+test_compiled_plan: Artifact_Plan;
 test_compiled_driver_root: string;
 test_compiled_entry: string;
 test_compile_success: bool;
 
-test_compile_artifact :: (root_dir: string, plan: Juice.Artifact_Plan, entry: string) -> bool {
+test_compile_artifact :: (root_dir: string, plan: Artifact_Plan, entry: string) -> bool {
     test_compile_count += 1;
     test_compiled_plan = plan;
     test_compiled_driver_root = root_dir;
@@ -723,10 +734,10 @@ test_artifact_is_running :: (artifact_path: string) -> bool {
 }
 
 test_handoff_calls: s64;
-test_handoff_plan: Juice.Artifact_Plan;
+test_handoff_plan: Artifact_Plan;
 test_handoff_success: bool;
 
-test_artifact_handoff :: (plan: Juice.Artifact_Plan) -> bool {
+test_artifact_handoff :: (plan: Artifact_Plan) -> bool {
     test_handoff_calls += 1;
     test_handoff_plan = plan;
     return test_handoff_success;
@@ -777,20 +788,20 @@ reset_compile_seam :: () {
 // A prepared workspace over a real temp fixture root: the revalidation gate
 // probes real files even in seam tests (the same posture as the old juice
 // helpers).
-build_seam_plan :: (root: string, main_file: string) -> Juice.Artifact_Plan {
-    plan: Juice.Artifact_Plan;
+build_seam_plan :: (root: string, main_file: string) -> Artifact_Plan {
+    plan: Artifact_Plan;
     plan.target = .{name = "app", main_file = main_file, source_path = tprint("%1/%2", root, main_file)};
     plan.target_dir = package_target_dir(root);
     plan.artifact_path = target_artifact_path(plan.target_dir, "app");
     return plan;
 }
 
-build_seam_prepared :: (root: string, plan: Juice.Artifact_Plan) -> Juice.Prepared_Workspace {
-    prepared: Juice.Prepared_Workspace;
+build_seam_prepared :: (root: string, plan: Artifact_Plan) -> Prepared_Workspace {
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     // The plan must live in a heap-backed array: a static literal here would
     // leave the slice pointing at this frame's stack.
-    plans: [..] Juice.Artifact_Plan;
+    plans: [..] Artifact_Plan;
     array_add(*plans, plan);
     prepared.artifact_plans = plans;
     return prepared;
@@ -896,11 +907,11 @@ make_test_link :: (link: string, target: string, directory: bool, junction: bool
 // semantics — run_prepared_workspace's launch seam).
 // ---------------------------------------------------------------------------
 test_launch_count: s64;
-test_launched_plan: Juice.Artifact_Plan;
+test_launched_plan: Artifact_Plan;
 test_launched_root: string;
 test_launch_success: bool;
 
-test_launch_artifact :: (plan: Juice.Artifact_Plan, package_root: string) -> bool {
+test_launch_artifact :: (plan: Artifact_Plan, package_root: string) -> bool {
     test_launch_count += 1;
     test_launched_plan = plan;
     test_launched_root = package_root;
@@ -925,7 +936,7 @@ test_test_collect_calls: s64;
 test_test_collect_files: [] Scan_File;
 test_test_collect_ok: bool;
 
-test_collect_test_files :: (prepared: *Juice.Prepared_Workspace) -> ([] Scan_File, bool) {
+test_collect_test_files :: (prepared: *Prepared_Workspace) -> ([] Scan_File, bool) {
     test_test_collect_calls += 1;
     return test_test_collect_files, test_test_collect_ok;
 }
@@ -958,8 +969,8 @@ reset_test_command_seam :: () {
 // A prepared workspace over a root string — the test command consumes only
 // the discovery snapshot (root dir + member packages), so seam tests build
 // the state directly (the build_seam_prepared posture).
-test_command_prepared :: (root: string) -> Juice.Prepared_Workspace {
-    prepared: Juice.Prepared_Workspace;
+test_command_prepared :: (root: string) -> Prepared_Workspace {
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     return prepared;
 }

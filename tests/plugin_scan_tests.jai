@@ -199,12 +199,12 @@ test "插件扫描：源读取失败 = ok=false 响亮失败（保留诊断 + �
             // same ok=false channel the test command checks: a broken plugin
             // package fails loudly instead of degrading into "no plugins".
             // Both scans run while the exclusive handle is held.
-            discovery: Juice.Workspace_Discovery;
+            discovery: Workspace_Discovery;
             discovery.root_dir = "C:/plugin-workspace-read-failure";
             discovery.has_package = true;
             discovery.root_package.name = "read-failure-root";
-            discovery.root_package.plugins = Juice.Plugin_Declaration.[.{id = "read-failure-member", version = "0.1.0"}];
-            discovery.member_packages = Juice.Package.[.{name = "read-failure-member", dir = root}];
+            discovery.root_package.plugins = Plugin_Reference.[.{id = "read-failure-member", source = .{kind = .WORKSPACE}, module = .{path = "packages/read-failure-member"}}];
+            discovery.member_packages = Normalized_Package.[.{name = "read-failure-member", dir = root}];
             workspace_scan := scan_workspace_plugins(discovery);
             CloseHandle(handle);
 
@@ -232,7 +232,7 @@ plugin_workspace_fixture_root :: (fixture_name: string) -> string {
 // faces (ensure_published_modules). The cache directory is a session
 // artifact under target/ (excluded from test discovery and from the plugin
 // scan).
-discover_plugin_workspace_fixture :: (fixture_name: string) -> Juice.Workspace_Discovery, bool {
+discover_plugin_workspace_fixture :: (fixture_name: string) -> Workspace_Discovery, bool {
     ensure_published_modules();
     cache := path_slashes(otter_scratch(tprint("plugin-scan-tests/workspace-cache/%1", fixture_name)));
     discovery, ok := discover_workspace(plugin_workspace_fixture_root(fixture_name), cache, plugin_face_modules_dir());
@@ -318,12 +318,12 @@ test "工作区插件扫描：不可扫成员根 = ok=false 响亮失败通道" 
     // A constructed snapshot stands in for a stale discovery result whose
     // member directory disappeared: the scan must fail loudly, not degrade
     // into "no plugins".
-    discovery: Juice.Workspace_Discovery;
+    discovery: Workspace_Discovery;
     discovery.root_dir = "C:/plugin-workspace-ghost";
     discovery.has_package = true;
     discovery.root_package.name = "ghost-root";
-    discovery.root_package.plugins = Juice.Plugin_Declaration.[.{id = "ghost-member"}];
-    discovery.member_packages = Juice.Package.[.{name = "ghost-member", dir = missing}];
+    discovery.root_package.plugins = Plugin_Reference.[.{id = "ghost-member"}];
+    discovery.member_packages = Normalized_Package.[.{name = "ghost-member", dir = missing}];
 
     scan := scan_workspace_plugins(discovery);
     expect(!scan.ok);
@@ -333,12 +333,12 @@ test "工作区插件扫描：未知成员插件 id = 致命诊断" {
     // "mystery" is neither a built-in id nor a workspace member: the
     // declaration-driven scan rejects it loudly (the command fails before
     // any compile).
-    discovery: Juice.Workspace_Discovery;
+    discovery: Workspace_Discovery;
     discovery.root_dir = "C:/plugin-workspace-unknown";
     discovery.has_package = true;
     discovery.root_package.name = "unknown-root";
-    discovery.root_package.plugins = Juice.Plugin_Declaration.[.{id = "mystery", version = "1"}];
-    discovery.member_packages = Juice.Package.[.{name = "unknown-root", dir = "C:/plugin-workspace-unknown"}];
+    discovery.root_package.plugins = Plugin_Reference.[.{id = "mystery"}];
+    discovery.member_packages = Normalized_Package.[.{name = "unknown-root", dir = "C:/plugin-workspace-unknown"}];
 
     scan := scan_workspace_plugins(discovery);
     expect(!scan.ok);
@@ -346,7 +346,7 @@ test "工作区插件扫描：未知成员插件 id = 致命诊断" {
     expect(scan.diagnostics.count == 1);
     expect(scan.diagnostics[0].fatal);
     expect(scan.diagnostics[0].rel_path == "mystery");
-    expect(scan.diagnostics[0].message == "Unknown plugin id: mystery");
+    expect(scan.diagnostics[0].message == "Plugin source unavailable: mystery (explicit PATH/WORKSPACE required by this implementation stage)");
 }
 
 test "工作区插件扫描：成员包必须恰好提供一个插件（零个/多个 = 致命诊断）" {
@@ -359,12 +359,12 @@ test "工作区插件扫描：成员包必须恰好提供一个插件（零个/�
 
     // A declared member without a plugin anchor: declaration = activation,
     // so a member that is not a plugin package is a loud error.
-    empty_discovery: Juice.Workspace_Discovery;
+    empty_discovery: Workspace_Discovery;
     empty_discovery.root_dir = root;
     empty_discovery.has_package = true;
     empty_discovery.root_package.name = "decl-checks-root";
-    empty_discovery.root_package.plugins = Juice.Plugin_Declaration.[.{id = "empty-member", version = "0.1.0"}];
-    empty_discovery.member_packages = Juice.Package.[
+    empty_discovery.root_package.plugins = Plugin_Reference.[.{id = "empty-member", source = .{kind = .WORKSPACE}, module = .{path = "packages/empty-member"}}];
+    empty_discovery.member_packages = Normalized_Package.[
         .{name = "decl-checks-root", dir = root},
         .{name = "empty-member", dir = tprint("%1/packages/empty-member", root)},
     ];
@@ -376,12 +376,12 @@ test "工作区插件扫描：成员包必须恰好提供一个插件（零个/�
 
     // A declared member with two anchored plugin modules: v1 allows exactly
     // one plugin per package.
-    multi_discovery: Juice.Workspace_Discovery;
+    multi_discovery: Workspace_Discovery;
     multi_discovery.root_dir = root;
     multi_discovery.has_package = true;
     multi_discovery.root_package.name = "decl-checks-root";
-    multi_discovery.root_package.plugins = Juice.Plugin_Declaration.[.{id = "multi-member", version = "0.1.0"}];
-    multi_discovery.member_packages = Juice.Package.[
+    multi_discovery.root_package.plugins = Plugin_Reference.[.{id = "multi-member", source = .{kind = .WORKSPACE}, module = .{path = "packages/multi-member"}}];
+    multi_discovery.member_packages = Normalized_Package.[
         .{name = "decl-checks-root", dir = root},
         .{name = "multi-member", dir = tprint("%1/packages/multi-member", root)},
     ];
@@ -393,15 +393,15 @@ test "工作区插件扫描：成员包必须恰好提供一个插件（零个/�
 }
 
 test "工作区插件扫描：内置 id 跳过扫描（无成员也无 I/O）" {
-    discovery: Juice.Workspace_Discovery;
+    discovery: Workspace_Discovery;
     discovery.root_dir = "C:/plugin-workspace-builtins";
     discovery.has_package = true;
     discovery.root_package.name = "builtins-root";
-    discovery.root_package.plugins = Juice.Plugin_Declaration.[
-        .{id = "load", version = "1.0.0"},
-        .{id = "test-block", version = "1.0.0"},
+    discovery.root_package.plugins = Plugin_Reference.[
+        .{id = "load", builtin = true},
+        .{id = "test-block", builtin = true},
     ];
-    discovery.member_packages = Juice.Package.[.{name = "builtins-root", dir = "C:/plugin-workspace-builtins"}];
+    discovery.member_packages = Normalized_Package.[.{name = "builtins-root", dir = "C:/plugin-workspace-builtins"}];
 
     scan := scan_workspace_plugins(discovery);
     expect(scan.ok && scan.hits.count == 0 && scan.diagnostics.count == 0);
@@ -430,7 +430,7 @@ test "工作区分发契约：规范成员包清单零依赖（juice_core 由工
     expect(member.dependencies.count == 0);
     // The member form stays a LIB with its root module and its own tests
     // under tests/ (parent decision 10).
-    expect(member.type == .LIB);
+    expect(member.has_package);
     expect(file_exists(tprint("%1/module.jai", member.dir)));
     expect(file_exists(tprint("%1/tests/lint_rule_tests.jai", member.dir)));
 }
@@ -447,9 +447,11 @@ test "工作区插件扫描：真实仓库根声明面（生产发现 + 扫描�
     discovery, ok := discover_workspace(otter_root(), cache, plugin_face_modules_dir());
     expect(ok && discovery.has_package);
     expect(discovery.root_package.name == "juice");
-    expect(discovery.root_package.plugins.count == 2);
-    expect(discovery.root_package.plugins[0].id == "juice-plugin-lint");
-    expect(discovery.root_package.plugins[1].id == "juice-plugin-jaix");
+    expect(discovery.root_package.plugins.count == 4);
+    expect(discovery.root_package.plugins[0].id == "load" && discovery.root_package.plugins[0].builtin);
+    expect(discovery.root_package.plugins[1].id == "test-block" && discovery.root_package.plugins[1].builtin);
+    expect(discovery.root_package.plugins[2].id == "juice-plugin-lint");
+    expect(discovery.root_package.plugins[3].id == "juice-plugin-jaix");
     // The design revision's migration pin: the members are not root
     // dependencies (dependencies never activate plugins).
     for dep: discovery.root_package.dependencies {

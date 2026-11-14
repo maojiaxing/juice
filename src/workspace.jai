@@ -45,8 +45,8 @@ workspace_path_already_seen :: (paths: [] string, candidate: string) -> bool {
 // directory otter lands every build — tests and the generated driver child
 // inject that same published directory. The default kicks in for the
 // two-argument production call shape.
-discover_workspace :: (root_dir: string, cache_dir: string, modules_dir: string = "") -> Juice.Workspace_Discovery, bool {
-    discovery: Juice.Workspace_Discovery;
+discover_workspace :: (root_dir: string, cache_dir: string, modules_dir: string = "") -> Workspace_Discovery, bool {
+    discovery: Workspace_Discovery;
     root_spelling_entry := inspect_path_entry(root_dir);
     if !root_spelling_entry.exists || !root_spelling_entry.is_directory || root_spelling_entry.is_symlink || root_spelling_entry.is_junction {
         print("[juice ERROR] Workspace root is not a safe real directory: %\n", root_dir);
@@ -75,9 +75,9 @@ discover_workspace :: (root_dir: string, cache_dir: string, modules_dir: string 
     }
 
     members: [..] string;
-    array_add(*members, copy_string(root_abs));
-    packages: [..] Juice.Package;
-    array_add(*packages, root_package);
+    if root_package.has_package array_add(*members, copy_string(root_abs));
+    packages: [..] Normalized_Package;
+    if root_package.has_package array_add(*packages, root_package);
 
     // Only the root package's members list is iterated: a member's own
     // workspace.members declaration is silently ignored (pinned by the old
@@ -116,12 +116,18 @@ discover_workspace :: (root_dir: string, cache_dir: string, modules_dir: string 
             print("[juice ERROR] Workspace member manifest is invalid: %\n", member_abs);
             return discovery, false;
         }
+        if !member_package.has_package {
+            print("[juice ERROR] Workspace member has no package: %\n", member_abs);
+            return discovery, false;
+        }
         array_add(*members, copy_string(member_abs));
         array_add(*packages, member_package);
     }
 
     discovery.root_dir = copy_string(root_abs);
-    discovery.has_package = true;
+    discovery.has_declaration = true;
+    discovery.has_workspace = root_package.has_workspace;
+    discovery.has_package = root_package.has_package;
     discovery.root_package = root_package;
     discovery.member_packages = packages;
     return discovery, true;
@@ -135,25 +141,29 @@ Workspace_Phase :: enum {
 
 Workspace_State :: struct {
     phase:     Workspace_Phase;
-    discovery: Juice.Workspace_Discovery;
-    prepared:  Juice.Prepared_Workspace;
+    discovery: Workspace_Discovery;
+    prepared:  Prepared_Workspace;
 }
 
 ensure_workspace_discovered :: (
     root_dir: string,
     cache_dir: string,
     state: *Workspace_State,
-    discover: #type (root_dir: string, cache_dir: string, modules_dir: string) -> (Juice.Workspace_Discovery, bool) = discover_workspace
+    discover: #type (root_dir: string, cache_dir: string, modules_dir: string) -> (Workspace_Discovery, bool) = discover_workspace
 ) -> bool {
     if state.phase != .EMPTY return true;
     discovery, ok := discover(root_dir, cache_dir, "");
-    if !ok || !discovery.has_package {
+    if !ok || (!discovery.has_package && !discovery.has_workspace) {
         if ok print("[juice ERROR] No package.jai found in current directory.\n");
         return false;
     }
     state.discovery = discovery;
     state.phase = .DISCOVERED;
-    print("[juice] Package '%' (v%) discovered.\n", discovery.root_package.name, discovery.root_package.version);
+    if discovery.has_package {
+        print("[juice] Package '%' (v%) discovered.\n", discovery.root_package.name, discovery.root_package.version);
+    } else {
+        print("[juice] Workspace '%' discovered.\n", discovery.root_dir);
+    }
     return true;
 }
 
@@ -175,12 +185,12 @@ prepare_workspace :: (
     root_dir: string,
     cache_dir: string,
     state: *Workspace_State,
-    resolve: #type (pkg: Juice.Package) -> Artifact_Plan_Result = resolve_artifact_plans,
-    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Juice.Package) -> (bool) = resolve_and_fetch_dependencies,
+    resolve: #type (pkg: Normalized_Package) -> Artifact_Plan_Result = resolve_artifact_plans,
+    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Normalized_Package) -> (bool) = resolve_and_fetch_dependencies,
     force_dependencies := false
 ) -> bool {
     if state.phase == .PREPARED return true;
-    if state.phase != .DISCOVERED || !state.discovery.has_package {
+    if state.phase != .DISCOVERED || (!state.discovery.has_package && !state.discovery.has_workspace) {
         print("[juice ERROR] Workspace discovery is required before preparation.\n");
         return false;
     }
@@ -189,10 +199,9 @@ prepare_workspace :: (
         print("[juice ERROR] %\n", plans_result.error_message);
         return false;
     }
-    prepared: Juice.Prepared_Workspace;
+    prepared: Prepared_Workspace;
     prepared.discovery = state.discovery;
     prepared.artifact_plans = plans_result.plans;
-    prepared.package_type = plans_result.package_type;
     if prepared.artifact_plans.count > 0 || force_dependencies {
         print("[juice] Preparing workspace dependencies...\n");
         if !prepare_dependencies(root_dir, cache_dir, state.discovery.member_packages) {
@@ -206,7 +215,7 @@ prepare_workspace :: (
     return true;
 }
 
-get_prepared_workspace :: (state: *Workspace_State) -> *Juice.Prepared_Workspace {
+get_prepared_workspace :: (state: *Workspace_State) -> *Prepared_Workspace {
     if state.phase != .PREPARED return null;
     return *state.prepared;
 }
@@ -225,11 +234,11 @@ ensure_workspace_prepared :: (
     root_dir: string,
     cache_dir: string,
     state: *Workspace_State,
-    discover: #type (root_dir: string, cache_dir: string, modules_dir: string) -> (Juice.Workspace_Discovery, bool) = discover_workspace,
-    resolve: #type (pkg: Juice.Package) -> Artifact_Plan_Result = resolve_artifact_plans,
-    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Juice.Package) -> (bool) = resolve_and_fetch_dependencies,
+    discover: #type (root_dir: string, cache_dir: string, modules_dir: string) -> (Workspace_Discovery, bool) = discover_workspace,
+    resolve: #type (pkg: Normalized_Package) -> Artifact_Plan_Result = resolve_artifact_plans,
+    prepare_dependencies: #type (root_dir: string, cache_dir: string, member_packages: [] Normalized_Package) -> (bool) = resolve_and_fetch_dependencies,
     force_dependencies := false
-) -> *Juice.Prepared_Workspace {
+) -> *Prepared_Workspace {
     if state.phase == .PREPARED return *state.prepared;
     if !ensure_workspace_discovered(root_dir, cache_dir, state, discover) return null;
     if !prepare_workspace(root_dir, cache_dir, state, resolve, prepare_dependencies, force_dependencies) return null;

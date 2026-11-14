@@ -1,157 +1,63 @@
 #import "Basic";
 
-// The package declaration compatibility face (spec section 2.1). This file
-// is the single definition source for the published "Juice" module (spec
-// section 9.1): field shapes stay declaration-compatible with the reference
-// implementation's module face (its Juice.jai declaration block,
-// lines 97-118), except for the 2026-10-21 design revision: the pre-step
-// marker and transpile fields are removed and `Package.plugins` is the
-// single plugin declaration/configuration/ordering surface (breaking
-// change; spec 2.1).
-// Extension fields arrive only after the self-hosting switch (spec section
-// 2.3).
-//
-// The package section also carries the internal structure face
-// (Effective_Target / Artifact_Plan / Workspace_Discovery /
-// Prepared_Workspace, ticket 032): otter's implementation modules consume
-// these through the namespaced Juice binding (src/juice_module.jai), so the
-// published directory module must carry them — both the self-built
-// executable and the self-hosted test program compile against the published
-// face. Shapes mirror the old juice module face declaration for
-// declaration; the published directory module is the only face in use
-// (the bootstrap seed window is retired).
-//
-// The namespaced binding resolves against otter's published directory
-// module (spec section 9.4): the self-built executable, the manifest
-// evaluator children (they receive the modules directory on their import
-// path) and the self-hosted test programs all compile against the published
-// face. Tests exercise this file's declarations directly through Test
-// discovery's full-package scan (tests/module_tests.jai — it never
-// #imports "Juice").
-//
-// The Testing API surface (ticket 016) lives at the end of this file in its
-// definition-source declaration shape — see the section comment there.
-//
-// Publication section contract (ticket 030, spec section 9.1): the publish
-// step (src/publication.jai) cuts the published module artifacts out of
-// this file at two marker comments, and those marker lines are the
-// single-source contract. `// [PUBLICATION-SECTION package]` (right below)
-// starts the Juice directory module's content; `// [PUBLICATION-SECTION
-// testing]` (before the Testing banner) starts Testing.jai's — the banner
-// is part of the testing section (the published module carries it as
-// provenance documentation). A missing, duplicated, misordered or renamed
-// marker fails the publication loudly — keep the marker lines verbatim.
+// Declaration input only. Runtime models live in package_model.jai.
+// The control-character defaults are reserved implementation values; ordinary
+// empty strings and empty lists remain explicit input.
 // [PUBLICATION-SECTION package]
-
-// UNSPECIFIED means the role is derived from convention during target
-// resolution: src/main.jai (or declared targets) means BIN; an import entry
-// means LIB; anything else stays BIN.
-Package_Type :: enum {
-    LIB;
-    BIN;
-    UNSPECIFIED;
+Product :: struct {
+    name: string = "\x01juice-omitted";
+    entry: string = "\x01juice-omitted";
 }
-
-// Raw target declaration as written by package.jai.
-Target :: struct {
-    name:      string;
-    main_file: string;
+Source_Kind :: enum { UNSPECIFIED; PATH; GIT; WORKSPACE; }
+Git_Source :: struct {
+    url: string = "\x01juice-omitted";
+    branch: string = "\x01juice-omitted";
+    tag: string = "\x01juice-omitted";
+    rev: string = "\x01juice-omitted";
 }
-
-// A target after defaults and filesystem validation have been applied.
-Effective_Target :: struct {
-    name:        string;
-    main_file:   string;
-    source_path: string;
+Source :: struct {
+    kind: Source_Kind;
+    path: string = "\x01juice-omitted";
+    git: Git_Source;
 }
-
-// The complete output contract consumed by Build and Run. target_dir is the
-// package's unified target/ directory root; the artifact lands directly
-// inside it (no profile sublayers).
-Artifact_Plan :: struct {
-    target:        Effective_Target;
-    target_dir:    string;
-    artifact_path: string;
+Module_Selection :: struct {
+    path: string = "\x01juice-omitted";
+    name: string = "\x01juice-omitted";
+    alias: string = "\x01juice-omitted";
 }
-
 Dependency :: struct {
-    name:    string;
-    version: string = "";
-    source:  string = "";
-    package: string = "";
+    name: string = "\x01juice-omitted";
+    source: Source;
+    modules: [] Module_Selection = .[.{}];
 }
-
 Workspace_Config :: struct {
-    members: [] string;
-    exclude: [] string;
+    members: [] string = .["\x01juice-omitted"];
+    exclude: [] string = .["\x01juice-omitted"];
+    default_members: [] string = .["\x01juice-omitted"];
 }
-
-// One option row of a plugin declaration. The value is a string; the plugin's
-// options schema owns parsing and validation (Config_Option.apply, added by
-// the pre-step plugin effort). Options cross the manifest protocol as
-// PLUGIN_OPTION records with %XX encoding.
 Plugin_Option :: struct {
-    key:   string;
+    key: string;
     value: string;
 }
-
-// One plugin declaration: the plugin identity (id + version — feeds the
-// pipeline/hook description and the cache key) plus the options rows.
-// Declaration order = pipeline order = hook registration order = lint
-// observation order. An empty Package.plugins list means the default
-// pipeline and no hooks/lint. Member plugins use the member package name as
-// their id; the built-in ids are TRANSPILE_PLUGIN_LOAD_ID /
-// TRANSPILE_PLUGIN_TEST_BLOCK_ID.
 Plugin_Declaration :: struct {
-    id:      string;
-    version: string;
+    id: string = "\x01juice-omitted";
+    builtin: string = "\x01juice-omitted";
+    source: Source;
+    module: Module_Selection;
     options: [] Plugin_Option;
 }
-
-// The v1 built-in transpile plugin ids: the reserved built-in declaration
-// ids. Member plugin ids are package names and must not collide with these.
-TRANSPILE_PLUGIN_LOAD_ID       :: "load";
+TRANSPILE_PLUGIN_LOAD_ID :: "load";
 TRANSPILE_PLUGIN_TEST_BLOCK_ID :: "test-block";
-
 Package :: struct {
-    name:         string;
-    version:      string;
-    type:         Package_Type = .UNSPECIFIED;
-    description:  string = "";
-
-    targets:      [] Target;
-
-    dependencies: [] Dependency;
-    workspace:    Workspace_Config;
-    build_script: string = "";
-
-    // Plugin declarations: the single activation/configuration/ordering
-    // surface (2026-10-21 design revision). An empty list means the default
-    // transpile pipeline and no hooks/lint.
-    plugins:      [] Plugin_Declaration;
-
-    // Set by the manifest loader; it is not declared in package.jai.
-    dir:          string = "";
-}
-
-// Discovery retains the evaluated declarations, including the root first.
-// Dependencies consume this snapshot rather than executing member manifests
-// again.
-Workspace_Discovery :: struct {
-    root_dir:        string;
-    has_package:     bool;
-    root_package:    Package;
-    member_packages: [] Package;
-}
-
-// State shared by command handlers after discovery, resolution, and (if
-// necessary) dependency preparation have completed.
-Prepared_Workspace :: struct {
-    discovery:             Workspace_Discovery;
-    artifact_plans:        [] Artifact_Plan;
-    // The package role after UNSPECIFIED has been resolved by convention.
-    package_type:          Package_Type;
-    dependencies_prepared: bool;
+    name: string = "\x01juice-omitted";
+    version: string = "\x01juice-omitted";
+    description: string = "\x01juice-omitted";
+    modules: [] Product = .[.{}];
+    executables: [] Product = .[.{}];
+    dependencies: [] Dependency = .[.{}];
+    plugins: [] Plugin_Declaration = .[.{}];
+    workspace: Workspace_Config = .{members = .["\x01juice-workspace-omitted"]};
+    default_run: string = "\x01juice-omitted";
 }
 
 // [PUBLICATION-SECTION testing]

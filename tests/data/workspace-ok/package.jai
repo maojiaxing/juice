@@ -5,14 +5,14 @@
 // directory presence), and every member's own dependency declarations load
 // with its manifest into the discovery snapshot.
 PACKAGE :: Package.{
-    name    = "ws_root",
     version = "0.1.0",
-    type    = .BIN,
+    name    = "ws_root",
+
     workspace = .{
         members = string.["member_lib", "member_extra"],
     },
     dependencies = Dependency.[
-        .{name = "member_lib", version = "0.1.0"},
-        .{name = "member_extra", version = "0.1.0"},
+        .{name = "member_lib", source = .{kind = .WORKSPACE}, modules = .[.{path = "member_lib"}]},
+        .{name = "member_extra", source = .{kind = .WORKSPACE}, modules = .[.{path = "member_extra"}]},
     ],
 };

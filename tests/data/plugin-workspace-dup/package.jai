@@ -6,14 +6,14 @@
 // by accumulation order — the earlier declaration wins — and the loser is
 // dropped with a non-fatal diagnostic.
 PACKAGE :: Package.{
-    name    = "plugin_ws_dup",
     version = "0.1.0",
-    type    = .BIN,
+    name    = "plugin_ws_dup",
+
     workspace = .{
         members = string.["packages/first-plugin", "packages/second-plugin"],
     },
     plugins = .[
-        .{id = "first-plugin", version = "0.1.0"},
-        .{id = "second-plugin", version = "0.1.0"},
+        .{id = "first-plugin", source = .{kind = .PATH, path = "packages/first-plugin"}},
+        .{id = "second-plugin", source = .{kind = .PATH, path = "packages/second-plugin"}},
     ],
 };

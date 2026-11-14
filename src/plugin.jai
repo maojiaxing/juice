@@ -492,7 +492,7 @@ Resolved_Plugins :: struct {
 // - the product is still filled when diagnostics exist (the reference
 //   shape — only ok=false blocks the caller); an ambiguous or
 //   version-mismatched plugin contributes no faces.
-resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config) -> Resolved_Plugins {
+resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config, plugins_omitted: bool = true) -> Resolved_Plugins {
     out: Resolved_Plugins;
     diags: [..] Transpile_Diagnostic;
     declared_transpile := false;
@@ -531,7 +531,7 @@ resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config
             merge_diag(*diags, tprint("plugin package provides multiple plugins: %", config.id));
             continue;
         }
-        if config.version != plugin.version {
+        if config.version != "" && config.version != plugin.version {
             merge_diag(*diags, tprint("plugin version mismatch: % (declared %, plugin %)", config.id, config.version, plugin.version));
             continue;
         }
@@ -585,7 +585,7 @@ resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config
     // No declared transpile face at all: the default pipeline. This keeps an
     // undeclared package on today's behavior (and lets a declaration that
     // only activates a lint plugin keep transpiling).
-    if !declared_transpile {
+    if plugins_omitted && !declared_transpile {
         array_add(*out.pipeline, load_plugin());
         array_add(*out.pipeline, test_block_plugin());
     }

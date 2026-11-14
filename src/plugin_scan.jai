@@ -56,7 +56,7 @@
 //
 // Ticket 043 added the workspace-level stage on top of the per-package scan;
 // ticket 056 makes it declaration-driven. scan_workspace_plugins consumes
-// the discovery snapshot (Juice.Workspace_Discovery) and the root package's
+// the discovery snapshot (Workspace_Discovery) and the root package's
 // Package.plugins declarations: built-in ids are skipped, every other id
 // must name a workspace member (member plugin id = package name), and each
 // declared member is scanned with scan_plugin_package in declaration order.
@@ -72,7 +72,7 @@
 // lands at <target_dir>/plugins/registration.jai
 // (workspace_plugin_registration_path; the per-package helper stays).
 //
-// Load order: the workspace-level function references Juice.Workspace_Discovery
+// Load order: the workspace-level function references Workspace_Discovery
 // (the namespaced binding declared in src/juice_module.jai) and
 // find_workspace_member (src/dependency.jai) — a program that #loads this
 // file must load juice_module.jai and dependency.jai first. The file's older
@@ -276,7 +276,7 @@ place_scan_hit :: (result: *Plugin_Scan_Result, hit: Plugin_Scan_Hit) {
 // member link are all loud failures — fatal diagnostic + ok=false. The
 // remaining declarations are still processed so the reports stay complete;
 // consumers must treat the whole result as unusable when ok is false.
-scan_workspace_plugins :: (discovery: Juice.Workspace_Discovery) -> Plugin_Scan_Result {
+scan_workspace_plugins :: (discovery: Workspace_Discovery) -> Plugin_Scan_Result {
     result: Plugin_Scan_Result;
     result.ok = true;
     shim_dir_ready := false;
@@ -284,13 +284,31 @@ scan_workspace_plugins :: (discovery: Juice.Workspace_Discovery) -> Plugin_Scan_
     for decl: discovery.root_package.plugins {
         // Built-in ids resolve to the command registry (this process already
         // holds those values): load / test-block. Nothing to scan or link.
-        if is_command_static_plugin_id(decl.id) continue;
+        if decl.builtin continue;
 
         // Member plugin id = member package name (v1 rule). An id that names
         // no member is an unknown plugin — loud failure.
-        member, is_member := find_workspace_member(discovery.member_packages, decl.id);
-        if !is_member {
-            array_add(*result.diagnostics, .{rel_path = decl.id, message = tprint("Unknown plugin id: %", decl.id), fatal = true});
+        member: Normalized_Package;
+        is_member := false;
+        if decl.source.kind == .PATH {
+            source_root := lexical_absolute_path(tprint("%/%", discovery.root_package.dir, decl.source.path));
+            member_spelling := tprint("%/%", source_root, decl.module.path);
+            member_root, member_root_ok := normalize_existing_path(member_spelling);
+            if member_root_ok {
+                for candidate: discovery.member_packages {
+                    if paths_equal(candidate.dir, member_root) { member = candidate; is_member = true; break; }
+                }
+                if !is_member member, is_member = load_package_manifest(tprint("%/manifest", package_target_dir(discovery.root_dir)), member_root);
+            }
+        } else if decl.source.kind == .WORKSPACE {
+            member_spelling := tprint("%/%", discovery.root_dir, decl.module.path);
+            member_root, member_root_ok := normalize_existing_path(member_spelling);
+            if member_root_ok for candidate: discovery.member_packages {
+                if paths_equal(candidate.dir, member_root) { member = candidate; is_member = true; break; }
+            }
+        }
+        if !is_member || !member.has_package {
+            array_add(*result.diagnostics, .{rel_path = decl.id, message = tprint("Plugin source unavailable: % (explicit PATH/WORKSPACE required by this implementation stage)", decl.id), fatal = true});
             result.ok = false;
             continue;
         }

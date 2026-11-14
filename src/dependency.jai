@@ -112,15 +112,19 @@ find_package_in_repo :: (cache_dir: string, repo_dir: string, target_pkg_name: s
 }
 
 // Consume the discovery snapshot; never re-execute workspace manifests.
-resolve_and_fetch_dependencies :: (root_dir: string, cache_dir: string, member_packages: [] Juice.Package) -> bool {
+resolve_and_fetch_dependencies :: (root_dir: string, cache_dir: string, member_packages: [] Normalized_Package) -> bool {
+    return resolve_and_fetch_dependencies_with_modules(root_dir, cache_dir, member_packages, "");
+}
+
+resolve_and_fetch_dependencies_with_modules :: (root_dir: string, cache_dir: string, member_packages: [] Normalized_Package, modules_dir: string) -> bool {
     if !make_directory_if_it_does_not_exist(packages_dir(root_dir), recursive = true) return false;
-    return fetch_workspace_dependencies(root_dir, cache_dir, member_packages);
+    return fetch_workspace_dependencies(root_dir, cache_dir, member_packages, modules_dir = modules_dir);
 }
 
 // A workspace member is consumed through the local dependency directory: the
 // declaring package lists it as a dependency, and preparation registers an
 // import shim so consumers resolve it with a plain "#import <name>".
-link_workspace_member_dependency :: (root_dir: string, member: Juice.Package) -> bool {
+link_workspace_member_dependency :: (root_dir: string, member: Normalized_Package) -> bool {
     return ensure_import_shim(packages_dir(root_dir), member.name, member.dir);
 }
 
@@ -161,7 +165,7 @@ ensure_import_shim :: (packages_dir: string, name: string, source_dir: string) -
     return true;
 }
 
-find_workspace_member :: (member_packages: [] Juice.Package, name: string) -> Juice.Package, bool {
+find_workspace_member :: (member_packages: [] Normalized_Package, name: string) -> Normalized_Package, bool {
     for pkg: member_packages {
         if pkg.name == name return pkg, true;
     }
@@ -171,24 +175,34 @@ find_workspace_member :: (member_packages: [] Juice.Package, name: string) -> Ju
 fetch_workspace_dependencies :: (
     root_dir: string,
     cache_dir: string,
-    member_packages: [] Juice.Package,
-    fetch: #type (root_dir: string, cache_dir: string, dep: Juice.Dependency) -> bool = fetch_dependency,
-    link_member: #type (root_dir: string, member: Juice.Package) -> bool = link_workspace_member_dependency
+    member_packages: [] Normalized_Package,
+    fetch: #type (root_dir: string, cache_dir: string, dep: Dependency_Reference, modules_dir: string = "") -> bool = fetch_dependency,
+    link_member: #type (root_dir: string, member: Normalized_Package) -> bool = link_workspace_member_dependency,
+    modules_dir: string = ""
 ) -> bool {
     for pkg: member_packages {
         for dep: pkg.dependencies {
-            member, is_member := find_workspace_member(member_packages, dep.name);
-            if is_member {
-                // Members link by declared name; the DEP source is ignored,
-                // so a member-relative source never misresolves against the
-                // root's cwd.
-                if !link_member(root_dir, member) {
-                    print("[juice ERROR] Failed to link workspace member: %1\n", dep.name);
-                    return false;
+            if dep.source.kind == .WORKSPACE {
+                for selection: dep.modules {
+                    workspace_root := root_dir;
+                    if member_packages.count > 0 && member_packages[0].dir != "" workspace_root = member_packages[0].dir;
+                    expected := lexical_absolute_path(tprint("%/%", workspace_root, selection.path));
+                    found := false;
+                    for member: member_packages {
+                        if !paths_equal(member.dir, expected) continue;
+                        found = true;
+                        if !link_member(root_dir, member) return false;
+                    }
+                    if !found { print("[juice ERROR] WORKSPACE source must select a member directory.\n"); return false; }
                 }
+                if dep.modules_omitted && dep.modules.count == 0 { print("[juice ERROR] WORKSPACE dependency must select a member module in this implementation stage.\n"); return false; }
                 continue;
             }
-            if !fetch(root_dir, cache_dir, dep) {
+            dependency := dep;
+            if dependency.source.kind == .PATH && pkg.dir != "" && !path_is_absolute_portable(dependency.source.path) {
+                dependency.source.path = lexical_absolute_path(tprint("%/%", pkg.dir, dependency.source.path));
+            }
+            if !fetch(root_dir, cache_dir, dependency, modules_dir) {
                 print("[juice ERROR] Failed to fetch dependency: %1\n", dep.name);
                 return false;
             }
@@ -197,38 +211,48 @@ fetch_workspace_dependencies :: (
     return true;
 }
 
-fetch_dependency :: (root_dir: string, cache_dir: string, dep: Juice.Dependency) -> bool {
-    source_type := detect_source_type(dep.source);
-
-    if source_type == {
-        case .LOCAL_PATH;
-            clean_path := clean_local_path(dep.source);
-            // Relative sources anchor at the process cwd — the package root,
-            // since juice never chdirs (root_dir equals the invocation cwd).
-            return ensure_import_shim(packages_dir(root_dir), dep.name, clean_path);
-
-        case .GIT_URL;
-            git_cache_base := tprint("%1/git_repos", cache_dir);
-            repo_cache_dir := get_git_repo_cache_path(git_cache_base, dep.source, dep.version);
-
-            if !ensure_git_repo_cloned(dep.source, dep.version, repo_cache_dir) return false;
-
-            target_name := ifx dep.package != "" then dep.package else dep.name;
-            sub_pkg_dir, found := find_package_in_repo(cache_dir, repo_cache_dir, target_name);
-            if !found {
-                // The repo may be a plain Jai module (no package.jai); its root
-                // is the module directory.
-                if file_exists(tprint("%1/module.jai", repo_cache_dir)) {
-                    sub_pkg_dir = repo_cache_dir;
-                } else {
-                    print("[juice ERROR] Package '%1' not found in Git repo %2!\n", target_name, dep.source);
-                    return false;
-                }
-            }
-
-            return ensure_import_shim(packages_dir(root_dir), dep.name, sub_pkg_dir);
+fetch_dependency :: (root_dir: string, cache_dir: string, dep: Dependency_Reference, modules_dir: string = "") -> bool {
+    source_root := "";
+    if dep.source.kind == .PATH {
+        source_root = dep.source.path;
+        // Workspace callers already resolve PATH against the declaring package.
+        // root_dir controls output placement, which may be a separate scratch root.
+        if !path_is_absolute_portable(source_root) source_root = lexical_absolute_path(source_root);
+    } else if dep.source.kind == .GIT {
+        selector := dep.source.rev;
+        if selector == "" selector = dep.source.tag;
+        if selector == "" selector = dep.source.branch;
+        source_root = get_git_repo_cache_path(tprint("%/git_repos", cache_dir), dep.source.url, selector);
+        if !ensure_git_repo_cloned(dep.source.url, selector, source_root) return false;
+    } else {
+        print("[juice ERROR] Dependency source requires PATH, GIT or a qualified workspace member.\n");
+        return false;
     }
-    return false;
+    selections := dep.modules;
+    if dep.modules_omitted && selections.count == 0 selections = .[.{}];
+    for selection: selections {
+        logical := normalize_package_relative_path(selection.path);
+        if !logical.success { print("[juice ERROR] Dependency module path escapes its source root.\n"); return false; }
+        provider_root := tprint("%/%", source_root, logical.path);
+        provider, loaded := load_package_manifest(cache_dir, provider_root, modules_dir);
+        if !loaded || !provider.has_package return false;
+        products := resolve_product_list(provider, provider.modules, provider.modules_omitted, true);
+        if !products.success return false;
+        chosen: Effective_Target;
+        found := false;
+        for product: products.targets {
+            if selection.name == "" {
+                if products.targets.count != 1 continue;
+            } else if !ascii_names_equal(selection.name, product.name) continue;
+            chosen = product;
+            found = true;
+        }
+        if !found { print("[juice ERROR] Dependency module selection is missing or ambiguous: %\n", dep.name); return false; }
+        import_name := ifx selection.alias == "" then chosen.name else selection.alias;
+        if !declaration_identifier_is_valid(import_name) return false;
+        if !write_entire_file(tprint("%/%.jai", packages_dir(root_dir), import_name), dependency_shim_content(import_name, chosen.source_path)) return false;
+    }
+    return true;
 }
 
 get_directory_path :: (file_path: string) -> string {

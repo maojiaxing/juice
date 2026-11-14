@@ -34,6 +34,7 @@
 // the file's workspace/discovery references require juice_module.jai,
 // dependency.jai, plugin.jai, scan_walk.jai and the transpile lexer first.
 #load "juice_module.jai";
+#load "package_model.jai";
 #load "xdg.jai";
 #load "path_safety.jai";
 #load "manifest.jai";
@@ -64,7 +65,7 @@
 // Ticket 045 lands plugin_scan.jai in the tool closure: the test command's
 // COMPILE stage scans the root package's declared member dependencies and
 // writes the workspace registration file. The workspace-level scan needs
-// juice_module.jai (Juice.Workspace_Discovery) and dependency.jai
+// juice_module.jai (Workspace_Discovery) and dependency.jai
 // (find_workspace_member) first; its older references (plugin.jai's anchor
 // note, scan_walk, the transpile lexer) are all earlier in the list too, so
 // the file sits at the tail of the src modules.

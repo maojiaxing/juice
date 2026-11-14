@@ -59,57 +59,57 @@ test "Portable relative .jai path gate" {
 // ---------------------------------------------------------------------------
 
 test "Resolution rejects an unnamed explicit target" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = otter_root();
-    pkg.targets = Juice.Target.[.{name = "", main_file = "src/main.jai"}];
+    pkg.executables = Declared_Product.[.{name = "", entry = "src/main.jai"}];
     result := resolve_artifact_plans(pkg);
     expect(!result.success && result.error == .INVALID_TARGET_NAME && result.plans.count == 0);
-    expect(result.error_message == "Explicit target 0 has required name and main_file fields.");
+    expect(result.error_message == "executables[0]: Product name must be a Jai identifier; provide an explicit legal name.");
 }
 
 test "Resolution rejects a target without an entry file" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = otter_root();
-    pkg.targets = Juice.Target.[.{name = "app", main_file = ""}];
+    pkg.executables = Declared_Product.[.{name = "app", entry = ""}];
     result := resolve_artifact_plans(pkg);
-    expect(!result.success && result.error == .INVALID_TARGET_NAME && result.plans.count == 0);
+    expect(!result.success && result.error == .INVALID_TARGET_SOURCE && result.plans.count == 0);
 }
 
 test "Resolution rejects a target name that is not portable" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = otter_root();
-    pkg.targets = Juice.Target.[.{name = "a/b", main_file = "src/main.jai"}];
+    pkg.executables = Declared_Product.[.{name = "a/b", entry = "src/main.jai"}];
     result := resolve_artifact_plans(pkg);
     expect(!result.success && result.error == .INVALID_TARGET_NAME && result.plans.count == 0);
-    expect(result.error_message == "Target name must be a nonempty portable filename.");
+    expect(result.error_message == "executables[0]: Product name must be a Jai identifier; provide an explicit legal name.");
 }
 
 test "Resolution rejects a target source that is not portable" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = otter_root();
-    pkg.targets = Juice.Target.[.{name = "app", main_file = "C:/abs/main.jai"}];
+    pkg.executables = Declared_Product.[.{name = "app", entry = "C:/abs/main.jai"}];
     result := resolve_artifact_plans(pkg);
     expect(!result.success && result.error == .INVALID_TARGET_SOURCE && result.plans.count == 0);
-    expect(result.error_message == "Target main_file must be a portable package-relative .jai path.");
+    expect(result.error_message == "executables[0]: Product entry must be a package-relative .jai path.");
 }
 
 test "Resolution rejects a missing target source" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = otter_root();
-    pkg.targets = Juice.Target.[.{name = "app", main_file = "src/missing.jai"}];
+    pkg.executables = Declared_Product.[.{name = "app", entry = "src/missing.jai"}];
     result := resolve_artifact_plans(pkg);
     expect(!result.success && result.error == .SOURCE_NOT_FOUND && result.plans.count == 0);
-    expect(result.error_message == "Target source file does not exist: src/missing.jai");
+    expect(result.error_message == "executables[0]: Product entry does not exist: src/missing.jai");
 }
 
 test "Resolution rejects a target source that is not a regular file" {
@@ -117,22 +117,22 @@ test "Resolution rejects a target source that is not a regular file" {
     delete_directory_full(scratch);
     make_directory_if_it_does_not_exist(tprint("%1/src/entry.jai", scratch), recursive = true);
     defer delete_directory_full(scratch);
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = scratch;
-    pkg.targets = Juice.Target.[.{name = "app", main_file = "src/entry.jai"}];
+    pkg.executables = Declared_Product.[.{name = "app", entry = "src/entry.jai"}];
     result := resolve_artifact_plans(pkg);
     expect(!result.success && result.error == .SOURCE_NOT_REGULAR && result.plans.count == 0);
-    expect(result.error_message == "Target source is not a regular file: src/entry.jai");
+    expect(result.error_message == "executables[0]: Product entry is not a regular link-free file: src/entry.jai");
 }
 
 test "Resolution builds a plan for a valid declaration" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = otter_root();
-    pkg.targets = Juice.Target.[.{name = "app", main_file = "src/main.jai"}];
+    pkg.executables = Declared_Product.[.{name = "app", entry = "src/main.jai"}];
     result := resolve_artifact_plans(pkg);
     expect(result.success && result.plans.count == 1);
     plan := result.plans[0];
@@ -147,13 +147,13 @@ test "Resolution builds a plan for a valid declaration" {
 }
 
 test "Explicit targets resolve to separate artifact plans" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = otter_root();
-    pkg.targets = Juice.Target.[
-        .{name = "app", main_file = "src/main.jai"},
-        .{name = "tool", main_file = "src/main.jai"},
+    pkg.executables = Declared_Product.[
+        .{name = "app", entry = "src/main.jai"},
+        .{name = "tool", entry = "src/commands/help.jai"},
     ];
     result := resolve_artifact_plans(pkg);
     expect(result.success && result.plans.count == 2);
@@ -164,57 +164,57 @@ test "Explicit targets resolve to separate artifact plans" {
 // Declaration uniqueness is case-insensitive: artifact paths must stay
 // unambiguous on Windows ("App" and "app" would collide as App.exe/app.exe).
 test "Duplicate target names are rejected case-insensitively" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = otter_root();
-    pkg.targets = Juice.Target.[
-        .{name = "App", main_file = "src/main.jai"},
-        .{name = "app", main_file = "src/main.jai"},
+    pkg.executables = Declared_Product.[
+        .{name = "App", entry = "src/main.jai"},
+        .{name = "app", entry = "src/main.jai"},
     ];
     result := resolve_artifact_plans(pkg);
     expect(!result.success && result.error == .DUPLICATE_TARGET_NAME && result.plans.count == 0);
-    expect(result.error_message == "Target name collides with another target: app");
+    expect(result.error_message == "Duplicate product name: app");
 }
 
 test "Exact duplicate target names are rejected" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = otter_root();
-    pkg.targets = Juice.Target.[
-        .{name = "app", main_file = "src/main.jai"},
-        .{name = "app", main_file = "src/main.jai"},
+    pkg.executables = Declared_Product.[
+        .{name = "app", entry = "src/main.jai"},
+        .{name = "app", entry = "src/main.jai"},
     ];
     result := resolve_artifact_plans(pkg);
     expect(!result.success && result.error == .DUPLICATE_TARGET_NAME && result.plans.count == 0);
 }
 
 test "Distinct names with case differences pass" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = otter_root();
-    pkg.targets = Juice.Target.[
-        .{name = "App", main_file = "src/main.jai"},
-        .{name = "Appl", main_file = "src/main.jai"},
+    pkg.executables = Declared_Product.[
+        .{name = "App", entry = "src/main.jai"},
+        .{name = "Appl", entry = "src/commands/help.jai"},
     ];
     result := resolve_artifact_plans(pkg);
     expect(result.success && result.plans.count == 2);
 }
 
 test "Package identity rejects a non-portable name" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "a/b";
     pkg.version = "1";
     pkg.dir     = otter_root();
     result := resolve_artifact_plans(pkg);
     expect(!result.success && result.error == .INVALID_PACKAGE_NAME && result.plans.count == 0);
-    expect(result.error_message == "Package name must be a nonempty portable filename.");
+    expect(result.error_message == "Package name must match [A-Za-z0-9][A-Za-z0-9._-]*.");
 }
 
 test "Package identity rejects an empty version" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "";
     pkg.dir     = otter_root();
@@ -224,7 +224,7 @@ test "Package identity rejects an empty version" {
 }
 
 test "Package identity rejects a missing root" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = otter_scratch("nonexistent-pkg-root");
@@ -239,34 +239,35 @@ test "Package identity rejects a missing root" {
 // plans.
 // ---------------------------------------------------------------------------
 
-test "Library package rejects executable targets" {
+test "Modules and executables coexist" {
     pkg := library_fixture_package();
-    pkg.targets = Juice.Target.[.{name = "app", main_file = "src/main.jai"}];
-    result := resolve_artifact_plans(pkg);
-    expect(!result.success && result.error == .LIBRARY_TARGET_CONFLICT && result.plans.count == 0);
-    expect(result.error_message == "Library package 'libdemo' cannot declare executable targets.");
+    pkg.dir = otter_root();
+    pkg.executables = Declared_Product.[.{name = "app", entry = "src/main.jai"}];
+    result := resolve_effective_targets(pkg);
+    expect(result.success && result.targets.count == 1);
+    expect(result.modules.count == 1 && result.targets[0].name == "app");
 }
 
 // tests/data has no module.jai at its root or under src/, so the library
 // entry lookup fails (old juice used its repository root the same way).
-test "Library package requires a module.jai import entry" {
+test "A package without module entries has zero modules" {
     pkg := library_fixture_package();
     pkg.dir = tprint("%1/tests/data", otter_root());
     result := resolve_artifact_plans(pkg);
-    expect(!result.success && result.error == .MODULE_ENTRY_NOT_FOUND && result.plans.count == 0);
-    expect(result.error_message == "Library package must provide module.jai at the package root or src/module.jai.");
+    expect(result.success && result.plans.count == 0);
+    expect(result.error_message == "");
 }
 
 test "Library package resolves to no plans" {
     result := resolve_artifact_plans(library_fixture_package());
-    expect(result.success && result.plans.count == 0 && result.package_type == .LIB);
+    expect(result.success && result.plans.count == 0);
 }
 
 test "Explicit library accepts a src/module.jai entry" {
     pkg := library_fixture_package();
     pkg.dir = tprint("%1/tests/data/target-lib-src-module", otter_root());
     result := resolve_artifact_plans(pkg);
-    expect(result.success && result.plans.count == 0 && result.package_type == .LIB);
+    expect(result.success && result.plans.count == 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -276,40 +277,40 @@ test "Explicit library accepts a src/module.jai entry" {
 // ---------------------------------------------------------------------------
 
 test "Unspecified type derives library from root entry" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "libdemo";
     pkg.version = "1";
     pkg.dir     = tprint("%1/tests/data/target-lib-module", otter_root());
     result := resolve_artifact_plans(pkg);
-    expect(result.success && result.plans.count == 0 && result.package_type == .LIB);
+    expect(result.success && result.plans.count == 0);
 }
 
 test "Unspecified type derives library from src entry" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "libdemo";
     pkg.version = "1";
     pkg.dir     = tprint("%1/tests/data/target-lib-src-module", otter_root());
     result := resolve_artifact_plans(pkg);
-    expect(result.success && result.plans.count == 0 && result.package_type == .LIB);
+    expect(result.success && result.plans.count == 0);
 }
 
 test "Unspecified type derives bin from default entry" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = tprint("%1/tests/data/target-bin-package", otter_root());
     result := resolve_artifact_plans(pkg);
     expect(result.success && result.plans.count == 1);
-    expect(result.package_type == .BIN && result.plans[0].target.name == "demo");
+    expect(result.plans[0].target.name == "demo");
 }
 
 test "Unspecified type without any entry stays bin" {
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = tprint("%1/tests/data", otter_root());
     result := resolve_artifact_plans(pkg);
-    expect(result.success && result.plans.count == 0 && result.package_type == .BIN);
+    expect(result.success && result.plans.count == 0);
 }
 
 // A directory at the implicit entry path is not a regular file.
@@ -318,13 +319,13 @@ test "Implicit src/main.jai must be a regular file" {
     delete_directory_full(scratch);
     make_directory_if_it_does_not_exist(tprint("%1/src/main.jai", scratch), recursive = true);
     defer delete_directory_full(scratch);
-    pkg: Juice.Package;
+    pkg: Normalized_Package;
     pkg.name    = "demo";
     pkg.version = "1";
     pkg.dir     = scratch;
     result := resolve_artifact_plans(pkg);
     expect(!result.success && result.error == .SOURCE_NOT_REGULAR && result.plans.count == 0);
-    expect(result.error_message == "Implicit src/main.jai is not a regular file.");
+    expect(result.error_message == "Product entry is not a regular link-free file: src/main.jai");
 }
 
 // ---------------------------------------------------------------------------
@@ -335,25 +336,25 @@ test "Implicit src/main.jai must be a regular file" {
 
 test "Artifact plan revalidation gate" {
     root := otter_root();
-    plan: Juice.Artifact_Plan;
+    plan: Artifact_Plan;
     plan.target = .{name = "app", main_file = "src/main.jai"};
     plan.target_dir = package_target_dir(root);
     plan.artifact_path = target_artifact_path(package_target_dir(root), "app");
     expect(revalidate_artifact_plan(plan, root));
 
-    escaping: Juice.Artifact_Plan;
+    escaping: Artifact_Plan;
     escaping.target = .{name = "app", main_file = "src/main.jai"};
     escaping.target_dir = tprint("%1/../escape", root);
     escaping.artifact_path = tprint("%1/../escape/app.exe", root);
     expect(!revalidate_artifact_plan(escaping, root));
 
-    bad_name: Juice.Artifact_Plan;
+    bad_name: Artifact_Plan;
     bad_name.target = .{name = "", main_file = "src/main.jai"};
     bad_name.target_dir = package_target_dir(root);
     bad_name.artifact_path = target_artifact_path(package_target_dir(root), "app");
     expect(!revalidate_artifact_plan(bad_name, root));
 
-    bad_entry: Juice.Artifact_Plan;
+    bad_entry: Artifact_Plan;
     bad_entry.target = .{name = "app", main_file = "main.txt"};
     bad_entry.target_dir = package_target_dir(root);
     bad_entry.artifact_path = target_artifact_path(package_target_dir(root), "app");

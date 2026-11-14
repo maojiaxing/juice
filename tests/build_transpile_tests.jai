@@ -144,7 +144,7 @@ bt_table :: (hooks: [] Lifecycle_Hook) -> [..] Hook_Registration {
 // probes real files): one plan with an existing test-free entry. The
 // fixture write's failure surfaces through the downstream assertions (the
 // expect macro's bare return cannot abort a value-returning helper).
-bt_prepared :: (root: string) -> Juice.Prepared_Workspace {
+bt_prepared :: (root: string) -> Prepared_Workspace {
     build_seam_write(root, "src/main.jai", "main :: () {}\n");
     plan := build_seam_plan(root, "src/main.jai");
     return build_seam_prepared(root, plan);
@@ -158,7 +158,7 @@ bt_scratch :: (name: string) -> string {
 
 // The declaration-driven pipeline for a prepared workspace (the command's
 // single resolution; build_plan_entry consumes the result — ticket 056).
-bt_pipeline :: (prepared: *Juice.Prepared_Workspace) -> [] Transpile_Plugin {
+bt_pipeline :: (prepared: *Prepared_Workspace) -> [] Transpile_Plugin {
     return resolve_package_plugins(prepared.discovery.root_package.plugins).pipeline;
 }
 
@@ -221,8 +221,8 @@ bt_hook_p_conflict_returns_true :: (ctx: *Lifecycle_Context, state: *void) -> bo
 
 test "The declared plugin resolver preserves declaration order" {
     resolved := resolve_package_plugins(.[
-        .{id = "test-block", version = "1.0.0"},
-        .{id = "load", version = "1.0.0"},
+        .{id = "test-block", builtin = true},
+        .{id = "load", builtin = true},
     ]);
     expect(resolved.ok);
     expect(resolved.pipeline.count == 2);
@@ -247,17 +247,17 @@ test "The declared plugin resolver yields the default pipeline for zero transpil
     // the generated test metaprogram / Phase-2 host) and does not disturb
     // the default pipeline.
     member := resolve_package_plugins(.[
-        .{id = "juice-plugin-lint", version = "0.1.0"},
+        .{id = "juice-plugin-lint", source = .{kind = .PATH, path = "packages/juice-plugin-lint"}},
     ]);
     expect(member.ok);
     expect(member.pipeline.count == 2);
     expect(member.pipeline[0].name == "load" && member.pipeline[1].name == "test-block");
 }
 
-test "The command-side resolver skips non-builtin ids and rejects bad builtin versions" {
+test "The command-side resolver skips external sources and rejects unknown builtin options" {
     resolved := resolve_package_plugins(.[
-        .{id = "load", version = "1.0.0"},
-        .{id = "mystery", version = "1.0.0"},
+        .{id = "load", builtin = true},
+        .{id = "mystery", source = .{kind = .PATH, path = "packages/mystery"}},
     ]);
     expect(resolved.ok);
     expect(resolved.pipeline.count == 1);
@@ -267,11 +267,11 @@ test "The command-side resolver skips non-builtin ids and rejects bad builtin ve
     // resolver's semantic gate; member versions are checked where their
     // values exist).
     bad := resolve_package_plugins(.[
-        .{id = "load", version = "9.9.9"},
+        .{id = "load", builtin = true, options = .[.{key = "unsupported", value = "x"}]},
     ]);
     expect(!bad.ok);
     expect(bad.diagnostics.count == 1);
-    expect(bad.diagnostics[0].message == "plugin version mismatch: load (declared 9.9.9, plugin 1.0.0)");
+    expect(bad.diagnostics[0].message == "unknown plugin option: load (unsupported)");
 }
 
 test "The resolved pipeline is exactly the view key's pipeline description" {
@@ -281,8 +281,8 @@ test "The resolved pipeline is exactly the view key's pipeline description" {
     source := "x := 1;\n";
     default_resolved := resolve_package_plugins(.[]);
     reversed := resolve_package_plugins(.[
-        .{id = "test-block", version = "1.0.0"},
-        .{id = "load", version = "1.0.0"},
+        .{id = "test-block", builtin = true},
+        .{id = "load", builtin = true},
     ]);
     expect(default_resolved.ok && reversed.ok);
     key_default := transpile_view_key("src/a.jai", source, .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION, default_resolved.pipeline);
@@ -442,8 +442,8 @@ test "Build entry: the declared pipeline changes the view keys" {
     // The explicit built-in declaration in the default order equals the
     // undeclared default (same pipeline description, same keys).
     prepared.discovery.root_package = .{name = "demo", version = "1", plugins = .[
-        .{id = "load", version = "1.0.0"},
-        .{id = "test-block", version = "1.0.0"},
+        .{id = "load", builtin = true},
+        .{id = "test-block", builtin = true},
     ]};
     entry_explicit, ok2 := build_plan_entry(*prepared, plan, bt_pipeline(*prepared));
     expect(ok2 && entry_explicit == entry_default);
@@ -452,8 +452,8 @@ test "Build entry: the declared pipeline changes the view keys" {
     // identical (the transforms are order-independent on these files) but
     // the pipeline description differs, so the keys differ.
     prepared.discovery.root_package = .{name = "demo", version = "1", plugins = .[
-        .{id = "test-block", version = "1.0.0"},
-        .{id = "load", version = "1.0.0"},
+        .{id = "test-block", builtin = true},
+        .{id = "load", builtin = true},
     ]};
     entry_reversed, ok3 := build_plan_entry(*prepared, plan, bt_pipeline(*prepared));
     expect(ok3 && entry_reversed != entry_default);
@@ -719,8 +719,8 @@ test "Build dispatch: an after hook failure aborts the build" {
 }
 
 test "Build dispatch: zero plans run no stage and fire no hook" {
-    prepared: Juice.Prepared_Workspace;
-    prepared.artifact_plans = Juice.Artifact_Plan.[];
+    prepared: Prepared_Workspace;
+    prepared.artifact_plans = Artifact_Plan.[];
     bt_reset();
     bt_prestep_reset();
 
@@ -773,7 +773,7 @@ test "Build dispatch: the pre-step tables travel into the entry selection" {
     // The discovery snapshot's member packages start with the root (the
     // workspace convention); the pre-step stage's member_dirs carries the
     // rest.
-    members: [..] Juice.Package;
+    members: [..] Normalized_Package;
     array_add(*members, .{name = "demo", dir = root});
     member_dir := path_slashes(tprint("%1/packages/member-a", root));
     array_add(*members, .{name = "member-a", dir = member_dir});
@@ -888,11 +888,11 @@ test "E2E: build-with-tests strips test blocks and produces a runnable artifact"
 
     result, output, _ := run_otter_child_at(fixture_root, string.["build"]);
     expect(expect_exit("build-with-tests", result, 0, "build child"));
-    expect(child_output_contains("build-with-tests", output, "[juice Build] Compiling Target 'build-with-tests' (src/main.jai) -> target/..."));
+    expect(child_output_contains("build-with-tests", output, "[juice Build] Compiling Target 'build_with_tests' (src/main.jai) -> target/..."));
     expect(child_output_contains("build-with-tests", output, "[juice] Build completed successfully!"));
 
     // The artifact exists and behaves like the original program.
-    artifact := target_artifact_path(package_target_dir(fixture_root), "build-with-tests");
+    artifact := target_artifact_path(package_target_dir(fixture_root), "build_with_tests");
     expect(file_exists(artifact));
     run_result, run_output, _, _ := run_command(artifact, capture_and_return_output = true);
     expect(expect_exit("build-with-tests artifact", run_result, 0, "build child"));

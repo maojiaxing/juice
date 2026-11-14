@@ -88,12 +88,12 @@ probe_visited :: (visited: [] string, rel_path: string) -> bool {
 // by the consumer; pipeline is the configured pipeline the probe aggregates
 // over — an empty pipeline means the default, so every existing caller
 // keeps its behavior unchanged.
-probe_package_closure :: (package_root: string, entry_rel: string, error_prefix: string = "[juice ERROR] ", pipeline: [] Transpile_Plugin = .[]) -> [..] Build_Closure_File, bool {
+probe_package_closure :: (package_root: string, entry_rel: string, error_prefix: string = "[juice ERROR] ", pipeline: [] Transpile_Plugin = .[], pipeline_omitted: bool = true) -> [..] Build_Closure_File, bool {
     entry: Build_Source_File;
     entry.rel_path = entry_rel;
     entry.abs_path = front_slashes(tprint("%1/%2", package_root, entry_rel));
 
-    resolved := resolve_pipeline(pipeline);
+    resolved := resolve_pipeline(pipeline, pipeline_omitted);
 
     files: [..] Build_Closure_File;
     visited: [..] string;
@@ -178,11 +178,12 @@ Strip_View_State :: struct {
     // The transpile seam: a function from one closure file (+ its load
     // rewrite table) to the strip view. The third parameter is the pipeline
     // (empty = the default); view_of_file passes state.pipeline below.
-    transpile:     #type (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin = .[]) -> Build_File_Output;
+    transpile:     #type (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin = .[], pipeline_omitted: bool = true) -> Build_File_Output;
     // The pipeline the closure is transpiled with: the caller's configured
     // pipeline for a declared package; empty (the default) for closures
     // without a package declaration surface.
     pipeline:      [] Transpile_Plugin;
+    pipeline_omitted: bool = true;
     transpile_dir: string;   // CONTENT_ADDRESSED: transpile tree root; PLAIN: view base dir (absolute)
     dep_name:      string;   // CONTENT_ADDRESSED non-empty -> deps/<name> subtree
     layout:        Strip_View_Layout;
@@ -231,7 +232,7 @@ view_of_file :: (state: *Strip_View_State, index: s64) -> string, bool {
         array_add(*load_targets, target);
     }
 
-    output := state.transpile(state.closure[index].file, load_targets, state.pipeline);
+    output := state.transpile(state.closure[index].file, load_targets, state.pipeline, state.pipeline_omitted);
     if output.diagnostics.count > 0 {
         for diagnostic: output.diagnostics {
             print("%1%2:%3,%4: %5\n", state.error_prefix, state.closure[index].file.rel_path, diagnostic.line, diagnostic.column, diagnostic.message);
@@ -276,7 +277,7 @@ view_of_file :: (state: *Strip_View_State, index: s64) -> string, bool {
 // view). The load rewrite table embeds the target views' hash directories,
 // so keys form a Merkle chain computable in dependency order. pipeline is
 // the configured pipeline; an empty pipeline means the default.
-transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin = .[]) -> Build_File_Output {
+transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin = .[], pipeline_omitted: bool = true) -> Build_File_Output {
     output: Build_File_Output;
     source, ok := read_entire_file(file.abs_path);
     if !ok {
@@ -289,10 +290,11 @@ transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target, 
     ctx.load_targets = load_targets;
     // ctx.plugins is a resizable array; copy the slice in so the context
     // owns its pipeline view.
+    ctx.plugins_omitted = pipeline_omitted;
     for plugin: pipeline array_add(*ctx.plugins, plugin);
     result := transpile_source(source, ctx);
     output.view = result.view;
-    output.key = transpile_view_key(file.rel_path, source, .STRIP, load_targets, VIEW_CONTRACT_VERSION, ctx.plugins);
+    output.key = transpile_view_key(file.rel_path, source, .STRIP, load_targets, VIEW_CONTRACT_VERSION, ctx.plugins, pipeline_omitted = pipeline_omitted);
     output.diagnostics = result.diagnostics;
     return output;
 }

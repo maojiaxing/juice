@@ -1,9 +1,9 @@
 #import "Juice";
 
 PACKAGE :: Package.{
-    name    = "bad_missing_dir",
     version = "0.1.0",
-    type    = .BIN,
+    name    = "bad_missing_dir",
+
     workspace = .{
         members = string.["ghost_member"],
     },

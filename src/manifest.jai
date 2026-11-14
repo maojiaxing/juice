@@ -5,298 +5,303 @@
 #import "Process";
 #import "String";
 
-// The manifest protocol and loader: package.jai is an executable Jai source
-// file, interpreted only through the generated evaluator child process
-// (#load the manifest + #run main() printing line records). The stdout of
-// the child is never part of the protocol — the protocol is the data file
-// the child writes. The parent parses that file strictly (eleven record
-// kinds; unknown keys, duplicate single-value records and malformed shapes
-// are errors carrying 1-based line numbers). Plugin declarations are parsed
-// structurally here; semantic validation (unknown ids, member resolution,
-// versions, options) belongs to plugin preparation — the declaration-driven
-// workspace scan and resolve_plugin_configs (ticket 056). A child write
-// failure exits with code 2 and is retried at most twice; any other nonzero
-// exit fails immediately.
-//
-// The Package face is consumed through the namespaced Juice binding
-// (src/juice_module.jai — the load-bearing "Juice" module name constraint):
-// the evaluator children receive the published modules directory on their
-// import path, so the declarations package.jai files are written against
-// are exactly the ones this layer evaluates.
-
 Manifest_Parse_Result :: struct {
-    success:       bool;
-    package:       Juice.Package;
-    line_number:   int;
+    success: bool;
+    package: Normalized_Package;
+    line_number: int;
     error_message: string;
 }
 
-to_forward_slashes :: (path: string) -> string {
-    return path_slashes(path);
-}
+to_forward_slashes :: (path: string) -> string { return path_slashes(path); }
 
-// Generate the evaluator program: the only way package.jai is interpreted.
-// The generated main prints one KEY=VALUE line record per declaration, in
-// the fixed order below. Repeatable records keep declaration order (the
-// plugin loop is ordered on purpose — declaration order = pipeline order);
-// zero declarations print zero records, which the parser reads as the
-// default pipeline. Plugin options cross as PLUGIN_OPTION records; values
-// are %XX-encoded (% | CR LF) so the line-record shape survives arbitrary
-// option strings.
+// The evaluator is the only bridge from public Package values to runtime data.
+// Source diagnostics are the compiler's; protocol positions are never claimed
+// to be source coordinates. Every field is escaped without trimming its value.
 build_eval_code :: (manifest_path: string, output_path: string) -> string {
-    clean_manifest := to_forward_slashes(manifest_path);
-    clean_output   := to_forward_slashes(output_path);
-
     builder: String_Builder;
-    append(*builder, "#import \"Basic\";\n");
-    append(*builder, "#import \"File\";\n");
-    append(*builder, "#import \"Juice\";\n");
-    append(*builder, "#import \"Compiler\";\n\n");
-
-    append(*builder, "#load \"");
-    append(*builder, clean_manifest);
-    append(*builder, "\";\n\n");
-
-    append(*builder, "#run {\n");
-    append(*builder, "    set_build_options_dc(.{do_output = false});\n");
-    append(*builder, "    main();\n");
-    append(*builder, "}\n\n");
-
-    // The record-value encoder, generated into the child: the parent's
-    // unescape_record_value is the exact inverse. Only the delimiter, the
-    // escape character and line breaks are encoded; the rest passes through.
-    append(*builder, "manifest_eval_hex_digit :: (n: u8) -> u8 {\n");
-    append(*builder, "    return cast(u8) ifx n < 10 then #char \"0\" + n else #char \"a\" + (n - 10);\n");
-    append(*builder, "}\n\n");
-    append(*builder, "manifest_eval_escape :: (value: string) -> string {\n");
-    append(*builder, "    out: [..] u8;\n");
-    append(*builder, "    for i: 0..value.count-1 {\n");
-    append(*builder, "        c := value[i];\n");
-    append(*builder, "        if c == #char \"%\" || c == #char \"|\" || c == #char \"\\n\" || c == #char \"\\r\" {\n");
-    append(*builder, "            array_add(*out, #char \"%\");\n");
-    append(*builder, "            array_add(*out, manifest_eval_hex_digit(cast(u8) ((c >> 4) & 0xf)));\n");
-    append(*builder, "            array_add(*out, manifest_eval_hex_digit(cast(u8) (c & 0xf)));\n");
-    append(*builder, "        } else {\n");
-    append(*builder, "            array_add(*out, c);\n");
-    append(*builder, "        }\n");
-    append(*builder, "    }\n");
-    append(*builder, "    if out.count == 0 return \"\";\n");
-    append(*builder, "    return copy_string(to_string(out.data, out.count));\n");
-    append(*builder, "}\n\n");
-
-    append(*builder, "main :: () {\n");
-    append(*builder, "    builder: String_Builder;\n");
-    append(*builder, "    print_to_builder(*builder, \"NAME=%\\n\", PACKAGE.name);\n");
-    append(*builder, "    print_to_builder(*builder, \"VERSION=%\\n\", PACKAGE.version);\n");
-    append(*builder, "    print_to_builder(*builder, \"TYPE=%\\n\", cast(s64) PACKAGE.type);\n");
-    append(*builder, "    print_to_builder(*builder, \"DESCRIPTION=%\\n\", PACKAGE.description);\n");
-    append(*builder, "    print_to_builder(*builder, \"BUILD_SCRIPT=%\\n\", PACKAGE.build_script);\n");
-    append(*builder, "    for decl: PACKAGE.plugins {\n");
-    append(*builder, "        print_to_builder(*builder, \"PLUGIN=%1|%2\\n\", manifest_eval_escape(decl.id), manifest_eval_escape(decl.version));\n");
-    append(*builder, "        for opt: decl.options {\n");
-    append(*builder, "            print_to_builder(*builder, \"PLUGIN_OPTION=%1|%2|%3\\n\", manifest_eval_escape(decl.id), manifest_eval_escape(opt.key), manifest_eval_escape(opt.value));\n");
-    append(*builder, "        }\n");
-    append(*builder, "    }\n\n");
-
-    append(*builder, "    for target: PACKAGE.targets {\n");
-    append(*builder, "        print_to_builder(*builder, \"TARGET=%1|%2\\n\", target.name, target.main_file);\n");
-    append(*builder, "    }\n\n");
-
-    append(*builder, "    for member: PACKAGE.workspace.members {\n");
-    append(*builder, "        print_to_builder(*builder, \"MEMBER=%\\n\", member);\n");
-    append(*builder, "    }\n\n");
-
-    append(*builder, "    for excluded: PACKAGE.workspace.exclude {\n");
-    append(*builder, "        print_to_builder(*builder, \"EXCLUDE=%\\n\", excluded);\n");
-    append(*builder, "    }\n\n");
-
-    append(*builder, "    for dep: PACKAGE.dependencies {\n");
-    append(*builder, "        print_to_builder(*builder, \"DEP=%1|%2|%3|%4\\n\", dep.name, dep.version, dep.source, dep.package);\n");
-    append(*builder, "    }\n\n");
-
-    // A write failure must fail the child with a nonzero exit code: the
-    // parent retries only exit code 2 (the dedicated "manifest data write
-    // failed" signal) — silently ignoring the write result would let the
-    // parent treat stale or missing data as success. Other failures
-    // (manifest compile errors etc.) stay exit code 1 and never retry.
-    append(*builder, "    if !write_entire_file(\"");
-    append(*builder, clean_output);
-    append(*builder, "\", builder_to_string(*builder)) {\n");
-    append(*builder, "        print(\"[manifest-eval ERROR] Could not write manifest data: ");
-    append(*builder, clean_output);
-    append(*builder, "\\n\");\n");
-    append(*builder, "        exit(2);\n");
-    append(*builder, "    }\n");
-    append(*builder, "}\n");
-
+    append(*builder, "#import \"Basic\";\n#import \"File\";\n#import \"Juice\";\n#import \"Compiler\";\n");
+    print_to_builder(*builder, "#load %;\n", quote_jai_string(to_forward_slashes(manifest_path)));
+    append(*builder, #string EVALUATOR
+manifest_eval_escape :: (value: string) -> string {
+    result: String_Builder;
+    for character: value {
+        if character == #char "%" || character == #char "|" || character == #char "\n" || character == #char "\r" {
+            digits :: "0123456789abcdef";
+            append(*result, #char "%");
+            append(*result, digits[(character >> 4) & 15]);
+            append(*result, digits[character & 15]);
+        } else append(*result, character);
+    }
+    return builder_to_string(*result);
+}
+manifest_eval_source :: (source: Source) -> string {
+    return tprint("%|%|%|%|%|%", cast(s64) source.kind, manifest_eval_escape(source.path), manifest_eval_escape(source.git.url), manifest_eval_escape(source.git.branch), manifest_eval_escape(source.git.tag), manifest_eval_escape(source.git.rev));
+}
+manifest_eval_strings :: (builder: *String_Builder, key: string, row: string, values: [] string) {
+    omitted := values.count == 1 && values[0] == "\x01juice-omitted";
+    print_to_builder(builder, "%=%\n", key, ifx omitted then -1 else values.count);
+    if !omitted for value: values print_to_builder(builder, "%=%\n", row, manifest_eval_escape(value));
+}
+manifest_eval_products :: (builder: *String_Builder, key: string, row: string, values: [] Product) {
+    omitted := values.count == 1 && values[0].name == "\x01juice-omitted" && values[0].entry == "\x01juice-omitted";
+    print_to_builder(builder, "%=%\n", key, ifx omitted then -1 else values.count);
+    if !omitted for value: values print_to_builder(builder, "%=%|%\n", row, manifest_eval_escape(value.name), manifest_eval_escape(value.entry));
+}
+#run {
+    set_build_options_dc(.{do_output = false});
+    manifest_eval_main();
+}
+manifest_eval_source_omitted :: (source: Source) -> bool {
+    sentinel :: "\x01juice-omitted";
+    return source.kind == .UNSPECIFIED && source.path == sentinel && source.git.url == sentinel && source.git.branch == sentinel && source.git.tag == sentinel && source.git.rev == sentinel;
+}
+manifest_eval_selection_omitted :: (selection: Module_Selection) -> bool {
+    sentinel :: "\x01juice-omitted";
+    return selection.path == sentinel && selection.name == sentinel && selection.alias == sentinel;
+}
+manifest_eval_main :: () {
+    // Assignment also enforces the unique PACKAGE value's public type.
+    declaration: Package = PACKAGE;
+    builder: String_Builder;
+    append(*builder, "SCHEMA=2\n");
+    print_to_builder(*builder, "NAME=%\nVERSION=%\nDESCRIPTION=%\nDEFAULT_RUN=%\n", manifest_eval_escape(declaration.name), manifest_eval_escape(declaration.version), manifest_eval_escape(declaration.description), manifest_eval_escape(declaration.default_run));
+    workspace := declaration.workspace;
+    members_default := workspace.members.count == 1 && workspace.members[0] == "\x01juice-workspace-omitted";
+    exclude_default := workspace.exclude.count == 1 && workspace.exclude[0] == "\x01juice-omitted";
+    default_members_default := workspace.default_members.count == 1 && workspace.default_members[0] == "\x01juice-omitted";
+    has_workspace := !(members_default && exclude_default && default_members_default);
+    print_to_builder(*builder, "WORKSPACE=%\n", ifx has_workspace then 1 else 0);
+    // A computed Package may change only exclude/default_members. Decode the
+    // inherited members marker without discarding those explicit values.
+    if members_default workspace.members = .["\x01juice-omitted"];
+    manifest_eval_strings(*builder, "MEMBERS", "MEMBER", workspace.members);
+    manifest_eval_strings(*builder, "EXCLUDES", "EXCLUDE", workspace.exclude);
+    manifest_eval_strings(*builder, "DEFAULT_MEMBERS", "DEFAULT_MEMBER", workspace.default_members);
+    manifest_eval_products(*builder, "MODULES", "MODULE", declaration.modules);
+    manifest_eval_products(*builder, "EXECUTABLES", "EXECUTABLE", declaration.executables);
+    dependencies_omitted := declaration.dependencies.count == 1 && declaration.dependencies[0].name == "\x01juice-omitted" && manifest_eval_source_omitted(declaration.dependencies[0].source) && declaration.dependencies[0].modules.count == 1 && manifest_eval_selection_omitted(declaration.dependencies[0].modules[0]);
+    print_to_builder(*builder, "DEPENDENCIES=%\n", ifx dependencies_omitted then -1 else declaration.dependencies.count);
+    if !dependencies_omitted for dependency: declaration.dependencies {
+        omitted := dependency.modules.count == 1 && dependency.modules[0].path == "\x01juice-omitted" && dependency.modules[0].name == "\x01juice-omitted" && dependency.modules[0].alias == "\x01juice-omitted";
+        print_to_builder(*builder, "DEP=%|%|%\n", manifest_eval_escape(dependency.name), manifest_eval_source(dependency.source), ifx omitted then -1 else dependency.modules.count);
+        if !omitted for selection: dependency.modules print_to_builder(*builder, "DEP_MODULE=%|%|%\n", manifest_eval_escape(selection.path), manifest_eval_escape(selection.name), manifest_eval_escape(selection.alias));
+    }
+    plugins_omitted := declaration.plugins.count == 1 && declaration.plugins[0].id == "\x01juice-omitted" && declaration.plugins[0].builtin == "\x01juice-omitted" && manifest_eval_source_omitted(declaration.plugins[0].source) && manifest_eval_selection_omitted(declaration.plugins[0].module) && declaration.plugins[0].options.count == 0;
+    print_to_builder(*builder, "PLUGINS=%\n", ifx plugins_omitted then -1 else declaration.plugins.count);
+    if !plugins_omitted for plugin: declaration.plugins {
+        print_to_builder(*builder, "PLUGIN=%|%|%|%|%|%\n", manifest_eval_escape(plugin.id), manifest_eval_escape(plugin.builtin), manifest_eval_source(plugin.source), manifest_eval_escape(plugin.module.path), manifest_eval_escape(plugin.module.name), manifest_eval_escape(plugin.module.alias));
+        for option: plugin.options print_to_builder(*builder, "PLUGIN_OPTION=%|%\n", manifest_eval_escape(option.key), manifest_eval_escape(option.value));
+    }
+EVALUATOR
+    );
+    print_to_builder(*builder, "    if !write_entire_file(%, builder_to_string(*builder)) exit(2);\n}\n", quote_jai_string(to_forward_slashes(output_path)));
     return builder_to_string(*builder);
 }
 
-// Strict protocol parsing: every error carries the 1-based line number of
-// the offending record. The parser is pure (no filesystem, no child), so
-// the whole protocol matrix is testable in-process; load_package_manifest
-// runs it after the child finishes.
+manifest_parse_failure :: (line_number: int, message: string) -> Manifest_Parse_Result {
+    return .{line_number = line_number, error_message = copy_string(message)};
+}
+manifest_is_omitted :: (value: string) -> bool { return value == "\x01juice-omitted"; }
+manifest_optional :: (value: string) -> string { return ifx manifest_is_omitted(value) then "" else copy_string(value); }
+
+manifest_source :: (parts: [] string, start: int) -> Source_Reference, bool {
+    source: Source_Reference;
+    number, valid, remainder := string_to_int(parts[start]);
+    if !valid || remainder.count != 0 || number < 1 || number > 3 return source, false;
+    source.kind = cast(Juice.Source_Kind) number;
+    source.path = manifest_optional(parts[start+1]);
+    source.url = manifest_optional(parts[start+2]);
+    source.branch = manifest_optional(parts[start+3]);
+    source.tag = manifest_optional(parts[start+4]);
+    source.rev = manifest_optional(parts[start+5]);
+    for index: start+1..start+5 if parts[index] == "" return source, false;
+    selectors := 0;
+    if source.branch != "" selectors += 1;
+    if source.tag != "" selectors += 1;
+    if source.rev != "" selectors += 1;
+    if selectors > 1 return source, false;
+    if source.kind == .PATH return source, source.path != "" && source.url == "" && selectors == 0;
+    if source.kind == .GIT return source, source.path == "" && source.url != "";
+    return source, source.path == "" && source.url == "" && selectors == 0;
+}
+manifest_selection :: (parts: [] string, start: int) -> Module_Reference, bool {
+    selection: Module_Reference;
+    for index: start..start+2 if parts[index] == "" return selection, false;
+    if !manifest_is_omitted(parts[start]) selection.path = copy_string(parts[start]);
+    selection.name = manifest_optional(parts[start+1]);
+    selection.alias = manifest_optional(parts[start+2]);
+    return selection, true;
+}
+
 parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
     result: Manifest_Parse_Result;
-
-    seen_name := false;
-    seen_version := false;
-    seen_type := false;
-    seen_description := false;
-    seen_build_script := false;
-
-    targets: [..] Juice.Target;
+    result.package.has_package = false;
+    seen: [..] string;
+    fields: [..] Declaration_Field;
+    modules: [..] Declared_Product;
+    executables: [..] Declared_Product;
+    dependencies: [..] Dependency_Reference;
+    plugins: [..] Plugin_Reference;
     members: [..] string;
     excluded: [..] string;
-    deps: [..] Juice.Dependency;
-    plugins: [..] Juice.Plugin_Declaration;
-
-    lines := split(content, "\n");
-    for line, line_index: lines {
-        trimmed := trim(line, " \r\t\n");
-        if trimmed.count == 0 continue;
-
-        found, key, value := split_from_left(trimmed, #char "=");
-        if !found || key == "" {
-            result.line_number = line_index + 1;
-            result.error_message = tprint("Malformed manifest record on line %.", line_index + 1);
-            return result;
+    default_members: [..] string;
+    expected_modules := -1;
+    expected_executables := -1;
+    expected_dependencies := -1;
+    expected_plugins := -1;
+    expected_members := -1;
+    expected_excludes := -1;
+    expected_defaults := -1;
+    dependency_module_counts: [..] s64;
+    for raw_line, line_index: split(content, "\n") {
+        line := raw_line;
+        if ends_with(line, "\r") line.count -= 1;
+        if line.count == 0 continue;
+        found, key, encoded := split_from_left(line, #char "=");
+        if !found || key == "" return manifest_parse_failure(line_index+1, "Malformed manifest record.");
+        parts: [..] string;
+        for part: split(encoded, "|") {
+            decoded, ok := unescape_record_value(part);
+            if !ok return manifest_parse_failure(line_index+1, "Invalid %XX escape in manifest record.");
+            array_add(*parts, decoded);
         }
-        key = trim(key, " \r\t");
-        value = trim(value, " \r\t");
-        if key == "" {
-            result.line_number = line_index + 1;
-            result.error_message = tprint("Manifest record has an empty key on line %.", line_index + 1);
-            return result;
+        value := parts[0];
+        array_add(*fields, .{path = copy_string(key), value = copy_string(encoded), protocol_line = line_index+1});
+        repeatable := key == "MODULE" || key == "EXECUTABLE" || key == "DEP" || key == "DEP_MODULE" || key == "PLUGIN" || key == "PLUGIN_OPTION" || key == "MEMBER" || key == "EXCLUDE" || key == "DEFAULT_MEMBER";
+        if !repeatable {
+            if parts.count != 1 return manifest_parse_failure(line_index+1, "Scalar record contains unescaped delimiters.");
+            for previous: seen if key == previous return manifest_parse_failure(line_index+1, tprint("Duplicate % record.", key));
+            array_add(*seen, copy_string(key));
         }
-
         if key == {
+            case "SCHEMA";
+                if value != "2" return manifest_parse_failure(line_index+1, "Unsupported declaration protocol version.");
             case "NAME";
-                if seen_name return manifest_parse_failure(line_index + 1, "Duplicate NAME record.");
-                seen_name = true;
-                result.package.name = copy_string(value);
-
+                result.package.name = manifest_optional(value);
+                if !manifest_is_omitted(value) result.package.has_package = true;
             case "VERSION";
-                if seen_version return manifest_parse_failure(line_index + 1, "Duplicate VERSION record.");
-                seen_version = true;
-                result.package.version = copy_string(value);
-
-            case "TYPE";
-                if seen_type return manifest_parse_failure(line_index + 1, "Duplicate TYPE record.");
-                seen_type = true;
-                if value == "" {
-                    result.package.type = .UNSPECIFIED;
-                } else {
-                    enum_value, enum_ok, remainder := string_to_int(value);
-                    if !enum_ok || remainder.count != 0 || (enum_value != 0 && enum_value != 1 && enum_value != 2) {
-                        return manifest_parse_failure(line_index + 1, "Invalid package type enum.");
-                    }
-                    result.package.type = cast(Juice.Package_Type) enum_value;
-                }
-
+                result.package.version = manifest_optional(value);
+                if !manifest_is_omitted(value) result.package.has_package = true;
             case "DESCRIPTION";
-                if seen_description return manifest_parse_failure(line_index + 1, "Duplicate DESCRIPTION record.");
-                seen_description = true;
-                result.package.description = copy_string(value);
-
-            case "BUILD_SCRIPT";
-                if seen_build_script return manifest_parse_failure(line_index + 1, "Duplicate BUILD_SCRIPT record.");
-                seen_build_script = true;
-                result.package.build_script = copy_string(value);
-
-            case "TARGET";
-                parts := split(value, "|");
-                if parts.count != 2 return manifest_parse_failure(line_index + 1, "TARGET record must contain name|main_file.");
-                target: Juice.Target;
-                target.name = copy_string(parts[0]);
-                target.main_file = copy_string(parts[1]);
-                array_add(*targets, target);
-
-            case "MEMBER";
-                if value == "" return manifest_parse_failure(line_index + 1, "MEMBER record cannot be empty.");
-                array_add(*members, copy_string(value));
-
-            case "EXCLUDE";
-                if value == "" return manifest_parse_failure(line_index + 1, "EXCLUDE record cannot be empty.");
-                array_add(*excluded, copy_string(value));
-
+                result.package.description = manifest_optional(value);
+                if !manifest_is_omitted(value) result.package.has_package = true;
+            case "DEFAULT_RUN";
+                if value == "" return manifest_parse_failure(line_index+1, "default_run cannot be empty.");
+                result.package.default_run = manifest_optional(value);
+                if !manifest_is_omitted(value) result.package.has_package = true;
+            case "WORKSPACE";
+                if value != "0" && value != "1" return manifest_parse_failure(line_index+1, "Invalid workspace presence.");
+                result.package.has_workspace = value == "1";
+            case "MODULES"; #through;
+            case "EXECUTABLES"; #through;
+            case "DEPENDENCIES"; #through;
+            case "PLUGINS"; #through;
+            case "MEMBERS"; #through;
+            case "EXCLUDES"; #through;
+            case "DEFAULT_MEMBERS";
+                count, ok, remainder := string_to_int(value);
+                if !ok || remainder.count != 0 || count < -1 return manifest_parse_failure(line_index+1, "Invalid list count.");
+                if key == "MODULES" { expected_modules = count; result.package.modules_omitted = count == -1; }
+                if key == "EXECUTABLES" { expected_executables = count; result.package.executables_omitted = count == -1; }
+                if key == "DEPENDENCIES" expected_dependencies = count;
+                if key == "PLUGINS" { expected_plugins = count; result.package.plugins_omitted = count == -1; }
+                if key == "MEMBERS" expected_members = count;
+                if key == "EXCLUDES" expected_excludes = count;
+                if key == "DEFAULT_MEMBERS" { expected_defaults = count; result.package.workspace.default_members_omitted = count == -1; }
+                if count >= 0 && (key == "MODULES" || key == "EXECUTABLES" || key == "DEPENDENCIES" || key == "PLUGINS") result.package.has_package = true;
+            case "MODULE"; #through;
+            case "EXECUTABLE";
+                if parts.count != 2 return manifest_parse_failure(line_index+1, "Product requires name|entry.");
+                if parts[1] == "" || manifest_is_omitted(parts[1]) return manifest_parse_failure(line_index+1, "Product entry is required.");
+                if parts[0] == "" return manifest_parse_failure(line_index+1, "Product name cannot be empty.");
+                product: Declared_Product = .{name = manifest_optional(parts[0]), entry = copy_string(parts[1]), name_present = !manifest_is_omitted(parts[0])};
+                if key == "MODULE" array_add(*modules, product); else array_add(*executables, product);
+            case "MEMBER"; #through;
+            case "EXCLUDE"; #through;
+            case "DEFAULT_MEMBER";
+                if parts.count != 1 || value == "" return manifest_parse_failure(line_index+1, tprint("% cannot be empty.", key));
+                if key == "MEMBER" array_add(*members, copy_string(value));
+                if key == "EXCLUDE" array_add(*excluded, copy_string(value));
+                if key == "DEFAULT_MEMBER" array_add(*default_members, copy_string(value));
             case "DEP";
-                parts := split(value, "|");
-                if parts.count != 4 return manifest_parse_failure(line_index + 1, "DEP record must contain four fields.");
-                dep: Juice.Dependency;
-                dep.name = copy_string(parts[0]);
-                dep.version = copy_string(parts[1]);
-                dep.source = copy_string(parts[2]);
-                dep.package = copy_string(parts[3]);
-                array_add(*deps, dep);
-
+                if parts.count != 8 return manifest_parse_failure(line_index+1, "DEP requires name, source and module count.");
+                source, ok := manifest_source(parts, 1);
+                if !ok return manifest_parse_failure(line_index+1, "Invalid dependency source: choose PATH, GIT or WORKSPACE with matching payload; Git selectors are mutually exclusive.");
+                if value == "" || manifest_is_omitted(value) return manifest_parse_failure(line_index+1, "Dependency name is required.");
+                count, count_ok, remainder := string_to_int(parts[7]);
+                if !count_ok || remainder.count != 0 || count < -1 || count == 0 return manifest_parse_failure(line_index+1, "Dependency modules cannot be empty.");
+                for previous: dependencies if equal_nocase(previous.name, value) return manifest_parse_failure(line_index+1, "Duplicate dependency name.");
+                array_add(*dependencies, .{name = copy_string(value), source = source, modules_omitted = count == -1});
+                array_add(*dependency_module_counts, count);
+            case "DEP_MODULE";
+                if parts.count != 3 || dependencies.count == 0 return manifest_parse_failure(line_index+1, "DEP_MODULE requires a dependency and path|name|alias.");
+                selection, ok := manifest_selection(parts, 0);
+                if !ok return manifest_parse_failure(line_index+1, "Module selection cannot contain empty path/name/alias.");
+                rows: [..] Module_Reference;
+                for row: dependencies[dependencies.count-1].modules array_add(*rows, row);
+                array_add(*rows, selection);
+                dependencies[dependencies.count-1].modules = rows;
             case "PLUGIN";
-                parts := split(value, "|");
-                if parts.count != 2 return manifest_parse_failure(line_index + 1, "PLUGIN record must contain id|version.");
-                plugin_id, id_ok := unescape_record_value(parts[0]);
-                plugin_version, version_ok := unescape_record_value(parts[1]);
-                if !id_ok || !version_ok return manifest_parse_failure(line_index + 1, "Invalid %XX escape in PLUGIN record.");
-                for decl: plugins {
-                    if decl.id == plugin_id return manifest_parse_failure(line_index + 1, "Duplicate PLUGIN record.");
+                if parts.count != 11 return manifest_parse_failure(line_index+1, "PLUGIN requires id, builtin, source and module selection.");
+                if value == "" return manifest_parse_failure(line_index+1, "Plugin id cannot be empty.");
+                plugin: Plugin_Reference;
+                plugin.id = manifest_optional(value);
+                plugin.builtin = !manifest_is_omitted(parts[1]);
+                if plugin.builtin {
+                    if parts[1] == "" || parts[2] != "0" return manifest_parse_failure(line_index+1, "Plugin builtin and source are mutually exclusive.");
+                    for index: 3..10 if !manifest_is_omitted(parts[index]) return manifest_parse_failure(line_index+1, "Builtin plugin cannot select an external source or module.");
+                    if plugin.id == "" plugin.id = copy_string(parts[1]);
+                    if plugin.id != parts[1] return manifest_parse_failure(line_index+1, "Builtin plugin id must match builtin.");
+                } else {
+                    source, ok := manifest_source(parts, 2);
+                    if !ok return manifest_parse_failure(line_index+1, "External plugin requires an explicit source.");
+                    plugin.source = source;
+                    selection, selection_ok := manifest_selection(parts, 8);
+                    if !selection_ok return manifest_parse_failure(line_index+1, "Invalid plugin module selection.");
+                    plugin.module = selection;
+                    if plugin.id == "" return manifest_parse_failure(line_index+1, "External plugin id is required.");
                 }
-                decl: Juice.Plugin_Declaration;
-                decl.id = plugin_id;
-                decl.version = plugin_version;
-                array_add(*plugins, decl);
-
+                for previous: plugins if equal_nocase(previous.id, plugin.id) return manifest_parse_failure(line_index+1, "Duplicate PLUGIN record.");
+                array_add(*plugins, plugin);
             case "PLUGIN_OPTION";
-                parts := split(value, "|");
-                if parts.count != 3 return manifest_parse_failure(line_index + 1, "PLUGIN_OPTION record must contain id|key|value.");
-                plugin_id, id_ok := unescape_record_value(parts[0]);
-                option_key, key_ok := unescape_record_value(parts[1]);
-                option_value, value_ok := unescape_record_value(parts[2]);
-                if !id_ok || !key_ok || !value_ok return manifest_parse_failure(line_index + 1, "Invalid %XX escape in PLUGIN_OPTION record.");
-                plugin_index := -1;
-                for decl, index: plugins {
-                    if decl.id == plugin_id {
-                        plugin_index = index;
-                        break;
-                    }
-                }
-                if plugin_index < 0 return manifest_parse_failure(line_index + 1, "PLUGIN_OPTION for an undeclared plugin.");
-                for opt: plugins[plugin_index].options {
-                    if opt.key == option_key return manifest_parse_failure(line_index + 1, tprint("Duplicate plugin option key: %1", option_key));
-                }
-                option: Juice.Plugin_Option;
-                option.key = option_key;
-                option.value = option_value;
-                // The face's options slot is a [] slice; rebuild through a
-                // dynamic array (row counts are tiny) and store the view.
+                if parts.count != 2 || plugins.count == 0 return manifest_parse_failure(line_index+1, "PLUGIN_OPTION requires a plugin and key|value.");
                 rows: [..] Juice.Plugin_Option;
-                for existing: plugins[plugin_index].options {
-                    array_add(*rows, existing);
+                for row: plugins[plugins.count-1].options {
+                    if equal_nocase(row.key, value) return manifest_parse_failure(line_index+1, "Duplicate plugin option key.");
+                    array_add(*rows, row);
                 }
-                array_add(*rows, option);
-                plugins[plugin_index].options = rows;
-
+                array_add(*rows, .{key = copy_string(value), value = copy_string(parts[1])});
+                plugins[plugins.count-1].options = rows;
             case;
-                return manifest_parse_failure(line_index + 1, tprint("Unknown manifest record: %1", key));
+                return manifest_parse_failure(line_index+1, tprint("Unknown manifest record: %; see docs/migrations/package-declarations.md", key));
         }
     }
-
-    result.package.targets = targets;
+    for required: string.["SCHEMA", "NAME", "VERSION", "DESCRIPTION", "DEFAULT_RUN", "WORKSPACE", "MEMBERS", "EXCLUDES", "DEFAULT_MEMBERS", "MODULES", "EXECUTABLES", "DEPENDENCIES", "PLUGINS"] {
+        found := false;
+        for key: seen if key == required found = true;
+        if !found return manifest_parse_failure(0, tprint("Missing % record.", required));
+    }
+    if modules.count != max(expected_modules, 0) || executables.count != max(expected_executables, 0) || dependencies.count != max(expected_dependencies, 0) || plugins.count != max(expected_plugins, 0) || members.count != max(expected_members, 0) || excluded.count != max(expected_excludes, 0) || default_members.count != max(expected_defaults, 0) return manifest_parse_failure(0, "Manifest list count does not match records.");
+    for dependency, index: dependencies if dependency.modules.count != max(dependency_module_counts[index], 0) return manifest_parse_failure(0, "Dependency module count does not match records.");
+    if !result.package.has_package && !result.package.has_workspace return manifest_parse_failure(0, "PACKAGE must declare a package or workspace.");
+    if result.package.has_package && (result.package.name == "" || result.package.version == "") return manifest_parse_failure(0, "Package name and version are required and cannot be empty.");
+    if expected_plugins == -1 && result.package.has_package {
+        array_add(*plugins, .{id = "load", builtin = true});
+        array_add(*plugins, .{id = "test-block", builtin = true});
+    }
+    result.package.modules = modules;
+    result.package.executables = executables;
+    result.package.dependencies = dependencies;
+    result.package.plugins = plugins;
     result.package.workspace.members = members;
     result.package.workspace.exclude = excluded;
-    result.package.dependencies = deps;
-    result.package.plugins = plugins;
+    result.package.workspace.default_members = default_members;
+    result.package.fields = fields;
     result.success = true;
     return result;
 }
-
-manifest_parse_failure :: (line_number: int, message: string) -> Manifest_Parse_Result {
-    return .{success = false, line_number = line_number, error_message = copy_string(message)};
-}
-
-// Kept as a small convenience for pure parser callers. Callers that need
-// the diagnostic should use parse_manifest_data_strict().
-parse_manifest_data :: (content: string) -> Juice.Package {
-    result := parse_manifest_data_strict(content);
-    return result.package;
+parse_manifest_data :: (content: string) -> Normalized_Package {
+    return parse_manifest_data_strict(content).package;
 }
 
 // Record-value decoder: the exact inverse of the evaluator's generated
@@ -358,7 +363,7 @@ manifest_temp_file_names :: (cache_dir: string, pkg_dir: string) -> (string, str
 // resolves paths, and every path it touches is absolute). The modules
 // directory feeds -import_dir so the manifest's `#import "Juice"` resolves.
 spawn_manifest_evaluator :: (eval_src: string, eval_out: string, modules_dir: string) -> s32 {
-    result := run_command("jai", eval_src, "-import_dir", modules_dir, "-quiet");
+    result := run_command("jai", "-import_dir", modules_dir, "-quiet", eval_src);
     return result.exit_code;
 }
 
@@ -374,7 +379,7 @@ spawn_manifest_evaluator :: (eval_src: string, eval_out: string, modules_dir: st
 // a real child's write failure cannot be forced on demand.
 load_package_manifest :: (cache_dir: string, pkg_dir: string,
                           modules_dir: string = "",
-                          spawn: #type (eval_src: string, eval_out: string, modules_dir: string) -> s32 = spawn_manifest_evaluator) -> Juice.Package, bool {
+                          spawn: #type (eval_src: string, eval_out: string, modules_dir: string) -> s32 = spawn_manifest_evaluator) -> Normalized_Package, bool {
     manifest_path := to_forward_slashes(tprint("%1/package.jai", pkg_dir));
     if !file_exists(manifest_path) return .{}, false;
 
@@ -408,6 +413,7 @@ load_package_manifest :: (cache_dir: string, pkg_dir: string,
             continue;
         }
         print("[juice ERROR] Failed to evaluate manifest at %\n", manifest_path);
+        print("[juice] Migration: docs/migrations/package-declarations.md; replace type/targets/main_file with modules/executables and entry; remove dir/build_script and dependency/plugin version; use explicit source.\n");
         return .{}, false;
     }
 
@@ -422,6 +428,16 @@ load_package_manifest :: (cache_dir: string, pkg_dir: string,
         print("[juice ERROR] Invalid manifest protocol at % (line %): %\n", manifest_path, parsed.line_number, parsed.error_message);
         return .{}, false;
     }
-    parsed.package.dir = copy_string(pkg_dir);
+    normalized_root, root_ok := normalize_existing_path(pkg_dir);
+    if !root_ok || !path_exists_as_directory(normalized_root) || !path_chain_is_link_free(pkg_dir) || !path_chain_is_link_free(normalized_root) {
+        print("[juice ERROR] Invalid package root for manifest at %: Package root must be an existing real directory.\n", manifest_path);
+        return .{}, false;
+    }
+    parsed.package.dir = copy_string(normalized_root);
+    targets := resolve_effective_targets(parsed.package);
+    if !targets.success {
+        print("[juice ERROR] Invalid package declaration at %: %\n", manifest_path, targets.error_message);
+        return .{}, false;
+    }
     return parsed.package, true;
 }

@@ -8,7 +8,7 @@
 // generated driver imports it — ticket 035's single register).
 
 PACKAGE :: Package.{
-    name    = "test-blocks",
     version = "0.1.0",
-    type    = .BIN,
+    name    = "test-blocks",
+
 };
