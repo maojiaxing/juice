@@ -717,10 +717,14 @@ test "Test front: a dropped file never enters the test program" {
 test "Test front: an unmatched file reads its original source" {
     // The pre-step table covers other paths only: the collected file's
     // EXPAND source stays its original source (the view key pins the input
-    // bytes).
+    // bytes). Since ticket 0092 a substitution must name a retained package
+    // source (substitute maps an existing input, it never invents one), so the
+    // other path is a real file that simply is not collected here.
     root := tt_scratch("prestep-miss");
     defer delete_directory_full(root);
     expect(build_seam_write(root, "src/a.jai", "#import \"Basic\";\n\noriginal_only :: () -> s32 { return 1; }\n\ntest \"one\" {\n    expect(true);\n}\n"));
+    expect(build_seam_write(root, "src/other.jai", "other_only :: () -> s32 { return 2; }\n"));
+    expect(build_seam_write(root, "target/mirror/src/other.jai", "mirrored_other :: () -> s32 { return 3; }\n"));
 
     tt_prestep_reset();
     array_add(*TT_PRESTEP_SUBSTITUTIONS, .{original = "src/other.jai", replacement = path_slashes(tprint("%1/target/mirror/src/other.jai", root))});
@@ -1127,3 +1131,4 @@ test "E2E: the in-package Testing module self-tests run through the compile view
     expect(file_contains(module_view, "juice_test_2 :: () -> () {"));
     expect(file_contains(module_view, "__testing_module_support_begin__"));
 }
+

@@ -9,41 +9,10 @@ COMMAND_REGISTRY :: Command.[
     HELP_COMMAND,
 ];
 
-// The one resolution flag commands understand in this stage: --offline forces
-// the OFFLINE resolution mode (spec 0087 decision 14). Package/workspace
-// selection flags belong to ticket 0093. Any other flag-shaped argument is
-// rejected so a typo cannot silently change resolution semantics.
-// Argument validation for commands that take only resolution flags and an
-// optional positional argument. The dispatcher validates before the handler,
-// so the flag must be accepted here as well as stripped there.
-resolution_flag_arguments_are_valid :: (arguments: [] string, max_positional: int) -> bool {
-    positionals := 0;
-    for argument: arguments {
-        if argument == "--offline" continue;
-        if starts_with(argument, "--") return false;
-        positionals += 1;
-    }
-    return positionals <= max_positional;
-}
-
-build_arguments_are_valid :: (arguments: [] string) -> bool {
-    return resolution_flag_arguments_are_valid(arguments, 0);
-}
-
-split_offline_flag :: (arguments: [] string) -> (mode: Resolution_Mode, remaining: [..] string, rejected: bool) {
-    mode := Resolution_Mode.NORMAL;
-    remaining: [..] string;
-    for argument: arguments {
-        if argument == "--offline" {
-            mode = .OFFLINE;
-            continue;
-        }
-        if starts_with(argument, "--") return mode, remaining, true;
-        array_add(*remaining, argument);
-    }
-    return mode, remaining, false;
-}
-
+// The argument contract and the per-command usage rendering. Package/workspace
+// selection flags (--workspace, -p/--package, --package-path) and --offline are
+// parsed by the shared parser in src/commands/selection.jai (ticket 0093), so
+// every command accepts exactly the same selection surface.
 Command_Handler :: #type (ctx: *Command_Context, arguments: [] string) -> bool;
 Command_Argument_Validator :: #type (arguments: [] string) -> bool;
 
@@ -70,9 +39,21 @@ Command :: struct {
     name:               string;
     description:        string;
     usage:              string;
+    // The selection/option surface of the command, rendered under the usage
+    // line by `juice help <command>` and by the invalid-argument diagnostic.
+    // Empty for commands that take no options (clean, version, help).
+    flag_help:          string = "";
     prerequisites:      [] string;
     handler:            Command_Handler;
     validate_arguments: Command_Argument_Validator = command_accepts_no_arguments;
+}
+
+// The one usage rendering: the usage line, then the command's flag surface when
+// it declares one. Both the help command and the argument guards print through
+// here, so a documented option cannot drift from the accepted one.
+print_command_usage :: (command: Command) {
+    print("%\n", command.usage);
+    if command.flag_help != "" print("%\n", command.flag_help);
 }
 
 command_accepts_no_arguments :: (arguments: [] string) -> bool {
@@ -81,6 +62,7 @@ command_accepts_no_arguments :: (arguments: [] string) -> bool {
 
 command_arguments_are_valid :: (command: Command, arguments: [] string) -> bool {
     if command.validate_arguments(arguments) return true;
-    print("[juice ERROR] Usage: %\n", command.usage);
+    print("[juice ERROR] Usage: ");
+    print_command_usage(command);
     return false;
 }

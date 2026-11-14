@@ -142,7 +142,12 @@ declaration_schema_pure_workspace_has_no_root_package :: () {
     expect(write_entire_file(tprint("%/package.jai", root), "#import \"Juice\";\nPACKAGE :: Package.{workspace = .{}};\n"));
     expect(write_entire_file(tprint("%/src/main.jai", root), "deliberately invalid conventional entry\n"));
     result, output, errors := run_otter_child_at(root, string.["build"]);
-    expect(expect_exit("schema-pure-workspace", result, 0, "schema build"));
+    // Ticket 0093 (spec 0087 decision 17): a pure workspace with no members has
+    // no default selection, and a zero package set always fails — it is not a
+    // successful no-op. The declaration assertions below still pin that no root
+    // package was synthesized.
+    expect(expect_exit("schema-pure-workspace", result, 1, "schema build"));
+    expect(contains(output, "package was selected"));
     discovery, discovered := discover_workspace(root, tprint("%/target/manifest", root), plugin_face_modules_dir());
     expect(discovered);
     expect(discovery.has_declaration && discovery.has_workspace);
@@ -186,7 +191,12 @@ declaration_schema_computed_workspace_preserves_explicit_defaults :: () {
     expect(make_directory_if_it_does_not_exist(root, recursive = true));
     expect(write_entire_file(tprint("%/package.jai", root), "#import \"Juice\";\nmake_package :: () -> Package {\n    package: Package = .{name = \"computed\", version = \"1\", modules = .[], executables = .[]};\n    package.workspace.default_members = .[];\n    return package;\n}\nPACKAGE :: #run make_package();\n"));
     result, output, errors := run_otter_child_at(root, string.["build"]);
-    expect(expect_exit("schema-computed-workspace", result, 0, "schema build"));
+    // Ticket 0093 (spec 0087 decision 17): an explicit empty default_members list
+    // means the root call has no default selection, so the command fails instead
+    // of silently building nothing. The declaration assertions below keep
+    // pinning that the explicit empty list is preserved (not treated as omitted).
+    expect(expect_exit("schema-computed-workspace", result, 1, "schema build"));
+    expect(contains(output, "package was selected"));
     discovery, discovered := discover_workspace(root, tprint("%/target/manifest", root), plugin_face_modules_dir());
     expect(discovered);
     expect(discovery.has_workspace && discovery.has_package);

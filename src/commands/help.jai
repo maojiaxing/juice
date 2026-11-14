@@ -13,8 +13,10 @@ help_arguments_are_valid :: (arguments: [] string) -> bool {
 
 // `juice help` renders the registry overview (the shared print_usage block
 // the dispatcher's unknown-command path also uses); `juice help <command>`
-// prints that command's usage line. Zero prerequisites, zero side effects —
-// the command runs without a workspace and ignores the context.
+// prints that command's usage line followed by its flag surface when it
+// declares one (the shared print_command_usage, ticket 0093). Zero
+// prerequisites, zero side effects — the command runs without a workspace and
+// ignores the context.
 help_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     if !command_arguments_are_valid(HELP_COMMAND, arguments) return false;
     if arguments.count == 0 {
@@ -26,6 +28,6 @@ help_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
         print("[juice ERROR] Unknown command: '%'\n", arguments[0]);
         return false;
     }
-    print("%\n", cmd.usage);
+    print_command_usage(cmd.*);
     return true;
 }

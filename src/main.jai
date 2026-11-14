@@ -86,6 +86,11 @@
 // transpile_config.jai, lifecycle.jai and manifest.jai, all loaded above.
 #load "plugin_host.jai";
 #load "commands/command.jai";
+// Ticket 0093: the shared package-selection surface (flag parsing, the
+// validated Command_Selection, the batch report) every command consumes. It
+// sits between the command declarations and the handlers so build/run/test/
+// update all accept exactly one selection contract.
+#load "commands/selection.jai";
 #load "commands/build.jai";
 #load "commands/run.jai";
 #load "commands/clean.jai";

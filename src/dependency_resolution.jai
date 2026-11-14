@@ -861,10 +861,13 @@ resolve_dependencies_for_workspace :: (request: Dependency_Preparation_Request) 
         print("[juice ERROR] Dependency resolution requires a discovered workspace.\n");
         return false;
     }
-    selection := select_workspace_packages(request.discovery, request.invocation_dir, Package_Selection_Request.{});
+    selection := request.selection;
     if !selection.success {
-        print("[juice ERROR] %\n", selection.error);
-        return false;
+        selection = select_workspace_packages(request.discovery, request.invocation_dir, Package_Selection_Request.{});
+        if !selection.success {
+            print("[juice ERROR] %\n", selection.error);
+            return false;
+        }
     }
     graphs: [..] Resolution_Graph;
     for package: selection.packages {

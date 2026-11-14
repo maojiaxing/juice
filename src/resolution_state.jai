@@ -48,6 +48,11 @@ Dependency_Preparation_Request :: struct {
     cache_dir:      string;
     modules_dir:    string = "";
     environment:    Resolution_Environment;
+    // The command's validated package selection (ticket 0093). A successful
+    // selection means only these packages' graphs are resolved; an unset
+    // (zero) selection keeps the location default, which is what the workspace
+    // seam and the function-level tests use.
+    selection:      Package_Selection;
 }
 
 // One recorded Git selection. declaring_key identifies the declaring package

@@ -307,7 +307,7 @@ test "Collection applies the exclusion set in scan order" {
         .{name = "scan-fixture", dir = prepared.discovery.root_dir},
         .{name = "member-a", dir = tprint("%1/tests/data/scan-fixture/member-a", otter_root())},
     ];
-    files, ok := collect_test_files(*prepared);
+    files, ok := collect_test_files(*prepared, prepared.discovery.root_dir);
     expect(ok);
     expected := string.[
         "a_root.jai",
@@ -331,7 +331,7 @@ test "Collection applies the exclusion set in scan order" {
 test "Collection rejects a missing package root" {
     prepared: Prepared_Workspace;
     prepared.discovery.root_dir = tprint("%1/tests/data/no-such-package", otter_root());
-    _, ok := collect_test_files(*prepared);
+    _, ok := collect_test_files(*prepared, prepared.discovery.root_dir);
     expect(!ok);
 }
 
@@ -360,7 +360,7 @@ test "Collection skips symlinks and junctions" {
 
     prepared: Prepared_Workspace;
     prepared.discovery.root_dir = lexical_absolute_path(root);
-    files, ok := collect_test_files(*prepared);
+    files, ok := collect_test_files(*prepared, prepared.discovery.root_dir);
     expect(ok);
     expected := string.["real_file.jai", "real/with_test.jai"];
     if files.count != expected.count {

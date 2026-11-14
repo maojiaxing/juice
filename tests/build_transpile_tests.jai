@@ -382,7 +382,7 @@ test "Build entry: a test-free closure compiles the original entry" {
 
     plan := build_seam_plan(root, "src/main.jai");
     prepared := build_seam_prepared(root, plan);
-    entry, ok := build_plan_entry(*prepared, plan, bt_pipeline(*prepared));
+    entry, ok := build_plan_entry(*prepared, prepared.discovery.root_dir, plan, bt_pipeline(*prepared));
     expect(ok && entry == path_slashes(plan.target.source_path));
     // Zero transpile, zero cache: nothing under the transpile tree.
     expect(!file_exists(transpile_tree_dir(root)));
@@ -397,7 +397,7 @@ test "Build entry: a test-bearing closure views all-or-nothing with load rewrite
 
     plan := build_seam_plan(root, "src/main.jai");
     prepared := build_seam_prepared(root, plan);
-    entry, ok := build_plan_entry(*prepared, plan, bt_pipeline(*prepared));
+    entry, ok := build_plan_entry(*prepared, prepared.discovery.root_dir, plan, bt_pipeline(*prepared));
     expect(ok && find_index_from_left(entry, "/target/transpile/") >= 0);
 
     // The entry view embeds the child view's path (the Merkle rewrite); the
@@ -424,7 +424,7 @@ test "Build entry: transpile diagnostics fail the entry selection" {
 
     plan := build_seam_plan(root, "src/main.jai");
     prepared := build_seam_prepared(root, plan);
-    _, ok := build_plan_entry(*prepared, plan, bt_pipeline(*prepared));
+    _, ok := build_plan_entry(*prepared, prepared.discovery.root_dir, plan, bt_pipeline(*prepared));
     expect(!ok);
 }
 
@@ -436,7 +436,7 @@ test "Build entry: the declared pipeline changes the view keys" {
 
     plan := build_seam_plan(root, "src/main.jai");
     prepared := build_seam_prepared(root, plan);
-    entry_default, ok := build_plan_entry(*prepared, plan, bt_pipeline(*prepared));
+    entry_default, ok := build_plan_entry(*prepared, prepared.discovery.root_dir, plan, bt_pipeline(*prepared));
     expect(ok);
 
     // The explicit built-in declaration in the default order equals the
@@ -445,7 +445,7 @@ test "Build entry: the declared pipeline changes the view keys" {
         .{id = "load", builtin = true},
         .{id = "test-block", builtin = true},
     ]};
-    entry_explicit, ok2 := build_plan_entry(*prepared, plan, bt_pipeline(*prepared));
+    entry_explicit, ok2 := build_plan_entry(*prepared, prepared.discovery.root_dir, plan, bt_pipeline(*prepared));
     expect(ok2 && entry_explicit == entry_default);
 
     // The reversed declaration reaches the pipeline reversed: the views are
@@ -455,7 +455,7 @@ test "Build entry: the declared pipeline changes the view keys" {
         .{id = "test-block", builtin = true},
         .{id = "load", builtin = true},
     ]};
-    entry_reversed, ok3 := build_plan_entry(*prepared, plan, bt_pipeline(*prepared));
+    entry_reversed, ok3 := build_plan_entry(*prepared, prepared.discovery.root_dir, plan, bt_pipeline(*prepared));
     expect(ok3 && entry_reversed != entry_default);
 }
 
@@ -482,7 +482,7 @@ test "Build entry: a substituted entry compiles the replacement and skips the pr
     pstage: Prestep_Stage;
     array_add(*pstage.substitutions, .{original = "src/main.jai", replacement = replacement});
 
-    entry, ok := build_plan_entry(*prepared, plan, bt_pipeline(*prepared), *pstage);
+    entry, ok := build_plan_entry(*prepared, prepared.discovery.root_dir, plan, bt_pipeline(*prepared), *pstage);
     expect(ok && entry == replacement);
     // Zero probe, zero strip: nothing landed under the transpile tree.
     expect(!file_exists(transpile_tree_dir(root)));
@@ -499,7 +499,7 @@ test "Build entry: a dropped entry fails before any probe" {
     pstage: Prestep_Stage;
     array_add(*pstage.drops, "src/main.jai");
 
-    entry, ok := build_plan_entry(*prepared, plan, bt_pipeline(*prepared), *pstage);
+    entry, ok := build_plan_entry(*prepared, prepared.discovery.root_dir, plan, bt_pipeline(*prepared), *pstage);
     expect(!ok && entry == "");
     expect(!file_exists(transpile_tree_dir(root)));
 }
@@ -519,7 +519,7 @@ test "Build entry: a pre-step hit on another file leaves the entry untouched" {
     array_add(*pstage.substitutions, .{original = "src/other.jai", replacement = "C:/mirror/other.jai"});
     array_add(*pstage.drops, "src/unused.jai");
 
-    entry, ok := build_plan_entry(*prepared, plan, bt_pipeline(*prepared), *pstage);
+    entry, ok := build_plan_entry(*prepared, prepared.discovery.root_dir, plan, bt_pipeline(*prepared), *pstage);
     // The test-bearing closure was probed and viewed (the entry became its
     // strip view) — the unrelated rows changed nothing.
     expect(ok && find_index_from_left(entry, "/target/transpile/") >= 0);
@@ -536,7 +536,7 @@ test "Compile: a substituted entry reaches the compiler as the replacement path"
     prepared := build_seam_prepared(root, plan);
     pstage: Prestep_Stage;
     array_add(*pstage.substitutions, .{original = "src/main.jai", replacement = replacement});
-    entry, ok := build_plan_entry(*prepared, plan, bt_pipeline(*prepared), *pstage);
+    entry, ok := build_plan_entry(*prepared, prepared.discovery.root_dir, plan, bt_pipeline(*prepared), *pstage);
     expect(ok && entry == replacement);
 
     // The compile metaprogram names the replacement, never the original
