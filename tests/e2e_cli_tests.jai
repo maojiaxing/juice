@@ -60,7 +60,11 @@ test "E2E: the test command guards and requires a package" {
     // package.jai fails discovery before any collection — running it at the
     // otter root would compile the whole repository, so the real run lives
     // on the small @test fixtures in test_command_tests.jai.
-    scratch := otter_scratch("e2e-cli-test-scratch");
+    // The fixture root must sit outside every package: command dispatch now
+    // resolves the nearest package.jai upward (spec 0087 decision 17), so a
+    // scratch directory inside this repository would resolve to the
+    // repository package and run a real, recursive suite.
+    scratch := external_scratch("e2e-cli-test-scratch");
     delete_directory_full(scratch);
     defer delete_directory_full(scratch);
     expect(make_directory_if_it_does_not_exist(scratch, recursive = true));
@@ -97,7 +101,9 @@ test "E2E: no command defaults to build" {
     // the otter root would compile the repository. A scratch directory
     // without a package.jai fails discovery before any compile, which
     // proves the default command without an expensive build.
-    scratch := otter_scratch("e2e-cli-scratch");
+    // Outside every package, so the default build command fails discovery
+    // instead of compiling the enclosing repository.
+    scratch := external_scratch("e2e-cli-scratch");
     delete_directory_full(scratch);
     defer delete_directory_full(scratch);
     expect(make_directory_if_it_does_not_exist(scratch, recursive = true));

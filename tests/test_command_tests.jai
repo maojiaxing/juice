@@ -297,8 +297,9 @@ test "Test command argument guard" {
 // first, then subdirectories, both lexicographic). Excluded: dot entries at
 // any depth, the root-level target/, tests/data/ and modules/, the root
 // manifest, and the member-a subtree (boundary from the discovery
-// snapshot). Included despite same names elsewhere: src/target/,
-// src/modules/, src/data/ and a nested package.jai source file.
+// snapshot). A nested child package.jai prunes its whole subtree (spec 0087
+// decision 20), so lib_deep/package.jai is not collected. Included despite
+// same names elsewhere: src/target/, src/modules/, src/data/.
 test "Collection applies the exclusion set in scan order" {
     prepared: Prepared_Workspace;
     prepared.discovery.root_dir = tprint("%1/tests/data/scan-fixture", otter_root());
@@ -310,7 +311,6 @@ test "Collection applies the exclusion set in scan order" {
     expect(ok);
     expected := string.[
         "a_root.jai",
-        "lib_deep/package.jai",
         "src/b.jai",
         "src/data/d.jai",
         "src/modules/e.jai",

@@ -74,6 +74,10 @@ Workspace_Discovery :: struct {
     has_declaration: bool;
     has_workspace: bool;
     has_package: bool;
+    packages: [] Normalized_Package;
+    packages_root: string;
+    selected_packages: [] Normalized_Package;
+    selection_error: string;
     root_package: Normalized_Package;
     member_packages: [] Normalized_Package;
 }
@@ -81,4 +85,25 @@ Prepared_Workspace :: struct {
     discovery: Workspace_Discovery;
     artifact_plans: [] Artifact_Plan;
     dependencies_prepared: bool;
+}
+
+// Command selection request (spec 0087 decision 18). The mutual exclusion of
+// --workspace against -p/--package and --package-path is structural: one
+// flag selects all members, the two lists select by package name and by
+// workspace-relative directory.
+Package_Selection_Request :: struct {
+    all_members: bool;
+    names: [] string;
+    paths: [] string;
+}
+
+// The validated result the command layer consumes: the selected packages in
+// stable workspace-relative directory order, with their workspace-relative
+// directories parallel to the package list. Failure carries one diagnostic;
+// no partial selection is published.
+Package_Selection :: struct {
+    success: bool;
+    packages: [] Normalized_Package;
+    paths: [] string;
+    error: string;
 }
