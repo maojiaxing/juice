@@ -196,7 +196,7 @@ dependency_resolution_context_isolation :: () {
     // The branch moves and only the first project updates.
     expect(dr_git_provider_value(repo, 200));
     second_commit := copy_string(dr_git_commit_all(repo, "second"));
-    update_result, update_output, update_errors := dr_run(app_one, string.["update"]);
+    update_result, update_output, update_errors := dr_update_app(app_one);
     expect(expect_exit("update app one", update_result, 0, "dependency resolution"));
     expect(dr_build_app(app_one) == 0);
     first_exit, first_run := dr_run_app(app_one);
@@ -220,7 +220,7 @@ dependency_resolution_context_isolation :: () {
     expect(dr_build_app(member_two) == 0);
     expect(dr_git_provider_value(repo, 300));
     third_commit := copy_string(dr_git_commit_all(repo, "third"));
-    member_update, member_output, member_errors := dr_run(member_one, string.["update"]);
+    member_update, member_output, member_errors := dr_update_app(member_one);
     expect(expect_exit("member update", member_update, 0, "dependency resolution"));
     expect(dr_build_app(member_one) == 0);
     member_exit, member_run := dr_run_app(member_one);

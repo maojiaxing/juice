@@ -275,13 +275,35 @@ dr_has_shim :: (package_dir: string, shim_name: string) -> bool {
     return file_exists(dr_path(dr_path(package_dir, "target/packages"), tprint("%.jai", shim_name)));
 }
 
+// One build of the fixture app. A failure prints the child's own stdout/stderr
+// before the caller's `expect` aborts the case: without that, a nonzero exit is
+// indistinguishable between a resolver defect and a transient child failure
+// (for example git or the filesystem), and the reason is lost with the test's
+// scratch tree. This only adds observation; the returned code is unchanged.
 dr_build_app :: (app: string) -> s32 {
     result, output, errors := dr_run(app, string.["build"]);
+    if result.exit_code != 0 {
+        print("[dr_build_app] build failed in %\n--- stdout ---\n%\n--- stderr ---\n%\n", app, output, errors);
+    }
     return result.exit_code;
 }
 
+// The same observation for `update`: a nonzero exit there is reported with the
+// child's own output so an intermittent failure names its cause instead of
+// disappearing with the scratch tree.
+dr_update_app :: (app: string) -> (Process_Result, string, string) {
+    result, output, errors := dr_run(app, string.["update"]);
+    if result.exit_code != 0 {
+        print("[dr_update_app] update failed in %\n--- stdout ---\n%\n--- stderr ---\n%\n", app, output, errors);
+    }
+    return result, output, errors;
+}
+
 dr_run_app :: (app: string) -> (s32, string) {
-    result, output, _ := run_command(dr_path(dr_path(app, "target"), "app.exe"), capture_and_return_output = true);
+    result, output, errors := run_command(dr_path(dr_path(app, "target"), "app.exe"), capture_and_return_output = true);
+    if result.exit_code != 0 {
+        print("[dr_run_app] run failed in %\n--- stdout ---\n%\n--- stderr ---\n%\n", app, output, errors);
+    }
     return result.exit_code, output;
 }
 
