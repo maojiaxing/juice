@@ -526,6 +526,12 @@ workspace_discovery_driver_code :: (fixture_root: string, cache_dir: string) -> 
     append(*builder, "\";\n");
     append(*builder, "#load \"");
     append(*builder, path_slashes(tprint("%1/src/target_layout.jai", otter_root())));
+    append(*builder, "\";\n");
+    append(*builder, "#load \"");
+    append(*builder, path_slashes(tprint("%1/src/resolution_state.jai", otter_root())));
+    append(*builder, "\";\n");
+    append(*builder, "#load \"");
+    append(*builder, path_slashes(tprint("%1/src/dependency_resolution.jai", otter_root())));
     append(*builder, "\";\n\n");
     append(*builder, "#run {\n");
     append(*builder, "    set_build_options_dc(.{do_output = false});\n");
@@ -663,6 +669,12 @@ dependency_prep_driver_code :: (fixture_root: string, scratch_root: string, cach
     append(*builder, "\";\n");
     append(*builder, "#load \"");
     append(*builder, path_slashes(tprint("%1/src/target_layout.jai", otter_root())));
+    append(*builder, "\";\n");
+    append(*builder, "#load \"");
+    append(*builder, path_slashes(tprint("%1/src/resolution_state.jai", otter_root())));
+    append(*builder, "\";\n");
+    append(*builder, "#load \"");
+    append(*builder, path_slashes(tprint("%1/src/dependency_resolution.jai", otter_root())));
     append(*builder, "\";\n\n");
     append(*builder, "#run {\n");
     append(*builder, "    set_build_options_dc(.{do_output = false});\n");
