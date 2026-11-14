@@ -227,8 +227,12 @@ dependency_resolution_context_isolation :: () {
     expect(member_exit == 0 && contains(member_run, "value=300"));
     expect(dr_build_app(member_two) == 0);
     sibling_exit, sibling_run := dr_run_app(member_two);
-    expect(sibling_exit == 0 && contains(sibling_run, "value=100"));
-    expect(contains(dr_state_text(scratch), third_commit));
+    // member-two first resolved when the branch tip was the second commit, so its
+    // own record is that commit: it keeps compiling value=200 and never follows
+    // member-one's update to the third commit (value=300).
+    expect(sibling_exit == 0 && contains(sibling_run, "value=200"));
+    member_two_state := dr_state_text(scratch);
+    expect(contains(member_two_state, second_commit) && contains(member_two_state, third_commit));
 } @test
 
 // A11: a corrupt state file is an error, not an absent record.
