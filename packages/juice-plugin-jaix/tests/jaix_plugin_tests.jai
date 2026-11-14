@@ -147,8 +147,10 @@ test "Jaix plugin: identity, PRESTEP mount and the options schema" {
 
 test "Jaix plugin: the member identity resolves through the declared config surface" {
     // The member's value goes through the same merge/resolver the host uses:
-    // declaration version and options arrive at the typed members, and the
-    // slot options pointer is the plugin instance.
+    // declaration options arrive at the typed members, and the slot options
+    // pointer is the plugin instance. The declaration carries NO version —
+    // compatibility is the entry ABI, checked independently (spec 0087
+    // decision 22).
     plugins: [..] *Juice_Plugin;
     array_add(*plugins, as_plugin(get_juice_plugin()));
     merged := merge_plugins(plugins);
@@ -157,7 +159,6 @@ test "Jaix plugin: the member identity resolves through the declared config surf
 
     config: Plugin_Config = .{
         id      = "juice-plugin-jaix",
-        version = "0.1.0",
         options = Option_Row.[
             .{key = "config", value = "jaix.config.jai"},
             .{key = "exe",    value = "tools/jaix.exe"},
@@ -177,20 +178,29 @@ test "Jaix plugin: the member identity resolves through the declared config surf
     expect(resolved.pipeline.count == 2);
     expect(resolved.pipeline[0].name == "load" && resolved.pipeline[1].name == "test-block");
 
-    // The declaration gates: a wrong version and exe-without-config reject.
-    // Each gate check starts from a fresh plugin value — the resolver's
-    // options apply mutates the instance, so a reused registry would carry
-    // the earlier rows.
+    // The declaration gates: an entry built against another plugin face and
+    // exe-without-config both reject. Each gate check starts from a fresh
+    // plugin value — the resolver's options apply mutates the instance, so a
+    // reused registry would carry the earlier rows.
     gate_plugins: [..] *Juice_Plugin;
     array_add(*gate_plugins, as_plugin(get_juice_plugin()));
     gate_merged := merge_plugins(gate_plugins);
-    bad_version := resolve_plugin_configs(gate_merged.registry, Plugin_Config.[.{id = "juice-plugin-jaix", version = "9.9.9"}]);
-    expect(!bad_version.ok);
-    expect(bad_version.diagnostics.count == 1);
-    expect(bad_version.diagnostics[0].message == "plugin version mismatch: juice-plugin-jaix (declared 9.9.9, plugin 0.1.0)");
+
+    // The entry ABI replaces the retired user-declared version: a value
+    // compiled against another face is rejected before its options apply.
+    stale := get_juice_plugin();
+    stale.abi_version = JUICE_PLUGIN_ABI_VERSION + 1;
+    stale_plugins: [..] *Juice_Plugin;
+    array_add(*stale_plugins, as_plugin(stale));
+    stale_merged := merge_plugins(stale_plugins);
+    bad_abi := resolve_plugin_configs(stale_merged.registry, Plugin_Config.[.{id = "juice-plugin-jaix", options = Option_Row.[.{key = "exe", value = "tools/jaix.exe"}]}]);
+    expect(!bad_abi.ok);
+    expect(bad_abi.diagnostics.count == 1);
+    expect(find_index_from_left(bad_abi.diagnostics[0].message, "incompatible plugin entry ABI") >= 0);
+    expect(bad_abi.hook_table.count == 0);
+
     bad_options := resolve_plugin_configs(gate_merged.registry, Plugin_Config.[.{
         id      = "juice-plugin-jaix",
-        version = "0.1.0",
         options = Option_Row.[.{key = "exe", value = "tools/jaix.exe"}],
     }]);
     expect(!bad_options.ok);

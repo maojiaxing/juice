@@ -1,10 +1,12 @@
 #import "Juice";
 
-// Cross-package duplicate module-name fixture (ticket 043; declaration-driven
-// since ticket 056): both declared members carry an extra.jai, so both derive
-// the #import module name "extra" (the file stem). Equal probe ranks resolve
-// by accumulation order — the earlier declaration wins — and the loser is
-// dropped with a non-fatal diagnostic.
+// Cross-package same-file-name fixture (ticket 043; independent sources since
+// ticket 0092): both declared members carry an extra.jai and both declare it
+// as their public module, so the two providers have the SAME entry file name.
+// The retired model derived the #import name from the file stem and arbitrated
+// the collision by probe rank; a declaration now names its own module and the
+// registration imports the DECLARATION's id, so the shared file name never
+// collides and both plugins stay enabled at their declaration position.
 PACKAGE :: Package.{
     version = "0.1.0",
     name    = "plugin_ws_dup",

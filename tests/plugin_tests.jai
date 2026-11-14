@@ -618,13 +618,23 @@ test "Resolver: an incompatible plugin entry ABI rejects (no declared version)" 
 
     stale := builtin_load_plugin();
     stale.abi_version = JUICE_PLUGIN_ABI_VERSION - 1;
+    // A distinguishable face name: with the plugins field omitted the resolver
+    // still supplies the built-in default pipeline (decision 22), so only a
+    // distinct name can show that the REJECTED value contributed nothing.
+    stale.transpile = plug_tp("stale-face");
     resolved := resolve_plugin_configs(.[stale], Plugin_Config.[plug_config("load")]);
     expect(!resolved.ok);
     expect(resolved.diagnostics.count == 1);
     expect(resolved.diagnostics[0].message == tprint("incompatible plugin entry ABI: load (plugin %, juice supports %)", JUICE_PLUGIN_ABI_VERSION - 1, JUICE_PLUGIN_ABI_VERSION));
     expect(resolved.diagnostics[0].line == 0 && resolved.diagnostics[0].column == 0);
-    // The unusable product carries no face of the rejected plugin.
-    expect(resolved.pipeline.count == 0);
+    // The unusable product carries no face of the rejected plugin: the pipeline
+    // is the built-in default the omitted field asks for ([load, test-block]),
+    // never the stale value's own face (the caller stops on ok=false either
+    // way).
+    expect(resolved.pipeline.count == 2);
+    expect(resolved.pipeline[0].name == "load" && resolved.pipeline[1].name == "test-block");
+    for face: resolved.pipeline expect(face.name != "stale-face");
+    expect(resolved.hook_table.count == 0 && resolved.lint_plugins.count == 0);
 }
 
 test "Resolver: one package providing several plugins rejects (the v1 rule)" {

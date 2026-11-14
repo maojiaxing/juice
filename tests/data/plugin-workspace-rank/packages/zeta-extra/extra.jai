@@ -1,3 +1,3 @@
-// Fixture plugin anchor (scan-only; derives the module name "extra" from the
-// file stem — rank 3, losing to packages/extra's module.jai rank 1).
+// Fixture plugin anchor (scan-only; zeta_plugin's entry — the file stem is
+// shared with packages/extra's module.jai and no longer arbitrates anything).
 get_juice_plugin :: () -> *X { return null; } @juice_plugin

@@ -55,22 +55,28 @@
 // duplicate types (spike-pinned).
 //
 // Ticket 043 added the workspace-level stage on top of the per-package scan;
-// ticket 056 makes it declaration-driven. scan_workspace_plugins consumes
-// the discovery snapshot (Workspace_Discovery) and the root package's
-// Package.plugins declarations: built-in ids are skipped, every other id
-// must name a workspace member (member plugin id = package name), and each
-// declared member is scanned with scan_plugin_package in declaration order.
-// The declared member gets its import shim through the ordinary member link
-// (ensure_import_shim), so its module name resolves for the generated
-// registration / test metaprogram; root dependencies never activate
-// plugins. Cross-package same-module-name collisions resolve by the same
-// probe precedence (a later winner replaces the earlier hit at its own
-// declaration position) and are reported as non-fatal diagnostics. An
-// unknown id, a member with zero or several plugin anchors, and any
-// unscannable member root (an unreadable source file included, US 27) leave
-// ok = false (the loud failure channel), and the merged registration file
-// lands at <target_dir>/plugins/registration.jai
+// ticket 056 made it declaration-driven, and ticket 0092 replaced the member
+// name guess with independent typed sources (spec 0087 decisions 21/23).
+// scan_workspace_plugins consumes the discovery snapshot (Workspace_Discovery)
+// and the consuming package's Package.plugins declarations: built-in ids are
+// skipped, and every other declaration resolves its OWN PATH / GIT / WORKSPACE
+// source plus a public-module selection through resolve_plugin_sources — no
+// ordinary dependency and no member-name guess is involved, so a provider may
+// be any reachable package. The selected module must carry exactly one plugin
+// entry (zero = capability missing, several = ambiguity), the same actual
+// plugin must not be enabled twice, and no selected module may already be an
+// ordinary dependency module. Each enablement is linked through one import shim
+// named after its DECLARATION id, so the registration and the generated test
+// metaprogram can `#import "<id>"`; the entry file's own name never becomes an
+// import name. Root dependencies never activate plugins. Every failure is a
+// fatal diagnostic + ok = false (the loud channel), and the merged registration
+// file lands at <target_dir>/plugins/registration.jai
 // (workspace_plugin_registration_path; the per-package helper stays).
+//
+// The per-package scan (scan_plugin_package) stays as the package-level probe the
+// E2E fixtures and the read-failure channel use; its entry-probe naming
+// (plugin_module_name / plugin_probe_rank) is that face's own convention and is
+// no longer how a declared plugin gets its import name.
 //
 // Load order: the workspace-level function references Workspace_Discovery
 // (the namespaced binding declared in src/juice_module.jai) and
@@ -93,8 +99,12 @@
 // Scan result shapes
 // ---------------------------------------------------------------------------
 
-// One discovered plugin module: the #import name the registration file
-// writes (the entry probe's derivation) plus the anchored file's paths.
+// One discovered plugin module. `module_name` is the #import name the
+// registration file writes: the DECLARATION id for a declared external plugin
+// ([..] from resolve_plugin_sources), the entry probe's derivation for the
+// per-package scan. `rel_path` is the entry file relative to the package that
+// owns it (the scanned package, or the enabled provider package) and
+// `abs_path` its machine path — a report name and a read path, never swapped.
 Plugin_Scan_Hit :: struct {
     module_name: string;  // the #import name in the generated registration
                           // file
@@ -102,14 +112,16 @@ Plugin_Scan_Hit :: struct {
     abs_path:    string;
 }
 
-// One scan-side report: a dropped duplicate registration, a source file
-// that could not be read, or a declaration-level failure (unknown plugin
-// id, a member without/multiple plugin anchors, an unlinkable member). A
-// dropped duplicate is non-fatal (ok stays true); every other report is
-// fatal (fatal = true, ok = false — a broken plugin declaration/package
-// must fail the command, never degrade into "no plugins"). The walk failure
-// stays the ok=false channel without a diagnostic — the collect_scan_files
-// convention.
+// One scan-side report: a non-fatal dropped duplicate (the per-package scan's
+// probe arbitration), a source file that could not be read, or a
+// declaration-level failure of a plugin enablement (unusable source, provider
+// without a declaration, ambiguous or missing module export, zero/multiple
+// plugin entries in the selected module, the same plugin enabled twice, a
+// module already selected as an ordinary dependency). A dropped duplicate is
+// non-fatal (ok stays true); every other report is fatal (fatal = true,
+// ok = false — a broken plugin declaration/package must fail the command, never
+// degrade into "no plugins"). The walk failure stays the ok=false channel
+// without a diagnostic — the collect_scan_files convention.
 Plugin_Scan_Diagnostic :: struct {
     rel_path: string;  // the dropped or unreadable file (or the declared id
                        // for declaration-level reports)
@@ -273,7 +285,9 @@ Plugin_Source_Request :: struct {
 // entry file and the import name the registration file binds. `identity` is the
 // ACTUAL identity (source + resolved commit + provider directory + export) the
 // duplicate rule compares — different names, spellings or option rows never
-// bypass it (spec 0087 decision 21).
+// bypass it (spec 0087 decision 21). `anchor_rel_path` stays the
+// provider-package-relative entry path a scan hit reports (a machine path is
+// never a report name).
 Resolved_Plugin_Source :: struct {
     id:                string;
     declaration_index: int;
@@ -566,7 +580,7 @@ resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Reso
         candidate.entry_path = resolved.entry_path;
         candidate.import_name = declaration.id;
         candidate.identity = resolved.identity;
-        candidate.anchor_rel_path = resolved.entry_path;
+        candidate.anchor_rel_path = scan_rel_path(resolved.entry_path, resolved.provider_dir);
 
         conflict := "";
         for identity, i: identities {

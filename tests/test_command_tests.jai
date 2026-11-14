@@ -672,12 +672,17 @@ plugin_wiring_root :: (name: string) -> string {
 // test block (the real collect/TRANSPILE fronts run) and, when member_name
 // is non-empty, one member package carrying the anchor plus the root's
 // Package.plugins declaration that activates it (ticket 056 — declaration =
-// activation; dependencies never activate plugins).
+// activation; dependencies never activate plugins). The member is a real
+// package whose package.jai declares the selected public module (spec 0087
+// decision 21), and the snapshot carries that declaration plus the workspace
+// membership a WORKSPACE source requires.
 plugin_wiring_prepared :: (root: string, member_name := "") -> Prepared_Workspace {
     prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     prepared.discovery.has_package = true;
+    prepared.discovery.has_workspace = true;
     prepared.discovery.root_package.name = "plugin-wiring-root";
+    prepared.discovery.root_package.dir = root;
     members: [..] Normalized_Package;
     array_add(*members, .{name = "plugin-wiring-root", dir = root});
     if member_name != "" {
@@ -686,7 +691,10 @@ plugin_wiring_prepared :: (root: string, member_name := "") -> Prepared_Workspac
         plugins: [..] Plugin_Reference;
         array_add(*plugins, .{id = member_name, source = .{kind = .WORKSPACE}, module = .{path = tprint("packages/%", member_name)}});
         prepared.discovery.root_package.plugins = plugins;
-        array_add(*members, .{name = member_name, dir = path_slashes(tprint("%1/packages/%2", root, member_name))});
+        array_add(*members, .{name = member_name, dir = path_slashes(tprint("%1/packages/%2", root, member_name)),
+            modules = Declared_Product.[.{name = "plugin_module", entry = "module.jai", name_present = true}]});
+        build_seam_write(root, tprint("packages/%1/package.jai", member_name),
+            tprint("#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"0.1.0\",\n    modules = .[.{name = \"plugin_module\", entry = \"module.jai\"}],\n    name    = \"%\",\n\n};\n", member_name));
     }
     prepared.discovery.member_packages = members;
     return prepared;
@@ -721,7 +729,10 @@ test "Test command: plugin hits register and wire the metaprogram" {
     expect(find_index_from_left(generated, "#import \"juice_core\";") >= 0);
     expect(find_index_from_left(generated, tprint("#load \"%1\";", registration)) >= 0);
     expect(find_index_from_left(generated, tprint("set_working_directory(\"%1\");", root)) >= 0);
-    expect(find_index_from_left(generated, "plugin_configs: [] Plugin_Config = Plugin_Config.[.{ id = \"scratch-plugin\", version = \"\", options = Option_Row.[] }];") >= 0);
+    // Ticket 0092 (decision 21): the plugin ABI version is the host constant,
+    // not a user-declared field, so the generated config carries id + options
+    // only.
+    expect(find_index_from_left(generated, "plugin_configs: [] Plugin_Config = Plugin_Config.[.{ id = \"scratch-plugin\", options = Option_Row.[] }];") >= 0);
     expect(find_index_from_left(generated, "merged_plugins = merge_plugins(plugins);") >= 0);
     expect(find_index_from_left(generated, "resolved_plugins = resolve_plugin_configs(merged_plugins.registry, plugin_configs);") >= 0);
     expect(find_index_from_left(generated, "for lint: resolved_plugins.lint_plugins {") >= 0);
@@ -756,12 +767,13 @@ test "Test command: a plugin scan failure fails the command before compiling" {
     delete_directory_full(root);
     defer delete_directory_full(root);
     expect(build_seam_write(root, "src/wiring_tests.jai", "test \"plugin wiring scan fail\" {\n    expect(true);\n}\n"));
-    // The snapshot names a member whose directory does not exist: the scan
-    // must fail loudly, never degrade into "no plugins".
+    // The snapshot names a declared plugin package whose directory does not
+    // exist: the source resolution must fail loudly, never degrade into "no
+    // plugins" (a stale member snapshot does not rescue a missing source).
     prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     prepared.discovery.has_package = true;
-    prepared.discovery.root_package.plugins = Plugin_Reference.[.{id = "ghost-plugin"}];
+    prepared.discovery.root_package.plugins = Plugin_Reference.[.{id = "ghost-plugin", source = .{kind = .PATH, path = tprint("%1/packages/ghost-plugin", root)}}];
     prepared.discovery.member_packages = Normalized_Package.[
         .{name = "plugin-wiring-root", dir = root},
         .{name = "ghost-plugin", dir = path_slashes(tprint("%1/packages/ghost-plugin", root))},

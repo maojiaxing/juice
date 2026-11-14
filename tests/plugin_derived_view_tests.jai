@@ -441,17 +441,22 @@ main :: () {
 }
 PDV_END
 
-PDV_APP_TEST_MAIN :: #string PDV_END
+PDV_APP_TEST_MAIN_HEAD :: #string PDV_END
 #import "Basic";
 
 main :: () {
     print("test entry\n");
 }
-
-test "the builtin test-block plugin transpiles this block" {
-    print("builtin test block ran\n");
-}
 PDV_END
+
+// The block header is composed at run time rather than written literally in
+// this file: a raw #string block is not opaque to the test-block transpiler
+// (pre-existing behavior, reproducible on the integration build), so a
+// literal header here would be rewritten in this file's own view and the
+// fixture would stop carrying the source it claims to.
+pdv_app_test_main :: () -> string {
+    return tprint("%1\ntest \"the builtin test-block plugin transpiles this block\" {\n    print(\"builtin test block ran\\n\");\n}\n", PDV_APP_TEST_MAIN_HEAD);
+}
 // The plugin declaration shape under test: the external plugin through its OWN
 // workspace source with an explicitly named public module — no ordinary
 // dependency and no member-name guess is involved.
@@ -486,6 +491,15 @@ pdv_derived_root :: (root: string) -> string {
 // printed to stdout, compiler diagnostics to stderr.
 pdv_child_text :: (output: string, errors: string) -> string {
     return tprint("%\n%", output, errors);
+}
+
+// Exit expectation that keeps the child's combined output in the failure
+// report: a wrong exit code from a spawned CLI run is only diagnosable with
+// what the child printed.
+pdv_expect_child :: (name: string, result: Process_Result, want: s32, text: string) -> bool {
+    if expect_exit(name, result, want) return true;
+    print("[child %1] output:\n%2\n", name, text);
+    return false;
 }
 
 plugin_derived_independent_source_cli :: () {
@@ -708,10 +722,10 @@ plugin_derived_builtin_triad_cli :: () {
     omitted_root := pdv_scratch("cli-builtin-omitted");
     defer delete_directory_full(omitted_root);
     expect(pdv_write_provider(omitted_root, PDV_PLUGIN_MODULE_SOURCE));
-    expect(pdv_write_app(omitted_root, "", "", PDV_APP_TEST_MAIN));
+    expect(pdv_write_app(omitted_root, "", "", pdv_app_test_main()));
     omitted_result, omitted_output, omitted_errors := run_otter_child_at(omitted_root, .["build"]);
     omitted_text := pdv_child_text(omitted_output, omitted_errors);
-    expect(expect_exit("builtin-omitted", omitted_result, 0));
+    expect(pdv_expect_child("builtin-omitted", omitted_result, 0, omitted_text));
     expect(output_matches("builtin-omitted", omitted_text, .["Build completed successfully"]));
 
     // Explicit empty: NO plugin runs, builtins included — the same source no
@@ -720,7 +734,7 @@ plugin_derived_builtin_triad_cli :: () {
     empty_root := pdv_scratch("cli-builtin-empty");
     defer delete_directory_full(empty_root);
     expect(pdv_write_provider(empty_root, PDV_PLUGIN_MODULE_SOURCE));
-    expect(pdv_write_app(empty_root, "    plugins = Plugin_Declaration.[],\n", "", PDV_APP_TEST_MAIN));
+    expect(pdv_write_app(empty_root, "    plugins = Plugin_Declaration.[],\n", "", pdv_app_test_main()));
     empty_discovery, empty_discovered := discover_workspace(empty_root, pdv_scratch("cli-builtin-empty-cache"), plugin_face_modules_dir());
     expect(empty_discovered && empty_discovery.has_package);
     expect(empty_discovery.root_package.plugins.count == 0);
@@ -820,4 +834,258 @@ plugin_derived_prepare_once :: () {
     expect(preparation.packages.count == 2);
     expect(other.derived_root != first.derived_root);
     expect(other.package_dir == path_slashes(member.dir));
+} @test
+
+// ===========================================================================
+// CLI family: the builtin triad observed through the TEST command
+// ===========================================================================
+//
+// The build path normalizes test blocks for BUILD independently of the pipeline,
+// so an omitted / empty / non-empty `plugins` field cannot be told apart through
+// `juice build` alone (the build-only triad lives above). The TEST command
+// transpiles WITH the resolved pipeline, so a test block is the observable: it
+// compiles and runs only when a conversion face is really in the pipeline.
+
+// A consuming package with an OPTIONAL single workspace member. The triad cases
+// need the no-member shape (a declared member directory that does not exist is a
+// discovery error, not a plugin question) and the isolation case needs exactly
+// one real member.
+pdv_write_app_shaped :: (root: string, plugins_field: string, member_dir: string, main_source: string) -> bool {
+    workspace_field := ifx member_dir == "" then "" else tprint("    workspace = .{members = .[\"%\"]},\n", member_dir);
+    manifest := tprint("#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"plugin-app\",\n    version = \"1\",\n    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n%1%2};\n", workspace_field, plugins_field);
+    if !build_seam_write(root, "package.jai", manifest) return false;
+    if !build_seam_write(root, "src/main.jai", main_source) return false;
+    return true;
+}
+
+plugin_derived_builtin_triad_test_cli :: () {
+    // Omitted: the builtin [load, test-block] pipeline converts the block and
+    // the test runs.
+    omitted_root := pdv_scratch("cli-triad-test-omitted");
+    defer delete_directory_full(omitted_root);
+    expect(pdv_write_app_shaped(omitted_root, "", "", pdv_app_test_main()));
+    omitted_result, omitted_output, omitted_errors := run_otter_child_at(omitted_root, .["test"]);
+    omitted_text := pdv_child_text(omitted_output, omitted_errors);
+    expect(expect_exit("triad-test-omitted", omitted_result, 0));
+    expect(output_matches("triad-test-omitted", omitted_text, .[
+        "builtin test block ran",
+        "1 passed, 0 failed",
+    ]));
+
+    // Explicit empty: nothing converts the block, so the same source no longer
+    // compiles. The command fails at the compile with the compiler's own
+    // diagnostic — the declared consequence of an empty list — and no
+    // registration lands.
+    empty_root := pdv_scratch("cli-triad-test-empty");
+    defer delete_directory_full(empty_root);
+    expect(pdv_write_app_shaped(empty_root, "    plugins = Plugin_Declaration.[],\n", "", pdv_app_test_main()));
+    empty_result, empty_output, empty_errors := run_otter_child_at(empty_root, .["test"]);
+    empty_text := pdv_child_text(empty_output, empty_errors);
+    if empty_result.exit_code != 1 {
+        manifest_debug, manifest_debug_ok := read_entire_file(tprint("%1/package.jai", empty_root));
+        print("[triad-test-empty] exit %, output:\n%\n", empty_result.exit_code, empty_text);
+        if manifest_debug_ok print("[triad-test-empty] manifest:\n%\n", manifest_debug);
+        for dir: dr_subdirectories(tprint("%1/target/transpile", empty_root)) {
+            view_text, view_ok := read_entire_file(tprint("%1/src/main.jai", dir));
+            if view_ok print("[triad-test-empty] view %:\n%\n", dir, view_text);
+        }
+        _eval_src, eval_data := manifest_temp_file_names(tprint("%1/juice", get_cache_home()), empty_root);
+        eval_text, eval_ok := read_entire_file(eval_data);
+        if eval_ok print("[triad-test-empty] manifest data %:\n%\n", eval_data, eval_text);
+    }
+    expect(expect_exit("triad-test-empty", empty_result, 1));
+    expect(output_matches("triad-test-empty", empty_text, .["[juice ERROR] Test compilation failed."]));
+    expect(output_matches("triad-test-empty", empty_text, .["Semicolon expected after expression."]));
+    expect(output_matches("triad-test-empty", empty_text, .["1 passed, 0 failed"], want = false));
+    expect(!file_exists(workspace_plugin_registration_path(package_target_dir(empty_root))));
+
+    // Explicit non-empty naming the conversion face: the same block compiles and
+    // runs. A non-empty list enables exactly what it names.
+    named_root := pdv_scratch("cli-triad-test-named");
+    defer delete_directory_full(named_root);
+    expect(pdv_write_app_shaped(named_root, "    plugins = Plugin_Declaration.[.{builtin = \"test-block\"}],\n", "", pdv_app_test_main()));
+    named_result, named_output, named_errors := run_otter_child_at(named_root, .["test"]);
+    named_text := pdv_child_text(named_output, named_errors);
+    expect(expect_exit("triad-test-named", named_result, 0));
+    expect(output_matches("triad-test-named", named_text, .[
+        "builtin test block ran",
+        "1 passed, 0 failed",
+    ]));
+
+    // Explicit non-empty WITHOUT a conversion face (a real external plugin): the
+    // defaults are never supplemented, so the block fails exactly like the empty
+    // list — yet the declaration was honored: the plugin was enabled, its module
+    // compiled and its registration landed. "Enabled" is not a synonym for
+    // "adds a conversion capability".
+    external_root := pdv_scratch("cli-triad-test-external");
+    defer delete_directory_full(external_root);
+    expect(pdv_write_provider_with_noop(external_root));
+    noop_plugins := "    plugins = Plugin_Declaration.[.{id = \"noop_plugin\", source = .{kind = .WORKSPACE}, module = .{path = \"packages/my-plugin\", name = \"noop_plugin_module\"}}],\n";
+    expect(pdv_write_app_shaped(external_root, noop_plugins, "packages/my-plugin", pdv_app_test_main()));
+    external_result, external_output, external_errors := run_otter_child_at(external_root, .["test"]);
+    external_text := pdv_child_text(external_output, external_errors);
+    if external_result.exit_code != 1 print("[triad-test-external] exit %, output:\n%\n", external_result.exit_code, external_text);
+    expect(expect_exit("triad-test-external", external_result, 1));
+    expect(output_matches("triad-test-external", external_text, .["[juice ERROR] Test compilation failed."]));
+    // No plugin error: the enablement itself resolved and registered.
+    expect(output_matches("triad-test-external", external_text, .["Plugin capability missing"], want = false));
+    expect(output_matches("triad-test-external", external_text, .["Could not prepare the workspace's plugin declarations"], want = false));
+    registration := workspace_plugin_registration_path(package_target_dir(external_root));
+    expect(file_exists(registration));
+    expect(file_contains(registration, "JUICE_PLUGIN_0 :: #import \"noop_plugin\";"));
+} @test
+
+// ===========================================================================
+// CLI family: an unselected member's own plugin declaration stays inert
+// ===========================================================================
+
+plugin_derived_unselected_member_isolation_cli :: () {
+    root := pdv_scratch("cli-member-isolation");
+    defer delete_directory_full(root);
+    // The root declares the EMPTY list (nothing of its own runs), and the member
+    // declares its own plugin whose source directory does not exist: if the
+    // root's operation resolved member declarations, this build would fail.
+    expect(pdv_write_app_shaped(root, "    plugins = Plugin_Declaration.[],\n", "packages/plugin-member", PDV_APP_MAIN));
+    expect(build_seam_write(root, "packages/plugin-member/package.jai",
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"1\",\n    name    = \"plugin-member\",\n    modules = .[.{name = \"member_module\", entry = \"module.jai\"}],\n    plugins = Plugin_Declaration.[\n        .{id = \"member_plugin\", source = .{kind = .PATH, path = \"vendor/my-plugin\"}, module = .{name = \"plugin_module\"}},\n    ],\n};\n"));
+    expect(build_seam_write(root, "packages/plugin-member/module.jai", "member_value :: () -> s64 {\n    return 1;\n}\n"));
+
+    result, output, errors := run_otter_child_at(root, .["build"]);
+    text := pdv_child_text(output, errors);
+    expect(expect_exit("member-isolation", result, 0));
+    expect(output_matches("member-isolation", text, .["Build completed successfully"]));
+    expect(output_matches("member-isolation", text, .["member_plugin"], want = false));
+
+    // Nothing of the member's plugin ran: no scan, no registration, no host, no
+    // private derived view, and no member import shim. The isolation is that
+    // strong — the unselected package is not even fetched.
+    expect(!is_directory(target_plugins_dir(package_target_dir(root))));
+    expect(!file_exists(workspace_plugin_registration_path(package_target_dir(root))));
+    expect(!file_exists(plugin_registration_path(package_target_dir(root), "plugin-member")));
+    expect(!file_exists(plugin_host_path(package_target_dir(root))));
+    expect(!is_directory(package_derived_view_root(package_target_dir(root), "plugin-member")));
+    expect(!file_exists(tprint("%1/plugin-member.jai", packages_dir(root))));
+    // The root's own artifact still exists: the operation was not silently
+    // skipped.
+    expect(file_exists(target_artifact_path(package_target_dir(root), "app")));
+} @test
+
+// ===========================================================================
+// CLI family: a Git plugin source, and the shared checkout stays read-only
+// ===========================================================================
+
+// A standalone consuming package (no workspace, no member): the Git and sibling
+// PATH cases need the plugin declaration to be the only plugin input.
+pdv_write_standalone_app :: (root: string, plugins_field: string, main_source: string) -> bool {
+    return pdv_write_app_shaped(root, plugins_field, "", main_source);
+}
+
+plugin_derived_git_source_read_only_cli :: () {
+    scratch := dr_scratch("plugin-git-source");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    repo := dr_path(scratch, "repo");
+    expect(dr_git_init(repo));
+    // The provider package at the repository root: one public plugin module whose
+    // PRESTEP hook writes its derived main through the view.
+    expect(dr_write_file(repo, "package.jai",
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"1\",\n    name    = \"git-plugin\",\n    modules = .[.{name = \"plugin_module\", entry = \"plugin.jai\"}],\n};\n"));
+    expect(dr_write_file(repo, "plugin.jai", PDV_PLUGIN_MODULE_SOURCE));
+    commit := copy_string(dr_git_commit_all(repo, "plugin provider"));
+    expect(commit.count == 40);
+
+    app := dr_path(scratch, "app");
+    git_plugins := copy_string(tprint("    plugins = Plugin_Declaration.[\n        .{id = \"my_plugin\", source = .{kind = .GIT, git = .{url = \"%1\"}}, module = .{name = \"plugin_module\"}, options = Plugin_Option.[%2]},\n    ],\n", repo, PDV_OPTIONS_ENTRY_HELPER));
+    expect(pdv_write_standalone_app(app, git_plugins, PDV_APP_MAIN));
+
+    result, output, errors := run_otter_child_at(app, .["build"]);
+    text := pdv_child_text(output, errors);
+    expect(expect_exit("git-source", result, 0));
+    expect(output_matches("git-source", text, .["Build completed successfully"]));
+    // The Git-sourced plugin ran: its substitution produced the derived entry.
+    expect(file_exists(tprint("%1/src/main.jai", pdv_derived_root(app))));
+    artifact := target_artifact_path(package_target_dir(app), "app");
+    expect(file_exists(artifact));
+    run_result, run_output, _, _ := run_command(artifact, capture_and_return_output = true);
+    expect(expect_exit("git-source artifact", run_result, 0));
+    expect(output_matches("git-source artifact", run_output, .["derived entry"]));
+
+    // The shared checkout is a real Git working tree under the content cache. The
+    // plugin read its module from there and wrote every output into the consuming
+    // package's private area, so the checkout is still pristine: not one tracked
+    // or untracked change.
+    environment: Resolution_Environment;
+    environment.content_cache_root = get_juice_content_cache_root().path;
+    checkout := git_content_checkout_directory(environment, path_slashes(repo), commit);
+    expect(is_directory(checkout));
+    expect(file_exists(tprint("%1/plugin.jai", checkout)));
+    status_result, status := dr_git(string.["-C", checkout, "status", "--porcelain"]);
+    expect(status_result.exit_code == 0);
+    expect(status == "");
+
+    // A module path that escapes the checkout is rejected (spec 0087 decision 12:
+    // 越出检出根直接报错). The GIT source resolves; the selection does not.
+    escape_plugins := copy_string(tprint("    plugins = Plugin_Declaration.[\n        .{id = \"my_plugin\", source = .{kind = .GIT, git = .{url = \"%1\"}}, module = .{path = \"../..\", name = \"plugin_module\"}},\n    ],\n", repo));
+    expect(pdv_write_standalone_app(app, escape_plugins, PDV_APP_MAIN));
+    escape_result, escape_output, escape_errors := run_otter_child_at(app, .["build"]);
+    escape_text := pdv_child_text(escape_output, escape_errors);
+    expect(expect_exit("git-escape", escape_result, 1));
+    expect(output_matches("git-escape", escape_text, .["module path escapes its source root: ../.."]));
+    expect(output_matches("git-escape", escape_text, .["Could not prepare the workspace's plugin declarations"]));
+    // The source repository itself was never written to either.
+    repo_status_result, repo_status := dr_git(string.["-C", repo, "status", "--porcelain"]);
+    expect(repo_status_result.exit_code == 0);
+    expect(repo_status == "");
+} @test
+
+// ===========================================================================
+// CLI family: a local sibling PATH source, and its source-root boundary
+// ===========================================================================
+//
+// Spec 0081 decision 3 / decision 45: a local path source is resolved relative
+// to the declaring package and MAY point at a sibling directory outside the
+// workspace, with no member requirement. The sibling range is therefore a
+// capability, not a restriction — what IS bounded is the module path: it must
+// stay inside the resolved source root (decision 12/45). Both halves run here on
+// a real sibling package outside the consuming workspace root.
+
+plugin_derived_sibling_path_source_cli :: () {
+    root := pdv_scratch("cli-sibling-path");
+    defer delete_directory_full(root);
+    // The provider lives OUTSIDE the consuming package's workspace root.
+    provider := tprint("%1/sibling-plugin", path_strip_filename(root));
+    delete_directory_full(provider);
+    defer delete_directory_full(provider);
+    expect(build_seam_write(provider, "package.jai",
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"1\",\n    name    = \"sibling-plugin\",\n    modules = .[.{name = \"plugin_module\", entry = \"plugin.jai\"}],\n};\n"));
+    expect(build_seam_write(provider, "plugin.jai", PDV_PLUGIN_MODULE_SOURCE));
+
+    // The app: no workspace, no member, no ordinary dependency — only its own
+    // PATH source pointing at the sibling directory.
+    sibling_plugins := copy_string(tprint("    plugins = Plugin_Declaration.[\n        .{id = \"my_plugin\", source = .{kind = .PATH, path = \"../sibling-plugin\"}, module = .{name = \"plugin_module\"}, options = Plugin_Option.[%1]},\n    ],\n", PDV_OPTIONS_ENTRY_HELPER));
+    expect(pdv_write_standalone_app(root, sibling_plugins, PDV_APP_MAIN));
+
+    result, output, errors := run_otter_child_at(root, .["build"]);
+    text := pdv_child_text(output, errors);
+    expect(expect_exit("sibling-path", result, 0));
+    expect(output_matches("sibling-path", text, .["Build completed successfully"]));
+    artifact := target_artifact_path(package_target_dir(root), "app");
+    expect(file_exists(artifact));
+    run_result, run_output, _, _ := run_command(artifact, capture_and_return_output = true);
+    expect(expect_exit("sibling-path artifact", run_result, 0));
+    expect(output_matches("sibling-path artifact", run_output, .["derived entry"]));
+    // The sibling SOURCE tree stays read-only: only the consuming package's
+    // private derived area received output.
+    provider_source, provider_ok := read_entire_file(tprint("%1/plugin.jai", provider));
+    expect(provider_ok && provider_source == PDV_PLUGIN_MODULE_SOURCE);
+    expect(file_exists(tprint("%1/src/main.jai", pdv_derived_root(root))));
+
+    // The module path is the bounded half: it must stay inside the resolved
+    // source root, so a selection that climbs out is rejected before any hook.
+    escape_plugins := copy_string(tprint("    plugins = Plugin_Declaration.[\n        .{id = \"my_plugin\", source = .{kind = .PATH, path = \"../sibling-plugin\"}, module = .{path = \"..\", name = \"plugin_module\"}},\n    ],\n"));
+    expect(pdv_write_standalone_app(root, escape_plugins, PDV_APP_MAIN));
+    escape_result, escape_output, escape_errors := run_otter_child_at(root, .["build"]);
+    escape_text := pdv_child_text(escape_output, escape_errors);
+    expect(expect_exit("sibling-escape", escape_result, 1));
+    expect(output_matches("sibling-escape", escape_text, .["module path escapes its source root: .."]));
 } @test
