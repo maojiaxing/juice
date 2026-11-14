@@ -54,7 +54,7 @@ clean_path_is_safe :: (path: string) -> bool {
 // remaining paths (old juice semantics).
 clean_discovered_workspace :: (
     root_dir: string,
-    discovery: Juice.Workspace_Discovery,
+    discovery: Workspace_Discovery,
     validate_path: #type (path: string) -> bool = clean_path_is_safe,
     delete_path: #type (path: string) -> bool = delete_directory_full
 ) -> bool {

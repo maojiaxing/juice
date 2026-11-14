@@ -4,7 +4,7 @@
 // runs): the failing @test program in src/failing.jai drives the suite
 // continuation and the aggregated exit code through the real command.
 PACKAGE :: Package.{
-    name    = "test-fail",
     version = "0.1.0",
-    type    = .BIN,
+    name    = "test-fail",
+
 };

@@ -55,16 +55,16 @@ PH_HOOKS_ANCHOR_SOURCE :: "get_juice_plugin :: () -> *X { plugin.hooks; return n
 
 // A prepared workspace over a scratch root with one declared member plugin
 // (the declaration-driven scan surface: declaration order + member snapshot).
-ph_prepared_with_member :: (root: string, member_name: string, anchor_source: string) -> Juice.Prepared_Workspace {
+ph_prepared_with_member :: (root: string, member_name: string, anchor_source: string) -> Prepared_Workspace {
     build_seam_write(root, tprint("packages/%1/module.jai", member_name), anchor_source);
-    prepared: Juice.Prepared_Workspace;
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     prepared.discovery.has_package = true;
     prepared.discovery.root_package.name = "plugin-host-root";
-    plugins: [..] Juice.Plugin_Declaration;
-    array_add(*plugins, .{id = member_name, version = "0.1.0"});
+    plugins: [..] Plugin_Reference;
+    array_add(*plugins, .{id = member_name, source = .{kind = .WORKSPACE}, module = .{path = tprint("packages/%", member_name)}});
     prepared.discovery.root_package.plugins = plugins;
-    members: [..] Juice.Package;
+    members: [..] Normalized_Package;
     array_add(*members, .{name = "plugin-host-root", dir = root});
     array_add(*members, .{name = member_name, dir = path_slashes(tprint("%1/packages/%2", root, member_name))});
     prepared.discovery.member_packages = members;
@@ -128,7 +128,7 @@ test "Plugin prepare: declaration order drives the scan, shims and registration"
     root := plugin_workspace_fixture_root("plugin-workspace");
     defer delete_directory_full(package_target_dir(root));
 
-    prepared: Juice.Prepared_Workspace;
+    prepared: Prepared_Workspace;
     prepared.discovery = discovery;
     prepare := prepare_workspace_plugins(*prepared);
     expect(prepare.ok);
@@ -390,14 +390,14 @@ test "Test command: the prepare registration drives the metaprogram without a se
     defer delete_directory_full(root);
     expect(make_directory_if_it_does_not_exist(root, recursive = true));
 
-    prepared: Juice.Prepared_Workspace;
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     prepared.discovery.has_package = true;
     prepared.discovery.root_package.name = "compile-single-scan";
-    plugins: [..] Juice.Plugin_Declaration;
-    array_add(*plugins, .{id = "ghost-member", version = "0.1.0"});
+    plugins: [..] Plugin_Reference;
+    array_add(*plugins, .{id = "ghost-member"});
     prepared.discovery.root_package.plugins = plugins;
-    members: [..] Juice.Package;
+    members: [..] Normalized_Package;
     array_add(*members, .{name = "compile-single-scan", dir = root});
     array_add(*members, .{name = "ghost-member", dir = path_slashes(tprint("%1/packages/ghost-member", root))});
     prepared.discovery.member_packages = members;
@@ -413,7 +413,7 @@ test "Test command: the prepare registration drives the metaprogram without a se
     generated, ok := read_entire_file(test_test_spawn_path);
     expect(ok);
     expect(find_index_from_left(generated, "#load \"C:/sentinel/registration.jai\";") >= 0);
-    expect(find_index_from_left(generated, ".{ id = \"ghost-member\", version = \"0.1.0\", options = Option_Row.[] }") >= 0);
+    expect(find_index_from_left(generated, ".{ id = \"ghost-member\", version = \"\", options = Option_Row.[] }") >= 0);
     expect(find_index_from_left(generated, tprint("set_working_directory(\"%1\");", root)) >= 0);
     // No scan landed a registration in this workspace.
     expect(!is_directory(target_plugins_dir(package_target_dir(root))));
@@ -506,11 +506,11 @@ test "E2E: the member PRESTEP plugin runs through the host and substitutes the b
     // The host's INFO diagnostic survives the record file round-trip (its
     // message carries "|" and "%" — the escaping pin).
     expect(child_output_contains("prestep-build", output, "[juice] prestep|50% done"));
-    expect(child_output_contains("prestep-build", output, "[juice Build] Compiling Target 'plugin-prestep-fixture' (src/main.jai) -> target/..."));
+    expect(child_output_contains("prestep-build", output, "[juice Build] Compiling Target 'plugin_prestep_fixture' (src/main.jai) -> target/..."));
 
     // The build entry compiled the substitution: the artifact prints the
     // replacement view's line.
-    artifact := target_artifact_path(package_target_dir(fixture), "plugin-prestep-fixture");
+    artifact := target_artifact_path(package_target_dir(fixture), "plugin_prestep_fixture");
     expect(file_exists(artifact));
     run_result, run_output, _, _ := run_command(artifact, capture_and_return_output = true);
     expect(expect_exit("prestep-build artifact", run_result, 0, "build child"));
@@ -559,13 +559,13 @@ test "E2E: a member plugin options rejection fails the build through the host" {
     // resolver rejects before any hook runs, the record file reports OK=0 and
     // the command fails without an artifact.
     expect(build_seam_write(scratch, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"plugin-prestep-fixture\",\n    version = \"0.1.0\",\n    type    = .BIN,\n    targets = Target.[.{name = \"plugin-prestep-fixture\", main_file = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"packages/prestep-plugin\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"prestep-plugin\", version = \"0.1.0\", options = Plugin_Option.[.{key = \"nope\", value = \"x\"}]},\n    ],\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"plugin-prestep-fixture\",\n    version = \"0.1.0\",\n    \n    executables = .[.{name = \"plugin_prestep_fixture\", entry = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"packages/prestep-plugin\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"prestep-plugin\", source = .{kind = .PATH, path = \"packages/prestep-plugin\"}, options = Plugin_Option.[.{key = \"nope\", value = \"x\"}]},\n    ],\n};\n"));
 
     result, output, _ := run_otter_child_at(scratch, string.["build"]);
     expect(expect_exit("prestep-options", result, 1, "build child"));
     expect(child_output_contains("prestep-options", output, "[juice ERROR] unknown plugin option: prestep-plugin (nope)"));
     expect(child_output_contains("prestep-options", output, "[juice ERROR] The plugin host reported a pre-step failure."));
-    expect(!file_exists(target_artifact_path(package_target_dir(scratch), "plugin-prestep-fixture")));
+    expect(!file_exists(target_artifact_path(package_target_dir(scratch), "plugin_prestep_fixture")));
     records, records_ok := read_entire_file(plugin_host_records_path(package_target_dir(scratch)));
     expect(records_ok);
     expect(find_index_from_left(records, "DIAG=ERROR|unknown plugin option: prestep-plugin (nope)") >= 0);
@@ -582,18 +582,18 @@ test "E2E: a host merge conflict fails the build before compiling" {
     copy_directory(tprint("%1/packages/prestep-plugin", plugin_source), tprint("%1/packages/copy-a", scratch));
     copy_directory(tprint("%1/packages/prestep-plugin", plugin_source), tprint("%1/packages/copy-b", scratch));
     expect(build_seam_write(scratch, "packages/copy-a/package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"copy-a\",\n    version = \"0.1.0\",\n    type    = .LIB,\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    modules = .[.{name = \"copy_a\", entry = \"module.jai\"}],\n    executables = .[],\n    name    = \"copy-a\",\n    version = \"0.1.0\",\n    \n};\n"));
     expect(build_seam_write(scratch, "packages/copy-b/package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"copy-b\",\n    version = \"0.1.0\",\n    type    = .LIB,\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    modules = .[.{name = \"copy_b\", entry = \"module.jai\"}],\n    executables = .[],\n    name    = \"copy-b\",\n    version = \"0.1.0\",\n    \n};\n"));
     expect(build_seam_write(scratch, "src/main.jai", "#import \"Basic\";\n\nmain :: () { print(\"merge\\n\"); }\n"));
     expect(build_seam_write(scratch, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"merge-negative\",\n    version = \"0.1.0\",\n    type    = .BIN,\n    targets = Target.[.{name = \"merge-negative\", main_file = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"packages/copy-a\", \"packages/copy-b\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"copy-a\", version = \"0.1.0\"},\n        .{id = \"copy-b\", version = \"0.1.0\"},\n    ],\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"merge-negative\",\n    version = \"0.1.0\",\n    \n    executables = .[.{name = \"merge_negative\", entry = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"packages/copy-a\", \"packages/copy-b\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"copy-a\", source = .{kind = .PATH, path = \"packages/copy-a\"}},\n        .{id = \"copy-b\", source = .{kind = .PATH, path = \"packages/copy-b\"}},\n    ],\n};\n"));
 
     result, output, _ := run_otter_child_at(scratch, string.["build"]);
     expect(expect_exit("prestep-merge", result, 1, "build child"));
     expect(child_output_contains("prestep-merge", output, "[juice ERROR] duplicate plugin registration: prestep-plugin"));
     expect(child_output_contains("prestep-merge", output, "[juice ERROR] The plugin host reported a pre-step failure."));
-    expect(!file_exists(target_artifact_path(package_target_dir(scratch), "merge-negative")));
+    expect(!file_exists(target_artifact_path(package_target_dir(scratch), "merge_negative")));
 }
 
 test "E2E: a host compile crash fails the build with the host error" {
@@ -613,14 +613,14 @@ test "E2E: a host compile crash fails the build with the host error" {
     expect(child_output_contains("prestep-crash", output, "[juice ERROR] Command 'build' failed while executing 'build'."));
     // The child compiler's diagnostics pass through on stderr.
     expect(child_output_contains("prestep-crash", errors, "module.jai"));
-    expect(!file_exists(target_artifact_path(package_target_dir(scratch), "plugin-prestep-fixture")));
+    expect(!file_exists(target_artifact_path(package_target_dir(scratch), "plugin_prestep_fixture")));
 }
 
 test "E2E: a package without plugins never spawns the host" {
     root := ph_scratch("no-plugins-e2e");
     defer delete_directory_full(root);
     expect(build_seam_write(root, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"no-plugins\",\n    version = \"0.1.0\",\n    type    = .BIN,\n    targets = Target.[.{name = \"no-plugins\", main_file = \"src/main.jai\"}],\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"no-plugins\",\n    version = \"0.1.0\",\n    \n    executables = .[.{name = \"no_plugins\", entry = \"src/main.jai\"}],\n};\n"));
     expect(build_seam_write(root, "src/main.jai", "#import \"Basic\";\n\nmain :: () { print(\"plain\\n\"); }\n"));
 
     result, output, _ := run_otter_child_at(root, string.["build"]);

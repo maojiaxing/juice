@@ -4,7 +4,7 @@
 // runs): a BIN package whose only sources are the hand-written @test files
 // in src/ — no targets, so the test program is the only product.
 PACKAGE :: Package.{
-    name    = "test-fixture",
     version = "0.1.0",
-    type    = .BIN,
+    name    = "test-fixture",
+
 };

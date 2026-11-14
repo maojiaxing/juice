@@ -5,7 +5,7 @@
 // arbitration to packages/extra's module.jai and is dropped (the v1
 // one-plugin-per-package rule keeps this package at one anchor).
 PACKAGE :: Package.{
-    name    = "zeta-extra",
     version = "0.1.0",
-    type    = .LIB,
+    name    = "zeta-extra",
+
 };

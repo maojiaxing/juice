@@ -1,9 +1,9 @@
 #import "Juice";
 
 PACKAGE :: Package.{
-    name    = "bad_no_manifest",
     version = "0.1.0",
-    type    = .BIN,
+    name    = "bad_no_manifest",
+
     workspace = .{
         members = string.["plain_member"],
     },

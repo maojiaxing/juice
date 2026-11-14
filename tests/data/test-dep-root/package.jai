@@ -7,10 +7,11 @@
 // neither discovered nor executed (spec US 18).
 
 PACKAGE :: Package.{
-    name    = "test-dep-root",
+    executables = .[.{name = "test_dep_root", entry = "src/main.jai"}],
     version = "0.1.0",
-    type    = .BIN,
+    name    = "test-dep-root",
+
     dependencies = Dependency.[
-        .{name = "test_dep", source = "../test-dep-lib"},
+        .{name = "test_dep", source = .{kind = .PATH, path = "../test-dep-lib"}},
     ],
 };

@@ -17,7 +17,8 @@
 // activate plugins); run alone, the member root is its own package (no
 // plugin declarations) and resolves the face from the tool that runs it.
 PACKAGE :: Package.{
-    name    = "juice-plugin-jaix",
     version = "0.1.0",
-    type    = .LIB,
+    modules = .[.{name = "juice_plugin_jaix", entry = "module.jai"}],
+    name    = "juice-plugin-jaix",
+
 };

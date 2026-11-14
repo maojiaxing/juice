@@ -62,11 +62,7 @@ build_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     if prepared == null return false;
     if !build_prepared_workspace(prepared) return false;
     if prepared.artifact_plans.count == 0 {
-        if prepared.package_type == .LIB {
-            print("[juice] Library package '%'; nothing to build.\n", prepared.discovery.root_package.name);
-        } else {
-            print("[juice] No executable targets; nothing to build.\n");
-        }
+        print("[juice] No executable targets; nothing to build.\n");
     }
     print("[juice] Build completed successfully!\n");
     return true;
@@ -75,7 +71,7 @@ build_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
 // Revalidate the whole build input before compiling anything, so an unsafe
 // plan cannot produce a partial build. Plan structure and paths are owned by
 // this gate; compile_artifact_plan pre-checks only its own source file.
-revalidate_build_plans :: (prepared: *Juice.Prepared_Workspace) -> bool {
+revalidate_build_plans :: (prepared: *Prepared_Workspace) -> bool {
     package_root := prepared.discovery.root_dir;
     root_entry := inspect_path_entry(package_root);
     if !root_entry.exists || !root_entry.is_directory || root_entry.is_symlink || root_entry.is_junction {
@@ -114,7 +110,7 @@ revalidate_build_plans :: (prepared: *Juice.Prepared_Workspace) -> bool {
 // compile loop pairs entries[index] with artifact_plans[index]). A mounted
 // at hook fills entries itself; the built-in front fills it through b5/b7.
 Build_Transpile_Stage :: struct {
-    prepared: *Juice.Prepared_Workspace;
+    prepared: *Prepared_Workspace;
     pipeline: [] Transpile_Plugin;
     prestep:  *Prestep_Stage;   // PRESTEP's tables (null = no pre-step ran)
     entries:  [..] string;
@@ -137,7 +133,7 @@ build_transpile_front :: (stage: *Build_Transpile_Stage) -> bool {
 // The COMPILE stage state: the prepared workspace and the TRANSPILE stage's
 // chosen entries.
 Build_Compile_Stage :: struct {
-    prepared: *Juice.Prepared_Workspace;
+    prepared: *Prepared_Workspace;
     entries:  [] string;
 }
 
@@ -149,7 +145,7 @@ Build_Compile_Stage :: struct {
 // seam (011 deviation 4), and a #type parameter's arity must match exactly.
 build_compile_loop :: (
     stage: *Build_Compile_Stage,
-    compile: #type (root_dir: string, plan: Juice.Artifact_Plan, entry: string) -> bool = compile_artifact_default
+    compile: #type (root_dir: string, plan: Artifact_Plan, entry: string) -> bool = compile_artifact_default
 ) -> bool {
     prepared := stage.prepared;
     for plan, index: prepared.artifact_plans {
@@ -173,8 +169,8 @@ build_compile_loop :: (
 // src/transpile_front.jai.) The replacement is trusted as-is: the compile
 // step's own source check catches a missing replacement.
 build_plan_entry :: (
-    prepared: *Juice.Prepared_Workspace,
-    plan: Juice.Artifact_Plan,
+    prepared: *Prepared_Workspace,
+    plan: Artifact_Plan,
     pipeline: [] Transpile_Plugin,
     prestep: *Prestep_Stage = null
 ) -> (string, bool) {
@@ -188,7 +184,7 @@ build_plan_entry :: (
         return path_slashes(replacement), true;
     }
 
-    closure, ok := probe_package_closure(prepared.discovery.root_dir, entry_rel, pipeline = pipeline);
+    closure, ok := probe_package_closure(prepared.discovery.root_dir, entry_rel, pipeline = pipeline, pipeline_omitted = false);
     if !ok return "", false;
     if !closure_has_tests(closure) return path_slashes(plan.target.source_path), true;
 
@@ -198,6 +194,7 @@ build_plan_entry :: (
     state.closure = closure;
     state.transpile = transpile_build_file;
     state.pipeline = pipeline;
+    state.pipeline_omitted = false;
     for _: closure {
         array_add(*state.states, 0);
         array_add(*state.view_paths, "");
@@ -217,7 +214,7 @@ spawn_build_compiler :: (metaprogram_path: string) -> Process_Result {
     return run_command("jai", metaprogram_path);
 }
 
-compile_artifact_plan :: (root_dir: string, plan: Juice.Artifact_Plan, entry: string,
+compile_artifact_plan :: (root_dir: string, plan: Artifact_Plan, entry: string,
                           spawn: #type (metaprogram_path: string) -> Process_Result = spawn_build_compiler) -> bool {
     // The compile entry is chosen by the entry selection (b7): the original
     // entry file (test-free closure, zero transpile) or its strip view.
@@ -306,7 +303,7 @@ artifact_is_running :: (artifact_path: string) -> bool {
 // target/ directory. The copy must stay in target/ so the modules
 // derivation (spec section 9.3: modules live next to the running
 // executable) keeps working for it.
-handoff_copy_path :: (plan: Juice.Artifact_Plan) -> string {
+handoff_copy_path :: (plan: Artifact_Plan) -> string {
     return target_handoff_copy_path(plan.target_dir, plan.target.name);
 }
 
@@ -320,7 +317,7 @@ handoff_copy_path :: (plan: Juice.Artifact_Plan) -> string {
 // hand-off (at most one lingers between builds) and by clean (the whole
 // target/). The exit code of the original is 0 — the copy's result reaches
 // the user through its own output.
-running_artifact_handoff :: (plan: Juice.Artifact_Plan) -> bool {
+running_artifact_handoff :: (plan: Artifact_Plan) -> bool {
     copy_path := handoff_copy_path(plan);
 
     if file_exists(copy_path) {
@@ -366,7 +363,7 @@ running_artifact_handoff :: (plan: Juice.Artifact_Plan) -> bool {
 // shape): the three-parameter adapter over the full compile step, whose
 // own spawn seam is the direct-testing surface for the metaprogram write,
 // the failure branches and the artifact check.
-compile_artifact_default :: (root_dir: string, plan: Juice.Artifact_Plan, entry: string) -> bool {
+compile_artifact_default :: (root_dir: string, plan: Artifact_Plan, entry: string) -> bool {
     return compile_artifact_plan(root_dir, plan, entry);
 }
 
@@ -393,10 +390,10 @@ compile_artifact_default :: (root_dir: string, plan: Juice.Artifact_Plan, entry:
 // self-build covers it naturally), so the decision logic is tested through
 // recording fakes.
 build_prepared_workspace :: (
-    prepared: *Juice.Prepared_Workspace,
+    prepared: *Prepared_Workspace,
     hook_table: [] Hook_Registration = .[],
     is_running: #type (artifact_path: string) -> bool = artifact_is_running,
-    handoff: #type (plan: Juice.Artifact_Plan) -> bool = running_artifact_handoff,
+    handoff: #type (plan: Artifact_Plan) -> bool = running_artifact_handoff,
     host_spawn: #type (host_path: string, import_dirs: [] string) -> Process_Result = spawn_plugin_host
 ) -> bool {
     // Command-level plugin preparation (ticket 060, spec §5.2): the shared
@@ -411,7 +408,7 @@ build_prepared_workspace :: (
     plugin_prepare := prepare_workspace_plugins(prepared);
     report_plugin_prepare(plugin_prepare);
     if !plugin_prepare.ok return false;
-    resolved := resolve_package_plugins(prepared.discovery.root_package.plugins);
+    resolved := resolve_package_plugins(prepared.discovery.root_package.plugins, prepared.discovery.root_package.plugins_omitted);
     if !resolved.ok {
         for diagnostic: resolved.diagnostics print("[juice ERROR] %\n", diagnostic.message);
         print("[juice ERROR] Invalid plugin declarations.\n");

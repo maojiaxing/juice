@@ -96,10 +96,10 @@ test "The generated metaprogram matches the byte-locked no-output test shape" {
 
 test "Build revalidation: an unsafe package root blocks every compilation" {
     root := tprint("%1/missing-package-root", otter_root());
-    plans := Juice.Artifact_Plan.[
+    plans := Artifact_Plan.[
         .{target = .{name = "alpha", main_file = "src/main.jai", source_path = tprint("%1/src/main.jai", otter_root())}, target_dir = package_target_dir(root), artifact_path = target_artifact_path(package_target_dir(root), "alpha")},
     ];
-    prepared: Juice.Prepared_Workspace;
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     prepared.artifact_plans = plans;
     reset_build_seam();
@@ -110,10 +110,10 @@ test "Build revalidation: an unsafe package root blocks every compilation" {
 
 test "Build revalidation: an escaping artifact plan blocks compilation" {
     root := otter_root();
-    plans := Juice.Artifact_Plan.[
+    plans := Artifact_Plan.[
         .{target = .{name = "alpha", main_file = "src/main.jai", source_path = tprint("%1/src/main.jai", root)}, target_dir = tprint("%1/../escape", root), artifact_path = tprint("%1/../escape/alpha.exe", root)},
     ];
-    prepared: Juice.Prepared_Workspace;
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     prepared.artifact_plans = plans;
     reset_build_seam();
@@ -124,10 +124,10 @@ test "Build revalidation: an escaping artifact plan blocks compilation" {
 
 test "Build revalidation: a missing target source blocks compilation" {
     root := otter_root();
-    plans := Juice.Artifact_Plan.[
+    plans := Artifact_Plan.[
         .{target = .{name = "alpha", main_file = "src/missing.jai", source_path = tprint("%1/src/missing.jai", root)}, target_dir = package_target_dir(root), artifact_path = target_artifact_path(package_target_dir(root), "alpha")},
     ];
-    prepared: Juice.Prepared_Workspace;
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     prepared.artifact_plans = plans;
     reset_build_seam();
@@ -141,8 +141,8 @@ test "Build revalidation: a missing target source blocks compilation" {
 // ---------------------------------------------------------------------------
 
 test "Build without targets compiles nothing" {
-    prepared: Juice.Prepared_Workspace;
-    prepared.artifact_plans = Juice.Artifact_Plan.[];
+    prepared: Prepared_Workspace;
+    prepared.artifact_plans = Artifact_Plan.[];
     reset_build_seam();
     expect(build_prepared_workspace(*prepared, .[], test_artifact_is_running, test_artifact_handoff));
     expect(test_is_running_checked.count == 0);
@@ -158,37 +158,37 @@ test "Build plugin preparation fails on invalid declarations before the zero-pla
 
     // An unknown id (neither built-in nor workspace member) fails the
     // declaration-driven scan.
-    unknown: Juice.Prepared_Workspace;
+    unknown: Prepared_Workspace;
     unknown.discovery.root_dir = "C:/build-plugin-prep-unknown";
     unknown.discovery.has_package = true;
     unknown.discovery.root_package.name = "prep-root";
-    unknown.discovery.root_package.plugins = Juice.Plugin_Declaration.[.{id = "mystery", version = "1"}];
-    unknown.discovery.member_packages = Juice.Package.[.{name = "prep-root", dir = "C:/build-plugin-prep-unknown"}];
-    unknown.artifact_plans = Juice.Artifact_Plan.[];
+    unknown.discovery.root_package.plugins = Plugin_Reference.[.{id = "mystery"}];
+    unknown.discovery.member_packages = Normalized_Package.[.{name = "prep-root", dir = "C:/build-plugin-prep-unknown"}];
+    unknown.artifact_plans = Artifact_Plan.[];
     expect(!build_prepared_workspace(*unknown, .[], test_artifact_is_running, test_artifact_handoff));
     expect(test_is_running_checked.count == 0);
 
     // A built-in declaration whose version differs from the plugin's own
     // version fails the resolver (the same check the test metaprogram runs
     // for member values).
-    bad_version: Juice.Prepared_Workspace;
+    bad_version: Prepared_Workspace;
     bad_version.discovery.root_dir = "C:/build-plugin-prep-version";
     bad_version.discovery.has_package = true;
     bad_version.discovery.root_package.name = "prep-root";
-    bad_version.discovery.root_package.plugins = Juice.Plugin_Declaration.[.{id = "load", version = "9.9.9"}];
-    bad_version.discovery.member_packages = Juice.Package.[.{name = "prep-root", dir = "C:/build-plugin-prep-version"}];
-    bad_version.artifact_plans = Juice.Artifact_Plan.[];
+    bad_version.discovery.root_package.plugins = Plugin_Reference.[.{id = "load", builtin = true, options = .[.{key = "unsupported", value = "x"}]}];
+    bad_version.discovery.member_packages = Normalized_Package.[.{name = "prep-root", dir = "C:/build-plugin-prep-version"}];
+    bad_version.artifact_plans = Artifact_Plan.[];
     expect(!build_prepared_workspace(*bad_version, .[], test_artifact_is_running, test_artifact_handoff));
     expect(test_is_running_checked.count == 0);
 }
 
 test "The built-in compile loop forwards each plan with its chosen entry" {
     root := otter_root();
-    plans := Juice.Artifact_Plan.[
+    plans := Artifact_Plan.[
         .{target = .{name = "alpha", main_file = "src/main.jai", source_path = tprint("%1/src/main.jai", root)}, target_dir = package_target_dir(root), artifact_path = target_artifact_path(package_target_dir(root), "alpha")},
         .{target = .{name = "beta",  main_file = "src/main.jai", source_path = tprint("%1/src/main.jai", root)}, target_dir = package_target_dir(root), artifact_path = target_artifact_path(package_target_dir(root), "beta")},
     ];
-    prepared: Juice.Prepared_Workspace;
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     prepared.artifact_plans = plans;
     cstage: Build_Compile_Stage;
@@ -208,11 +208,11 @@ test "The built-in compile loop forwards each plan with its chosen entry" {
 
 test "The built-in compile loop fails fast on a compile failure" {
     root := otter_root();
-    plans := Juice.Artifact_Plan.[
+    plans := Artifact_Plan.[
         .{target = .{name = "alpha", main_file = "src/main.jai", source_path = tprint("%1/src/main.jai", root)}, target_dir = package_target_dir(root), artifact_path = target_artifact_path(package_target_dir(root), "alpha")},
         .{target = .{name = "beta",  main_file = "src/main.jai", source_path = tprint("%1/src/main.jai", root)}, target_dir = package_target_dir(root), artifact_path = target_artifact_path(package_target_dir(root), "beta")},
     ];
-    prepared: Juice.Prepared_Workspace;
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     prepared.artifact_plans = plans;
     cstage: Build_Compile_Stage;
@@ -397,10 +397,10 @@ test "E2E: build-ok compiles the fixture and produces a runnable artifact" {
 
     result, output, _ := run_otter_child_at(fixture_root, string.["build"]);
     expect(expect_exit("build-ok", result, 0, "build child"));
-    expect(child_output_contains("build-ok", output, "[juice Build] Compiling Target 'build-ok' (src/main.jai) -> target/..."));
+    expect(child_output_contains("build-ok", output, "[juice Build] Compiling Target 'build_ok' (src/main.jai) -> target/..."));
     expect(child_output_contains("build-ok", output, "[juice] Build completed successfully!"));
 
-    artifact := target_artifact_path(package_target_dir(fixture_root), "build-ok");
+    artifact := target_artifact_path(package_target_dir(fixture_root), "build_ok");
     expect(file_exists(artifact));
     run_result, run_output, _, _ := run_command(artifact, capture_and_return_output = true);
     expect(expect_exit("build-ok artifact", run_result, 0, "build child"));
@@ -425,6 +425,6 @@ test "E2E: a compile failure exits nonzero without an artifact" {
 
     result, output, _ := run_otter_child_at(fixture_root, string.["build"]);
     expect(expect_exit("build-bad", result, 1, "build child"));
-    expect(child_output_contains("build-bad", output, "[juice ERROR] Compilation failed for target 'build-bad'."));
-    expect(!file_exists(target_artifact_path(package_target_dir(fixture_root), "build-bad")));
+    expect(child_output_contains("build-bad", output, "[juice ERROR] Compilation failed for target 'build_bad'."));
+    expect(!file_exists(target_artifact_path(package_target_dir(fixture_root), "build_bad")));
 }

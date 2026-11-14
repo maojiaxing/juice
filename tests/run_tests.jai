@@ -13,10 +13,10 @@
 
 // A heap-backed plan list (static literals would leave the slice pointing at
 // the frame's stack — build_seam_prepared's discipline).
-run_plans :: (names: [] string) -> [] Juice.Artifact_Plan {
-    plans: [..] Juice.Artifact_Plan;
+run_plans :: (names: [] string) -> [] Artifact_Plan {
+    plans: [..] Artifact_Plan;
     for name: names {
-        plan: Juice.Artifact_Plan;
+        plan: Artifact_Plan;
         plan.target = .{name = copy_string(name)};
         plan.target_dir = "root/target";
         plan.artifact_path = tprint("root/target/%1.exe", name);
@@ -25,8 +25,8 @@ run_plans :: (names: [] string) -> [] Juice.Artifact_Plan {
     return plans;
 }
 
-run_seam_prepared :: (plans: [] Juice.Artifact_Plan, package_name: string, root_dir: string) -> Juice.Prepared_Workspace {
-    prepared: Juice.Prepared_Workspace;
+run_seam_prepared :: (plans: [] Artifact_Plan, package_name: string, root_dir: string) -> Prepared_Workspace {
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root_dir;
     prepared.discovery.root_package.name = package_name;
     prepared.artifact_plans = plans;
@@ -69,7 +69,7 @@ test "Invalid Run selection never launches" {
     // case-insensitive, the command-line spelling is not.
     expect(!run_prepared_workspace(*prepared, "Alpha", test_launch_artifact));
     // Zero plans: no selection.
-    prepared.artifact_plans = Juice.Artifact_Plan.[];
+    prepared.artifact_plans = Artifact_Plan.[];
     expect(!run_prepared_workspace(*prepared, "", test_launch_artifact));
     expect(test_launch_count == 0);
 }
@@ -86,7 +86,7 @@ test "Run propagates launch failure" {
 
 test "Run refuses an unsafe artifact plan" {
     root := path_slashes(otter_root());
-    plan: Juice.Artifact_Plan;
+    plan: Artifact_Plan;
     plan.target = .{name = "app", main_file = "src/main.jai"};
     plan.target_dir = package_target_dir(root);
     plan.artifact_path = path_slashes(tprint("%1/../escape/app.exe", root));
@@ -100,7 +100,7 @@ test "Run reports a missing artifact" {
     defer delete_directory_full(root);
     expect(make_directory_if_it_does_not_exist(root, recursive = true));
 
-    plan: Juice.Artifact_Plan;
+    plan: Artifact_Plan;
     plan.target = .{name = "app", main_file = "src/main.jai"};
     plan.target_dir = package_target_dir(root);
     plan.artifact_path = path_slashes(target_artifact_path(package_target_dir(root), "app"));
@@ -123,7 +123,7 @@ test "E2E: run builds the fixture and launches the artifact" {
     expect(expect_exit("run", result, 0, "run child"));
     // The prerequisite chain: run's dispatcher plan ran build first, which
     // compiled the target.
-    expect(child_output_contains("run", output, "[juice Build] Compiling Target 'run-fixture' (src/main.jai) -> target/..."));
+    expect(child_output_contains("run", output, "[juice Build] Compiling Target 'run_fixture' (src/main.jai) -> target/..."));
     expect(child_output_contains("run", output, "[juice] Build completed successfully!"));
     // The launch: run prints the launch line and the artifact's own output.
     expect(child_output_contains("run", output, "[juice Run] Launching"));
@@ -134,7 +134,7 @@ test "E2E: run selects an explicit target by exact name" {
     fixture_root := path_slashes(tprint("%1/tests/data/run-fixture", otter_root()));
     defer delete_directory_full(package_target_dir(fixture_root));
 
-    result, output, _ := run_otter_child_at(fixture_root, string.["run", "run-fixture"]);
+    result, output, _ := run_otter_child_at(fixture_root, string.["run", "run_fixture"]);
     expect(expect_exit("run explicit", result, 0, "run child"));
     expect(child_output_contains("run explicit", output, "[juice Run] Launching"));
     expect(child_output_contains("run explicit", output, "hello from run-fixture"));

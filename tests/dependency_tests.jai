@@ -140,9 +140,9 @@ test "Workspace member dependencies are linked not fetched" {
     reset_dependency_recording();
     test_fetch_result = true;
     test_link_result = true;
-    packages := Juice.Package.[
-        .{name = "root", dependencies = Juice.Dependency.[.{name = "member-lib"}, .{name = "external"}]},
-        .{name = "member-lib", dependencies = Juice.Dependency.[.{name = "external2"}]},
+    packages := Normalized_Package.[
+        .{name = "root", dependencies = Dependency_Reference.[.{name = "member-lib", source = .{kind = .WORKSPACE}, modules = .[.{path = "member-lib"}]}, .{name = "external"}]},
+        .{name = "member-lib", dir = lexical_absolute_path("/member-lib"), dependencies = Dependency_Reference.[.{name = "external2"}]},
     ];
     expect(fetch_workspace_dependencies("", "", packages, test_fake_fetch, test_fake_link_member));
     expect(test_fetched_dependency_names.count == 2);
@@ -154,9 +154,9 @@ test "Member link failure propagates" {
     reset_dependency_recording();
     test_fetch_result = true;
     test_link_result = false;
-    packages := Juice.Package.[
-        .{name = "root", dependencies = Juice.Dependency.[.{name = "member-lib"}, .{name = "external"}]},
-        .{name = "member-lib"},
+    packages := Normalized_Package.[
+        .{name = "root", dependencies = Dependency_Reference.[.{name = "member-lib", source = .{kind = .WORKSPACE}, modules = .[.{path = "member-lib"}]}, .{name = "external"}]},
+        .{name = "member-lib", dir = lexical_absolute_path("/member-lib")},
     ];
     expect(!fetch_workspace_dependencies("", "", packages, test_fake_fetch, test_fake_link_member));
     expect(test_linked_member_names.count == 1 && test_fetched_dependency_names.count == 0);
@@ -166,13 +166,13 @@ test "Dependency fetch failure propagates" {
     reset_dependency_recording();
     test_fetch_result = false;
     test_link_result = true;
-    packages := Juice.Package.[.{name = "root", dependencies = Juice.Dependency.[.{name = "external"}]}];
+    packages := Normalized_Package.[.{name = "root", dependencies = Dependency_Reference.[.{name = "external"}]}];
     expect(!fetch_workspace_dependencies("", "", packages, test_fake_fetch, test_fake_link_member));
     expect(test_fetched_dependency_names.count == 1);
 }
 
 test "Find workspace member matches by declared name" {
-    packages := Juice.Package.[.{name = "root"}, .{name = "member-lib"}];
+    packages := Normalized_Package.[.{name = "root"}, .{name = "member-lib"}];
     member, found := find_workspace_member(packages, "member-lib");
     expect(found && member.name == "member-lib");
     _, missing := find_workspace_member(packages, "nope");
@@ -189,10 +189,13 @@ test "Dependency names are used verbatim" {
     defer delete_directory_full(root);
     make_directory_if_it_does_not_exist(packages_dir(root), recursive = true);
     source := tprint("%1/tests/data/dep-fixture/shim-pkg", otter_root());
-    dep: Juice.Dependency;
+    dep: Dependency_Reference;
     dep.name = "juice_core";
-    dep.source = source;
-    expect(fetch_dependency(root, tprint("%1/cache", root), dep));
+    dep.source = .{kind = .PATH, path = source};
+    dep.modules = .[.{alias = "juice_core"}];
+    dep.modules_omitted = false;
+    expect(ensure_published_modules());
+    expect(fetch_dependency(root, tprint("%1/cache", root), dep, plugin_face_modules_dir()));
     abs_source, _ := normalize_existing_path(source);
     content, ok := shim_content_for(packages_dir(root), "juice_core");
     expect(ok && content == dependency_shim_content("juice_core", tprint("%1/src/module.jai", abs_source)));
@@ -207,16 +210,20 @@ test "Dependency preparation builds the shim directory and links members" {
     root := otter_scratch("dep-test-prep");
     delete_directory_full(root);
     defer delete_directory_full(root);
-    member_dir := tprint("%1/tests/data/dep-fixture/root-pkg", otter_root());
-    packages := Juice.Package.[
-        .{name = "root", dependencies = Juice.Dependency.[.{name = "root-pkg"}]},
-        .{name = "root-pkg", dir = member_dir},
+    member_dir := tprint("%1/root_pkg", root);
+    expect(make_directory_if_it_does_not_exist(member_dir, recursive = true));
+    member_source, source_ok := read_entire_file(tprint("%1/tests/data/dep-fixture/root-pkg/module.jai", otter_root()));
+    expect(source_ok);
+    expect(write_entire_file(tprint("%1/module.jai", member_dir), member_source));
+    packages := Normalized_Package.[
+        .{name = "root", dependencies = Dependency_Reference.[.{name = "root_pkg", source = .{kind = .WORKSPACE}, modules = .[.{path = "root_pkg"}], modules_omitted = false}]},
+        .{name = "root_pkg", dir = member_dir},
     ];
     expect(resolve_and_fetch_dependencies(root, tprint("%1/cache", root), packages));
     expect(is_directory(packages_dir(root)));
     abs_member, _ := normalize_existing_path(member_dir);
-    content, ok := shim_content_for(packages_dir(root), "root-pkg");
-    expect(ok && content == dependency_shim_content("root-pkg", tprint("%1/module.jai", abs_member)));
+    content, ok := shim_content_for(packages_dir(root), "root_pkg");
+    expect(ok && content == dependency_shim_content("root_pkg", tprint("%1/module.jai", abs_member)));
 }
 
 // ---------------------------------------------------------------------------

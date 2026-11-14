@@ -39,7 +39,7 @@ tt_file :: (root: string, rel: string) -> Scan_File {
 
 // A prepared workspace over a root string — the test command consumes only
 // the discovery snapshot (test_command_prepared in test_support.jai).
-tt_prepared :: (root: string) -> Juice.Prepared_Workspace {
+tt_prepared :: (root: string) -> Prepared_Workspace {
     return test_command_prepared(root);
 }
 
@@ -580,7 +580,7 @@ test "Test front: the real collection composes into the generated products" {
     root := path_slashes(tprint("%1/tests/data/scan-fixture", otter_root()));
     defer delete_directory_full(transpile_tree_dir(root));
     prepared := tt_prepared(root);
-    prepared.discovery.member_packages = Juice.Package.[
+    prepared.discovery.member_packages = Normalized_Package.[
         .{name = "scan-fixture", dir = prepared.discovery.root_dir},
         .{name = "member-a", dir = tprint("%1/member-a", root)},
     ];
@@ -949,7 +949,7 @@ test "Test dispatch: PRESTEP fires before TRANSPILE with the stage's directories
     // The committed discovery snapshot: the root first, then one member —
     // the pre-step stage's member_dirs carries the member only.
     prepared := tt_prepared(root);
-    members: [..] Juice.Package;
+    members: [..] Normalized_Package;
     array_add(*members, .{name = "demo", dir = root});
     member_dir := path_slashes(tprint("%1/packages/member-a", root));
     array_add(*members, .{name = "member-a", dir = member_dir});
@@ -1106,7 +1106,7 @@ test "E2E: the in-package Testing module self-tests run through the compile view
     delete_directory_full(root);
     defer delete_directory_full(root);
     expect(build_seam_write(root, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"test-module-self\",\n    version = \"0.1.0\",\n    type    = .BIN,\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    executables = .[],\n    name    = \"test-module-self\",\n    version = \"0.1.0\",\n    \n};\n"));
     expect(build_seam_write(root, "modules/Testing.jai",
         "#import \"Basic\";\n\n#scope_export\n\n// A tiny in-package Testing face: the compile view special case (t9)\n// EXPANDs this file with continued numbering and appends the test support\n// segment, so the self-test runs through the generated compile view. Since\n// ticket 035 the generated driver imports this module for the bare names\n// (the single register), so the module must carry the run/finish/\n// path_mapping API the injected runner drives.\nTesting_Path_Pair :: struct {\n    view:     string;\n    original: string;\n}\n\npath_mapping : [..] Testing_Path_Pair;\n\npassed_count: s32 = 0;\n\nexpect_eq :: (expected: $T, actual: T) {\n    if expected != actual assert(false);\n}\n\nrun :: (name: string, proc: () -> ()) {\n    print(\"[test] %\\n\", name);\n    proc();\n    passed_count += 1;\n}\n\nfinish :: () -> s32 {\n    print(\"% passed, 0 failed\\n\", passed_count);\n    passed_count = 0;\n    return 0;\n}\n\nmodule_decl :: () -> s32 {\n    return support_value();\n}\n\ntest \"module self test\" {\n    assert(support_value() == 7);\n}\n"));
     expect(build_seam_write(root, "tests/test_support.jai",

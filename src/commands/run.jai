@@ -38,7 +38,7 @@ run_command_handler :: (ctx: *Command_Context, arguments: [] string) -> bool {
 
 // Selection is deliberately case-sensitive: target declaration uniqueness is
 // case-insensitive, while the command-line spelling is exact.
-select_artifact_plan :: (plans: [] Juice.Artifact_Plan, package_name: string, requested_target: string) -> Juice.Artifact_Plan, bool {
+select_artifact_plan :: (plans: [] Artifact_Plan, package_name: string, requested_target: string) -> Artifact_Plan, bool {
     if plans.count == 0 return .{}, false;
 
     if requested_target != "" {
@@ -55,7 +55,7 @@ select_artifact_plan :: (plans: [] Juice.Artifact_Plan, package_name: string, re
     return .{}, false;
 }
 
-run_artifact_plan :: (plan: Juice.Artifact_Plan, package_root: string) -> bool {
+run_artifact_plan :: (plan: Artifact_Plan, package_root: string) -> bool {
     if !revalidate_artifact_plan(plan, package_root) {
         print("[juice ERROR] Refusing unsafe artifact path: %\n", plan.artifact_path);
         return false;
@@ -74,9 +74,9 @@ run_artifact_plan :: (plan: Juice.Artifact_Plan, package_root: string) -> bool {
 // bool with production default run_artifact_plan) — the at_EXECUTE mount
 // point (spec section 6.3).
 run_prepared_workspace :: (
-    prepared: *Juice.Prepared_Workspace,
+    prepared: *Prepared_Workspace,
     requested_target: string,
-    launch: #type (plan: Juice.Artifact_Plan, package_root: string) -> bool = run_artifact_plan
+    launch: #type (plan: Artifact_Plan, package_root: string) -> bool = run_artifact_plan
 ) -> bool {
     plan, found := select_artifact_plan(prepared.artifact_plans, prepared.discovery.root_package.name, requested_target);
     if !found {

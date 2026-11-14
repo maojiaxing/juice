@@ -10,6 +10,6 @@ PACKAGE :: Package.{
     name    = "bad_plugin_id",
     version = "0.1.0",
     plugins = .[
-        .{ id = "mystery", version = "1" },
+        .{id = "mystery", source = .{kind = .PATH, path = "packages/mystery"} },
     ],
 };

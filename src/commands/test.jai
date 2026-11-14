@@ -97,7 +97,7 @@ prune_test_scratch :: (root_dir: string) -> bool {
 // into its subdirectories (lexicographic).
 // ---------------------------------------------------------------------------
 
-collect_test_files :: (prepared: *Juice.Prepared_Workspace) -> [] Scan_File, bool {
+collect_test_files :: (prepared: *Prepared_Workspace) -> [] Scan_File, bool {
     collect: Test_Collect_Context;
     collect.root = prepared.discovery.root_dir;
     // Member boundaries come from the workspace discovery snapshot (root
@@ -171,7 +171,7 @@ Test_File_Output :: struct {
 // pipeline is the configured pipeline (spec 0060 decision 6); an empty
 // pipeline means the default — every existing caller keeps its behavior
 // unchanged.
-transpile_test_file :: (file: Scan_File, next_test_number: s64, pipeline: [] Transpile_Plugin = .[]) -> Test_File_Output {
+transpile_test_file :: (file: Scan_File, next_test_number: s64, pipeline: [] Transpile_Plugin = .[], pipeline_omitted: bool = true) -> Test_File_Output {
     output: Test_File_Output;
     source, ok := read_entire_file(file.abs_path);
     if !ok {
@@ -184,10 +184,11 @@ transpile_test_file :: (file: Scan_File, next_test_number: s64, pipeline: [] Tra
     ctx.next_test_number = next_test_number;
     // ctx.plugins is a resizable array; copy the slice in so the context
     // owns its pipeline view.
+    ctx.plugins_omitted = pipeline_omitted;
     for plugin: pipeline array_add(*ctx.plugins, plugin);
     result := transpile_source(source, ctx);
     output.view = result.view;
-    output.key = transpile_view_key(file.rel_path, source, .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION, ctx.plugins, next_test_number);
+    output.key = transpile_view_key(file.rel_path, source, .EXPAND, Load_Target.[], VIEW_CONTRACT_VERSION, ctx.plugins, next_test_number, pipeline_omitted);
     output.tests = result.tests;
     output.diagnostics = result.diagnostics;
     return output;
@@ -372,9 +373,10 @@ testing_module_support_block :: (support_view: string) -> string {
 // built-in COMPILE front consumes whatever it finds); the built-in front
 // fills them through t3/t5-t9/t11.
 Test_Transpile_Stage :: struct {
-    prepared:            *Juice.Prepared_Workspace;
+    prepared:            *Prepared_Workspace;
     files:               [] Scan_File;
     pipeline:            [] Transpile_Plugin;
+    pipeline_omitted:     bool = true;
     prestep:             *Prestep_Stage;   // PRESTEP's tables (null = none)
     outputs:             [..] Test_File_Output;
     view_paths:          [..] string;
@@ -419,7 +421,7 @@ test_transpile_front :: (stage: *Test_Transpile_Stage) -> bool {
     // coordinates.
     next_number: s64 = 1;
     for file: stage.files {
-        output := transpile_test_file(file, next_number, pipeline);
+        output := transpile_test_file(file, next_number, pipeline, stage.pipeline_omitted);
         if output.diagnostics.count > 0 {
             for diagnostic: output.diagnostics {
                 print("[juice ERROR] %1:%2,%3: %4\n", file.rel_path, diagnostic.line, diagnostic.column, diagnostic.message);
@@ -518,10 +520,10 @@ test_transpile_front :: (stage: *Test_Transpile_Stage) -> bool {
 // (the PRESTEP stage included), so no hook fires on that path (the ticket
 // 027 zero-plan posture).
 test_prepared_workspace :: (
-    prepared: *Juice.Prepared_Workspace,
+    prepared: *Prepared_Workspace,
     pattern: string,
     hook_table: [] Hook_Registration = .[],
-    collect: #type (prepared: *Juice.Prepared_Workspace) -> ([] Scan_File, bool) = collect_test_files,
+    collect: #type (prepared: *Prepared_Workspace) -> ([] Scan_File, bool) = collect_test_files,
     spawn: #type (runner_path: string, import_dirs: [] string) -> Process_Result = spawn_test_compiler,
     host_spawn: #type (host_path: string, import_dirs: [] string) -> Process_Result = spawn_plugin_host
 ) -> bool {
@@ -563,7 +565,7 @@ test_prepared_workspace :: (
     // values only — member values live in the PRESTEP host and the generated
     // metaprogram). The resolved pipeline is the view key's pipeline
     // description.
-    resolved := resolve_package_plugins(prepared.discovery.root_package.plugins);
+    resolved := resolve_package_plugins(prepared.discovery.root_package.plugins, prepared.discovery.root_package.plugins_omitted);
     if !resolved.ok {
         for diagnostic: resolved.diagnostics print("[juice ERROR] %\n", diagnostic.message);
         print("[juice ERROR] Invalid plugin declarations.\n");
@@ -620,6 +622,7 @@ test_prepared_workspace :: (
     tstage.prepared = prepared;
     tstage.files = files;
     tstage.pipeline = resolved.pipeline;
+    tstage.pipeline_omitted = false;
     tstage.prestep = *pstage;
     lctx.views = *tstage;
     if !run_mounted_hooks(dispatch_table, .TRANSPILE, .before, *lctx) return false;

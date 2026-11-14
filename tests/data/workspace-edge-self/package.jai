@@ -1,9 +1,9 @@
 #import "Juice";
 
 PACKAGE :: Package.{
-    name    = "edge_self",
     version = "0.1.0",
-    type    = .BIN,
+    name    = "edge_self",
+
     workspace = .{
         members = string.["."],
     },

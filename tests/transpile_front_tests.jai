@@ -41,7 +41,7 @@ tfront_fake_key :: (rel: string) -> string {
 
 // The recording transpile seam: a fake view per file and the fake key. The
 // signature matches Strip_View_State.transpile exactly.
-tfront_fake_transpile :: (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin) -> Build_File_Output {
+tfront_fake_transpile :: (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin, pipeline_omitted: bool = true) -> Build_File_Output {
     output: Build_File_Output;
     output.view = tprint("// fake view of %1\n", file.rel_path);
     output.key = tfront_fake_key(file.rel_path);

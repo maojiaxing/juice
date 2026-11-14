@@ -412,7 +412,7 @@ generate_test_metaprogram :: (options: Test_Metaprogram_Options) -> string {
 // constant. The command builds the stage and dispatches the lifecycle
 // hooks; the built-in COMPILE front below consumes it.
 Test_Compile_Stage :: struct {
-    prepared:            *Juice.Prepared_Workspace;
+    prepared:            *Prepared_Workspace;
     files:               [] Scan_File;
     view_paths:          [] string;
     transpile_dir:       string;

@@ -4,7 +4,8 @@
 // the run command's exit-code passthrough (juice maps any failing artifact
 // exit to command failure).
 PACKAGE :: Package.{
-    name    = "run-fail",
+    executables = .[.{name = "run_fail", entry = "src/main.jai"}],
     version = "0.1.0",
-    type    = .BIN,
+    name    = "run-fail",
+
 };

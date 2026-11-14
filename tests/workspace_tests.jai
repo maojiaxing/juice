@@ -66,7 +66,7 @@ test "Preparation without targets skips dependencies" {
     test_fake_discovery.root_package.name = "demo";
     test_fake_discovery.root_package.version = "1";
     test_plan_resolution_success = true;
-    test_resolved_plans = Juice.Artifact_Plan.[];
+    test_resolved_plans = Artifact_Plan.[];
     state: Workspace_State;
     expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
     expect(prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies));
@@ -85,12 +85,12 @@ test "Preparation with targets prepares the declared member snapshot" {
     test_fake_discovery.has_package = true;
     test_fake_discovery.root_package.name = "demo";
     test_fake_discovery.root_package.version = "1";
-    test_fake_discovery.member_packages = Juice.Package.[
+    test_fake_discovery.member_packages = Normalized_Package.[
         .{name = "root", dir = "root"},
-        .{name = "member", dir = "root/member", dependencies = Juice.Dependency.[.{name = "member-lib"}]},
+        .{name = "member", dir = "root/member", dependencies = Dependency_Reference.[.{name = "member-lib"}]},
     ];
     test_plan_resolution_success = true;
-    test_resolved_plans = Juice.Artifact_Plan.[.{target = .{name = "demo"}}];
+    test_resolved_plans = Artifact_Plan.[.{target = .{name = "demo"}}];
     test_dependency_ok = true;
     state: Workspace_State;
     expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
@@ -112,9 +112,9 @@ test "Preparation without targets forces dependencies on request" {
     test_fake_discovery.has_package = true;
     test_fake_discovery.root_package.name = "demo";
     test_fake_discovery.root_package.version = "1";
-    test_fake_discovery.member_packages = Juice.Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
+    test_fake_discovery.member_packages = Normalized_Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
     test_plan_resolution_success = true;
-    test_resolved_plans = Juice.Artifact_Plan.[];
+    test_resolved_plans = Artifact_Plan.[];
     test_dependency_ok = true;
     state: Workspace_State;
     expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
@@ -140,7 +140,7 @@ test "Resolution failure publishes no prepared workspace" {
     expect(!prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies));
     expect(state.phase == .DISCOVERED && get_prepared_workspace(*state) == null);
     test_plan_resolution_success = true;
-    test_resolved_plans = Juice.Artifact_Plan.[];
+    test_resolved_plans = Artifact_Plan.[];
     expect(prepare_workspace("", "", *state, test_fake_resolve, test_fake_prepare_dependencies) && state.phase == .PREPARED);
 }
 
@@ -151,7 +151,7 @@ test "Dependency failure publishes no prepared workspace" {
     test_fake_discovery.root_package.name = "demo";
     test_fake_discovery.root_package.version = "1";
     test_plan_resolution_success = true;
-    test_resolved_plans = Juice.Artifact_Plan.[.{target = .{name = "demo"}}];
+    test_resolved_plans = Artifact_Plan.[.{target = .{name = "demo"}}];
     test_dependency_ok = false;
     state: Workspace_State;
     expect(ensure_workspace_discovered("", "", *state, test_fake_discover));
@@ -187,7 +187,7 @@ test "Prepared workspace ensure hands back the prepared result" {
     test_fake_discovery.root_package.name = "demo";
     test_fake_discovery.root_package.version = "1";
     test_plan_resolution_success = true;
-    test_resolved_plans = Juice.Artifact_Plan.[];
+    test_resolved_plans = Artifact_Plan.[];
     state: Workspace_State;
     prepared := ensure_workspace_prepared("", "", *state, test_fake_discover, test_fake_resolve, test_fake_prepare_dependencies);
     expect(prepared != null && state.phase == .PREPARED);
@@ -201,7 +201,7 @@ test "Prepared workspace ensure is idempotent" {
     test_fake_discovery.root_package.name = "demo";
     test_fake_discovery.root_package.version = "1";
     test_plan_resolution_success = true;
-    test_resolved_plans = Juice.Artifact_Plan.[];
+    test_resolved_plans = Artifact_Plan.[];
     state: Workspace_State;
     first := ensure_workspace_prepared("", "", *state, test_fake_discover, test_fake_resolve, test_fake_prepare_dependencies);
     expect(first != null);

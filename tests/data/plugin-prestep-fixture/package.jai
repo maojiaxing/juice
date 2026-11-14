@@ -15,19 +15,19 @@
 // The two failing/kept test blocks live in src/kept_tests.jai and
 // src/dropped_tests.jai; only the dropped one may disappear.
 PACKAGE :: Package.{
-    name    = "plugin-prestep-fixture",
     version = "0.1.0",
-    type    = .BIN,
-    targets = Target.[
-        .{name = "plugin-prestep-fixture", main_file = "src/main.jai"},
+    name    = "plugin-prestep-fixture",
+
+    executables = .[
+        .{name = "plugin_prestep_fixture", entry = "src/main.jai"},
     ],
     workspace = .{
         members = string.["packages/prestep-plugin"],
     },
     plugins = Plugin_Declaration.[
-        .{
-            id      = "prestep-plugin",
-            version = "0.1.0",
+        .{builtin = "load"},
+        .{builtin = "test-block"},
+        .{id = "prestep-plugin", source = .{kind = .PATH, path = "packages/prestep-plugin"},
             options = Plugin_Option.[
                 .{key = "entry",       value = "src/main.jai"},
                 .{key = "replacement", value = ".prestep/main.jai"},

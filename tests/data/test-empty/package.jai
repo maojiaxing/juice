@@ -7,7 +7,7 @@
 // The static tree carries no src/ and no target/ — the E2E scenario removes
 // the session target/ after each run so the fixture stays clean.
 PACKAGE :: Package.{
-    name    = "test-empty",
     version = "0.1.0",
-    type    = .BIN,
+    name    = "test-empty",
+
 };
