@@ -37,4 +37,4 @@ src/dependency.jai、src/metaprogram.jai、新内部解析状态文件、相关m
 - 修复的真实缺陷：解析失败仍置 success 且静默不发布；`#import` 重写丢失分号；已解析提供方重复选择跳过判重；WORKSPACE 归属只查包目录而不上溯工作区且未校验成员资格；Windows 递归删除异步导致内容发布间歇 “Access is denied”（改为原地 clone + 校验 commit，删除有界等待）；Git 内容缓存键过长触发 MAX_PATH（缩短为 24 字符 + 48 位摘要）。
 - 门禁证据（Windows，`target/evidence/`）：fresh `jai build.jai` exit 0；聚焦 `test dependency_resolution_` 连续三轮 14/14；`test workspace_` 11/11；完整 `test` 连续两次 346 passed / 0 failed、EXIT 0（`m0091d-full-1.log`、`m0091d-full-2.log`）。合入前 `test dependency_resolution_` 在实现树同样 14/14。
 - 全量日志中的 `path:line:col: expect failed` 行是 Testing 模块自测的故意失败夹具（`module_tests` 与发布面自测），数量与基线一致。
-- 限制：仅 Windows 验证；POSIX 分支未实测。深度超过 MAX_PATH 的用户路径仍不支持（未实现 `\?\` 长路径）。命令层完整选包/参数组合、插件接线与文档分别留 0092/0093/0094–0096。本票不构成 0087 全部交付。
+- 限制：仅 Windows 验证；POSIX 分支未实测。深度超过 MAX_PATH 的用户路径仍不支持（未实现 Win32 长路径前缀）。命令层完整选包/参数组合、插件接线与文档分别留 0092/0093/0094–0096。本票不构成 0087 全部交付。
