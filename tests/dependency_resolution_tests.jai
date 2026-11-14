@@ -223,14 +223,30 @@ dr_git_head :: (repo: string) -> string {
     return head;
 }
 
-// Every directory under the case's content cache; the leaf names are commit ids.
+// The immediate subdirectories of one directory. visit_files reports files only
+// unless directories are requested explicitly, and file_list uses that default,
+// so a listing built on file_list silently returns no directories at all.
+dr_subdirectories :: (path: string) -> [..] string {
+    Collect :: struct {
+        directories: [..] string;
+    }
+    collect: Collect;
+    visitor :: (info: *File_Visit_Info, collect: *Collect) {
+        if !info.is_directory return;
+        array_add(*collect.directories, copy_string(info.full_name));
+    }
+    if !is_directory(path) return collect.directories;
+    visit_files(path, false, *collect, visitor, visit_files = false, visit_directories = true, visit_symlinks = false, follow_directory_symlinks = false);
+    return collect.directories;
+}
+
+// Every checkout directory under the case's content cache; the leaf names are
+// commit ids.
 dr_content_directories :: (scratch: string) -> [..] string {
     directories: [..] string;
     root := dr_path(scratch, "xdg-cache/juice/content");
-    sources := file_list(root, recursive = false, follow_directory_symlinks = false);
-    for source: sources {
-        entries := file_list(source, recursive = false, follow_directory_symlinks = false);
-        for entry: entries array_add(*directories, copy_string(entry));
+    for source: dr_subdirectories(root) {
+        for entry: dr_subdirectories(source) array_add(*directories, copy_string(entry));
     }
     return directories;
 }
