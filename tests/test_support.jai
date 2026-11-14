@@ -39,6 +39,28 @@ otter_scratch :: (name: string) -> string {
     return target_scratch_dir(otter_target_dir(), name);
 }
 
+// Scratch root outside every package: commands resolve the nearest package.jai
+// upward, so a fixture placed under this repository's target/ would silently
+// belong to the repository package. Tests that exercise the no-declaration
+// behavior (for example "no package.jai found") need a root whose ancestors
+// carry no declaration at all.
+external_scratch :: (name: string) -> string {
+    temporary := external_temporary_root();
+    return path_slashes(tprint("%1/juice-test-%2", temporary, name));
+}
+
+external_temporary_root :: () -> string {
+    for variable: string.["TEMP", "TMP", "HOME"] {
+        c_name := temp_c_string(variable);
+        c_value := getenv(c_name);
+        if !c_value continue;
+        value := to_string(c_value);
+        if value == "" continue;
+        return value;
+    }
+    return ".";
+}
+
 // A crash-recovery backup path under target/recovery — the zone the test
 // command never prunes (park_source_file/restore_source_file below).
 otter_recovery_path :: (file_name: string) -> string {
@@ -175,6 +197,22 @@ run_otter_child_at :: (working_dir: string, arguments: [] string) -> (Process_Re
     for argument: arguments array_add(*args, argument);
     result, output, errors, _ := run_command(..args, working_directory = working_dir, capture_and_return_output = true);
     return result, output, errors;
+}
+
+// Occurrence count of a literal needle, used by fixtures that must prove a
+// member or product appears exactly once (overlap deduplication) instead of
+// matching a duplicate silently.
+count_text_occurrences :: (haystack: string, needle: string) -> s64 {
+    if needle == "" return 0;
+    count := 0;
+    cursor := 0;
+    while cursor <= haystack.count - needle.count {
+        found := find_index_from_left(slice(haystack, cursor, haystack.count - cursor), needle);
+        if found < 0 break;
+        count += 1;
+        cursor += found + needle.count;
+    }
+    return count;
 }
 
 expect_exit :: (name: string, result: Process_Result, want: s32, tag := "child") -> bool {

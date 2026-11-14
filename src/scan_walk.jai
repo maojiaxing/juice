@@ -84,7 +84,9 @@ collect_scan_files :: (
 
 scan_collect_visitor :: (info: *File_Visit_Info, walk: *Scan_Walk_Context($T)) {
     if info.is_directory {
-        if walk.dir_excluded(info, walk.user_data) {
+        // Any child declaration owns its subtree, even if unregistered or
+        // invalid. Do not evaluate it while collecting this package's inputs.
+        if walk.dir_excluded(info, walk.user_data) || inspect_path_entry(tprint("%/package.jai", info.full_name)).exists {
             info.descend_into_directory = false;
             return;
         }

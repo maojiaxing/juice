@@ -573,9 +573,9 @@ test "Test front: a nonzero compiler exit fails the command" {
 
 // The real collection composed into the orchestration: the static fixture's
 // scan order and member pruning flow into the written driver (the member
-// subtree never appears), and the products land under the fixture's
-// target/transpile — removed after the test so the static fixture stays
-// clean.
+// subtree never appears), a child package declaration prunes its own subtree,
+// and the products land under the fixture's target/transpile — removed after
+// the test so the static fixture stays clean.
 test "Test front: the real collection composes into the generated products" {
     root := path_slashes(tprint("%1/tests/data/scan-fixture", otter_root()));
     defer delete_directory_full(transpile_tree_dir(root));
@@ -591,16 +591,15 @@ test "Test front: the real collection composes into the generated products" {
     expect(ok);
     expect(find_index_from_left(runner, "member-a") < 0);
     expect(find_index_from_left(runner, "target/h.jai") < 0);
+    expect(find_index_from_left(runner, "lib_deep") < 0);
     package_views := test_program_package_view_paths(runner);
     a_root := -1;
-    deep := -1;
     tests_e := -1;
     for view, index: package_views {
         if ends_with(view, "/a_root.jai") a_root = index;
-        if ends_with(view, "/lib_deep/package.jai") deep = index;
         if ends_with(view, "/tests/e.jai") tests_e = index;
     }
-    expect(a_root >= 0 && deep >= 0 && tests_e >= 0 && a_root < deep && deep < tests_e);
+    expect(a_root >= 0 && tests_e >= 0 && a_root < tests_e);
 }
 
 // ===========================================================================

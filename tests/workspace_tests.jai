@@ -24,7 +24,9 @@ test "Workspace member path validity gate" {
     expect(!workspace_relative_path_is_valid("/abs"));
     expect(!workspace_relative_path_is_valid("C:/abs"));
     expect(!workspace_relative_path_is_valid("../escape"));
-    expect(!workspace_relative_path_is_valid("a/../b"));
+    // ".." is resolved before the containment check: a path that stays inside
+    // the workspace after normalization is legal (spec 0087 decision 8).
+    expect(workspace_relative_path_is_valid("a/../b"));
     expect(workspace_relative_path_is_valid("."));
     expect(workspace_relative_path_is_valid("member_lib"));
     expect(workspace_relative_path_is_valid("member_lib/."));
@@ -267,26 +269,30 @@ test "E2E: discovery rejects an invalid member manifest" {
 }
 
 // "member_lib/." differs textually from "member_lib" but normalizes to the
-// same directory (a measured spelling).
-test "E2E: discovery rejects duplicate member paths" {
+// same directory (a measured spelling). Overlapping member matches are
+// deduplicated by real package identity (spec 0087 decision 16), so the same
+// package appears once instead of failing discovery.
+test "E2E: discovery deduplicates overlapping member paths" {
     result, output, _ := run_workspace_discovery_child("workspace-bad-duplicate");
     expect(expect_exit("bad-duplicate", result, 0, "discovery child"));
     expect(output_matches("bad-duplicate", output, string.[
-        "[juice ERROR] Duplicate workspace member path: member_lib/.",
-        "discovery-ok=false",
+        "discovery-ok=true",
+        "member=member_lib deps=0",
     ]));
+    expect(count_text_occurrences(output, "member=member_lib deps=0") == 1);
 }
 
 // Edge case: the root lists "." as a member — normalization makes it equal
-// to the root, which entered the member list first, hitting the duplicate
-// branch (pins old juice's behavior).
-test "E2E: discovery rejects the root listed as its own member" {
+// to the root, which the root package already covers. The root is included
+// automatically and cannot be duplicated (spec 0087 decision 16).
+test "E2E: discovery counts the root listed as its own member once" {
     result, output, _ := run_workspace_discovery_child("workspace-edge-self");
     expect(expect_exit("edge-self", result, 0, "discovery child"));
     expect(output_matches("edge-self", output, string.[
-        "[juice ERROR] Duplicate workspace member path: .",
-        "discovery-ok=false",
+        "discovery-ok=true",
+        "member=edge_self deps=0",
     ]));
+    expect(count_text_occurrences(output, "member=edge_self deps=0") == 1);
 }
 
 // The dependency declaration face: the root references both members through
