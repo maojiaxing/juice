@@ -283,47 +283,6 @@ resolution_remove_directory :: (path: string) -> bool {
     return !file_exists(path) && !path_is_symlink(path);
 }
 
-resolution_move_directory :: (source: string, destination: string) -> bool {
-    #if OS == .WINDOWS {
-        result := run_command("cmd", "/c", "move", path_backslashes(source), path_backslashes(destination));
-        return result.type == .EXITED && result.exit_code == 0;
-    } else {
-        result := run_command("mv", source, destination);
-        return result.type == .EXITED && result.exit_code == 0;
-    }
-}
-
-// Publish completed content by renaming the partial checkout onto its final
-// name, from any of several resources that may be materializing the same
-// commit at once (two consumers, or a build followed by an update in the same
-// consumer context). The rename is atomic on the same volume, so exactly one
-// winner publishes and the others observe a complete directory. A loser is not
-// an error: it verifies the published checkout instead.
-publish_partial_checkout :: (partial: string, checkout: string, commit: string) -> bool {
-    for attempt: 0..19 {
-        if resolution_move_directory(partial, checkout) return true;
-        if is_directory(checkout) {
-            current, current_ok := git_checkout_commit(checkout);
-            if current_ok && current == commit {
-                resolution_remove_directory(partial);
-                return true;
-            }
-        }
-        sleep_milliseconds(50);
-    }
-    // A concurrent owner may still be mid-rename: accept the published tree only
-    // when it really carries the requested commit.
-    if is_directory(checkout) {
-        current, current_ok := git_checkout_commit(checkout);
-        if current_ok && current == commit {
-            resolution_remove_directory(partial);
-            return true;
-        }
-    }
-    resolution_remove_directory(partial);
-    return false;
-}
-
 // Publish the complete selection set for one consumer context atomically. A
 // failure leaves the previous file untouched.
 publish_resolution_state :: (environment: Resolution_Environment, consumer_root: string, selections: [] Resolved_Selection) -> bool {
@@ -491,21 +450,41 @@ git_ensure_content :: (environment: Resolution_Environment, url: string, commit:
     }
     if !make_directory_if_it_does_not_exist(get_directory_path(checkout), recursive = true) return "", tprint("Could not create the content cache directory: %", checkout);
 
-    partial := tprint("%.partial", checkout);
-    resolution_remove_directory(partial);
-    _, cloned := git_captured_value(string.["clone", "--quiet", "--no-checkout", "--shared", repository, partial]);
-    if !cloned {
-        resolution_remove_directory(partial);
-        return "", tprint("Could not materialize Git content for commit %: %", commit, url);
+    // Materialize straight into the final path instead of renaming a staging
+    // directory over it. On Windows a staged directory can keep "Access is
+    // denied" for a rename long after the git commands that wrote it exited,
+    // and a rename has no recovery path, so the cache is filled the way git
+    // itself fills it: clone into place, then check out the exact commit.
+    // Incomplete content is never trusted - the entry check above validates the
+    // commit and rebuilds a checkout that does not match - so a clone
+    // interrupted here costs work, never correctness.
+    resolution_remove_directory(checkout);
+    cloned_now := false;
+    for attempt: 0..4 {
+        _, cloned := git_captured_value(string.["clone", "--quiet", "--no-checkout", "--shared", repository, checkout]);
+        if cloned {
+            cloned_now = true;
+            break;
+        }
+        // A concurrent owner may have won the same path; accept it only when it
+        // is a real checkout of this commit.
+        if is_directory(checkout) {
+            current, current_ok := git_checkout_commit(checkout);
+            if current_ok && current == commit return checkout, "";
+        }
+        resolution_remove_directory(checkout);
+        sleep_milliseconds(100);
     }
-    _, checked_out := git_captured_value(string.["-C", partial, "checkout", "--quiet", "--detach", commit]);
+    if !cloned_now return "", tprint("Could not materialize Git content for commit %: %", commit, url);
+    _, checked_out := git_captured_value(string.["-C", checkout, "checkout", "--quiet", "--detach", commit]);
     if !checked_out {
-        resolution_remove_directory(partial);
+        resolution_remove_directory(checkout);
         return "", tprint("Could not check out commit % in %", commit, url);
     }
-    resolution_remove_directory(checkout);
-    if !publish_partial_checkout(partial, checkout, commit) {
-        return "", tprint("Could not publish Git content for commit %: %", commit, checkout);
+    current, current_ok := git_checkout_commit(checkout);
+    if !current_ok || current != commit {
+        resolution_remove_directory(checkout);
+        return "", tprint("Could not materialize Git content for commit %: %", commit, checkout);
     }
     return checkout, "";
 }
