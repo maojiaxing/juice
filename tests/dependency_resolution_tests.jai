@@ -398,6 +398,16 @@ dependency_resolution_module_identity_and_name_conflicts :: () {
     defer dr_restore_env();
     expect(dr_write_module_provider(dr_path(scratch, "provider"), "provider", "Provider_Value :: 7;\n"));
     app := dr_path(scratch, "app");
+    // The package's own module is an import name of the package (story 37), so
+    // the shadowing diagnostics below are checked while that name is registered
+    // and resolving: one selection plus the own module compiles.
+    expect(dr_write_app(app, "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    modules = .[.{name = \"AppMod\", entry = \"src/appmod.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"one\", source = .{kind = .PATH, path = \"../provider\"}, modules = .[.{alias = \"First\"}]},\n    ],\n",
+        "#import \"Basic\";\n#import \"AppMod\";\n#import \"First\";\n\nmain :: () { print(\"%1 %2\\n\", App_Module, Provider_Value); }\n"));
+    expect(dr_write_file(dr_path(app, "src"), "appmod.jai", "App_Module :: 1;\n"));
+    expect(dr_build_app(app) == 0);
+    own_exit, own_output := dr_run_app(app);
+    expect(own_exit == 0 && contains(own_output, "1 7"));
+
     expect(dr_write_app(app, "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    modules = .[.{name = \"AppMod\", entry = \"src/appmod.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"one\", source = .{kind = .PATH, path = \"../provider\"}, modules = .[.{alias = \"First\"}]},\n        .{name = \"two\", source = .{kind = .PATH, path = \"../provider\"}, modules = .[.{alias = \"Second\"}]},\n    ],\n",
         "#import \"Basic\";\n\nmain :: () { print(\"unused\\n\"); }\n"));
     expect(dr_write_file(dr_path(app, "src"), "appmod.jai", "App_Module :: 1;\n"));
@@ -508,4 +518,95 @@ dependency_resolution_workspace_source_membership :: () {
     expect(outside_result.exit_code != 0);
     outside_combined := tprint("%\n%", outside_output, outside_errors);
     expect(contains(outside_combined, "not a workspace member") || contains(outside_combined, "WORKSPACE path escapes"));
+} @test
+
+// ===========================================================================
+// A04 own-module imports (story 37, decision 11)
+// ===========================================================================
+
+// A package's own declared public module is importable by its public name
+// inside that package: by its program and by another of its own modules. The
+// import name belongs to the package that declares it, so using the package's
+// own public surface needs no dependency selection (story 37, decision 11).
+dependency_resolution_own_module_public_import :: () {
+    scratch := dr_scratch("own-module");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+
+    app := dr_path(scratch, "calcapp");
+    declaration_body := "    modules = .[.{name = \"calc\", entry = \"calc.jai\"}, .{name = \"more\", entry = \"more.jai\"}],\n    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n";
+    main_source := "#import \"Basic\";\n#import \"calc\";\n#import \"more\";\n\nmain :: () { print(\"calc=%1 more=%2\\n\", Calc_Value, More_Value); }\n";
+    expect(dr_write_app(app, declaration_body, main_source));
+    expect(dr_write_file(app, "calc.jai", "Calc_Value :: 41;\n"));
+    // A second public module of the same package references the first by its
+    // public name: the same shim must resolve inside the package's own sources.
+    expect(dr_write_file(app, "more.jai", "#import \"calc\";\n\nMore_Value :: Calc_Value + 1;\n"));
+
+    expect(dr_build_app(app) == 0);
+    exit_code, run_output := dr_run_app(app);
+    expect(exit_code == 0 && contains(run_output, "calc=41 more=42"));
+    // The own-module shims are package-private, in the package's own target/.
+    expect(dr_has_shim(app, "calc") && dr_has_shim(app, "more"));
+
+    // run compiles through the same import path.
+    run_result, run_output_child, run_errors := dr_run(app, string.["run", "app"]);
+    expect(expect_exit("own-module-run", run_result, 0));
+    expect(output_matches("own-module-run", tprint("%\n%", run_output_child, run_errors), .["calc=41 more=42"]));
+} @test
+
+// The same rule holds for a selected workspace member, and importing names stay
+// package-scoped: two members may declare the same public module name, each
+// resolving to its own module, and one member's own module never becomes an
+// import name of another member (decision 11).
+dependency_resolution_own_module_workspace_members :: () {
+    scratch := dr_scratch("own-module-workspace");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+
+    workspace := dr_path(scratch, "ws");
+    expect(dr_write_file(workspace, "package.jai", "#import \"Juice\";\n\nPACKAGE :: Package.{\n    workspace = .{members = string.[\"members/*\"]},\n};\n"));
+
+    // Two members, each declaring a module called `helper` with a different
+    // value: importing names are package-scoped, not workspace-global.
+    one := dr_path(workspace, "members/one");
+    one_declaration := "#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"1\",\n    name    = \"one\",\n    modules = .[.{name = \"helper\", entry = \"helper.jai\"}],\n    executables = .[.{name = \"one\", entry = \"src/main.jai\"}],\n};\n";
+    one_main := "#import \"Basic\";\n#import \"helper\";\n\nmain :: () { print(\"one helper=%\\n\", Helper_Value); }\n";
+    expect(dr_write_file(one, "package.jai", one_declaration));
+    expect(dr_write_file(one, "helper.jai", "Helper_Value :: 5;\n"));
+    expect(build_seam_write(dr_path(one, "src"), "main.jai", one_main));
+    two := dr_path(workspace, "members/two");
+    two_declaration := "#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"1\",\n    name    = \"two\",\n    modules = .[.{name = \"helper\", entry = \"helper.jai\"}],\n    executables = .[.{name = \"two\", entry = \"src/main.jai\"}],\n};\n";
+    two_main := "#import \"Basic\";\n#import \"helper\";\n\nmain :: () { print(\"two helper=%\\n\", Helper_Value); }\n";
+    expect(dr_write_file(two, "package.jai", two_declaration));
+    expect(dr_write_file(two, "helper.jai", "Helper_Value :: 500;\n"));
+    expect(build_seam_write(dr_path(two, "src"), "main.jai", two_main));
+
+    // Both members declare `helper`; each build resolves its own, so the shared
+    // command never maps one import name to two different modules.
+    workspace_result, workspace_output, workspace_errors := dr_run(workspace, string.["build", "--workspace"]);
+    workspace_combined := tprint("%\n%", workspace_output, workspace_errors);
+    expect(expect_exit("own-module-workspace-build", workspace_result, 0));
+    expect(output_matches("own-module-workspace-build", workspace_combined, .["Compiling Target 'one'", "Compiling Target 'two'"]));
+    expect(output_matches("own-module-workspace-build", workspace_combined, .["two different modules"], want = false));
+    // Each member's own-module shims live in that member's own target/.
+    expect(dr_has_shim(dr_path(workspace, "members/one"), "helper"));
+    expect(dr_has_shim(dr_path(workspace, "members/two"), "helper"));
+
+    // Each program read its own member's module.
+    one_result, one_output, one_errors := dr_run(workspace, string.["run", "-p", "one"]);
+    expect(expect_exit("own-module-workspace-run-one", one_result, 0));
+    expect(output_matches("own-module-workspace-run-one", tprint("%\n%", one_output, one_errors), .["one helper=5"]));
+    two_result, two_output, two_errors := dr_run(workspace, string.["run", "-p", "two"]);
+    expect(expect_exit("own-module-workspace-run-two", two_result, 0));
+    expect(output_matches("own-module-workspace-run-two", tprint("%\n%", two_output, two_errors), .["two helper=500"]));
+
+    // Another member's own module is not an import name of this member.
+    sibling_consumer := "#import \"Basic\";\n#import \"sibling_only\";\n\nmain :: () { print(\"%\\n\", Sibling_Value); }\n";
+    expect(build_seam_write(dr_path(workspace, "members/one/src"), "main.jai", sibling_consumer));
+    expect(dr_write_file(dr_path(workspace, "members/two"), "package.jai", "#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"1\",\n    name    = \"two\",\n    modules = .[.{name = \"helper\", entry = \"helper.jai\"}, .{name = \"sibling_only\", entry = \"sibling_only.jai\"}],\n    executables = .[.{name = \"two\", entry = \"src/main.jai\"}],\n};\n"));
+    expect(dr_write_file(dr_path(workspace, "members/two"), "sibling_only.jai", "Sibling_Value :: 1;\n"));
+    sibling_result, sibling_output, sibling_errors := dr_run(workspace, string.["build", "-p", "one"]);
+    expect(sibling_result.exit_code != 0);
+    sibling_combined := tprint("%\n%", sibling_output, sibling_errors);
+    expect(contains(sibling_combined, "Unable to find a module called 'sibling_only'"));
 } @test
