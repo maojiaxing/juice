@@ -503,17 +503,21 @@ test "E2E: an installed juice runs the real jaix member through the host" {
     ]));
 
     // Negative: delete exactly one installed plugin-face closure copy — from
-    // the scratch install only — and rerun. The host program's `#import
-    // "juice_core"` reaches the missing closure: the host compile fails
-    // loudly before the build compile, never a green or zero-plugin run.
+    // the scratch install only — and rerun. Ticket 0094's unit check runs
+    // before any package work, so the missing published support source is
+    // refused as an incomplete installation: the run fails loudly, names the
+    // artifact and never degrades into a green or zero-plugin build. (Before
+    // the unit check this surfaced later, as the host program's compile error;
+    // the observable contract — a missing support source fails the command,
+    // never a green run — is unchanged and now reported up front.)
     missing_closure := juice_plugin_face_file_path(modules_dir, "plugin.jai");
     expect(file_exists(missing_closure));
     expect(file_delete(missing_closure));
     result, output, errors = run_command(installed_exe, "build", working_directory = root, capture_and_return_output = true);
     expect(expect_exit("jaix-installed missing-face", result, 1));
-    expect(child_output_contains("jaix-installed missing-face", errors, "Unable to open file"));
-    expect(child_output_contains("jaix-installed missing-face", errors, "plugin_face/plugin.jai"));
-    expect(child_output_contains("jaix-installed missing-face", output, "[juice ERROR] Plugin host failed (exit "));
+    expect(child_output_contains("jaix-installed missing-face", output, "the installed artifact juice_internal/plugin_face/plugin.jai is missing"));
+    expect(child_output_contains("jaix-installed missing-face", output, "not one compatible installation"));
+    expect(output_matches("jaix-installed missing-face", output, string.["passed, 0 failed", "Plugin host failed"], want = false));
 }
 
 test "E2E: an installed juice fails loudly when the jaix member is missing" {

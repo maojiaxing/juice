@@ -1173,28 +1173,29 @@ test "E2E: an installed juice runs the real member plugin and lints a scratch wo
     // Negative case (ticket 053, review fix F1; parent 048 decision 12 /
     // US 4): delete exactly one installed closure copy — from the scratch
     // install only, never the repository — and rerun the installed
-    // executable at the scratch root. The plugin test program imports
-    // juice_core, whose module-relative #load now names a missing file: the
-    // compile must fail loudly (jai's original error, nonzero exit), never
-    // degrade into a green or zero-plugin run. The deletion happens after
-    // every positive assertion above, so they observe the complete install.
+    // executable at the scratch root. Ticket 0094's installation-unit check
+    // runs before any package work, so the missing published support source is
+    // refused as an incomplete installation: nonzero exit, the diagnostic names
+    // the artifact, and the run never degrades into a green or zero-plugin
+    // result. (Before the unit check the same deletion surfaced later, as the
+    // test program's compile error; the contract — a missing support source
+    // fails the command — is unchanged and now reported up front.) The deletion
+    // happens after every positive assertion above, so they observe the
+    // complete install.
     missing_closure := juice_plugin_face_file_path(modules_dir, "plugin.jai");
     expect(file_exists(missing_closure));
     expect(file_delete(missing_closure));
     result, output, errors = run_command(installed_exe, "test", working_directory = scratch, capture_and_return_output = true);
     expect(expect_exit("installed-plugin-e2e missing-closure", result, 1),
         "a missing installed closure copy must fail the run");
-    // jai's original compile error names the missing closure file.
-    expect(child_output_contains("installed-plugin-e2e missing-closure", errors, "Error: Unable to open file"));
-    expect(child_output_contains("installed-plugin-e2e missing-closure", errors, "plugin_face/plugin.jai"));
-    // The command reports the compile failure instead of a green or
-    // zero-plugin run: no test start lines, no summary, no "No tests found"
-    // degrade.
-    expect(output_matches("installed-plugin-e2e missing-closure", output, string.["[juice ERROR] Test compilation failed."]));
+    expect(child_output_contains("installed-plugin-e2e missing-closure", output, "the installed artifact juice_internal/plugin_face/plugin.jai is missing"));
+    expect(child_output_contains("installed-plugin-e2e missing-closure", output, "not one compatible installation"));
+    // No test start lines, no summary, no "No tests found" degrade.
     expect(output_matches("installed-plugin-e2e missing-closure", output, string.[
         "[test] BadName",
         "[test] test_good_name",
         "passed, 0 failed",
         "[juice Test] No tests found.",
+        "[juice ERROR] Test compilation failed.",
     ], want = false));
 }
