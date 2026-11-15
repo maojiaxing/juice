@@ -944,3 +944,143 @@ final_review_plugin_provider_dependencies_resolve :: () {
     expect(status_result.exit_code == 0);
     expect(status == "");
 } @test
+
+// ---------------------------------------------------------------------------
+// S11: the derived-output contract is a contract, not a string prefix.
+// Review probes: `<derived>/../../../../outside.jai` satisfied a literal prefix
+// test, a second registration of the same original (identical replacement) was
+// accepted and the winner depended on order, and a failed cleanup of the stale
+// derived area only warned while the run went on to consume stale files.
+// ---------------------------------------------------------------------------
+
+// The most recent lifecycle diagnostic message (the contract API records one
+// ERROR per rejected registration).
+fr_last_error :: (diags: [] Lifecycle_Diagnostic) -> string {
+    if diags.count == 0 return "";
+    return diags[diags.count - 1].message;
+}
+
+// The plugin-visible registration API rejects a replacement that only LOOKS
+// contained: dot segments are resolved before the comparison, so an escape is
+// an escape even when the path string starts with the derived root.
+final_review_substitution_rejects_dot_segment_escape :: () {
+    scratch := dr_scratch("fr-derived-escape");
+    defer delete_directory_full(scratch);
+    root := dr_path(scratch, "pkg");
+    expect(dr_write_file(dr_path(root, "src"), "main.jai", "main :: () {}\n"));
+    expect(dr_write_file(dr_path(root, "src"), "helper.jai", "Helper :: 1;\n"));
+    derived := dr_path(root, "target/plugins/derived/pkg");
+    expect(make_directory_if_it_does_not_exist(derived, recursive = true));
+
+    stage: Prestep_Stage;
+    stage.package_root = root;
+    stage.derived_root = derived;
+    stage.enforce_private_output = true;
+    diags: [..] Lifecycle_Diagnostic;
+    ctx: Lifecycle_Context;
+    ctx.diagnostics = *diags;
+    ctx.prestep = *stage;
+
+    // The pre-fix escape: the literal string starts with the derived root.
+    outside := tprint("%1/../../../../outside.jai", derived);
+    expect(starts_with(outside, derived));
+    expect(!prestep_add_substitution(*ctx, "src/helper.jai", outside));
+    expect(find_index_from_left(fr_last_error(diags), "outside the package's private derived area") >= 0);
+
+    // An inner dot segment that resolves back OUTSIDE is the same violation.
+    array_reset(*diags);
+    inner_escape := tprint("%1/sub/../../../../outside.jai", derived);
+    expect(!prestep_add_substitution(*ctx, "src/helper.jai", inner_escape));
+
+    // A dot segment that resolves INSIDE stays legal: the check is canonical,
+    // not a blanket ban on "..".
+    array_reset(*diags);
+    inside := tprint("%1/sub/../kept.jai", derived);
+    expect(make_directory_if_it_does_not_exist(tprint("%1/sub", derived), recursive = true));
+    expect(write_entire_file(tprint("%1/kept.jai", derived), "// kept\n"));
+    expect(prestep_add_substitution(*ctx, "src/helper.jai", inside));
+} @test
+
+// One logical input, two registrations: rejected even when both name the same
+// replacement, so no plugin can rely on registration order to win.
+final_review_duplicate_substitution_is_rejected :: () {
+    scratch := dr_scratch("fr-derived-duplicate");
+    defer delete_directory_full(scratch);
+    root := dr_path(scratch, "pkg");
+    expect(dr_write_file(dr_path(root, "src"), "helper.jai", "Helper :: 1;\n"));
+    derived := dr_path(root, "target/plugins/derived/pkg");
+    expect(make_directory_if_it_does_not_exist(derived, recursive = true));
+    replacement := tprint("%1/src/helper.jai", derived);
+    expect(make_directory_if_it_does_not_exist(tprint("%1/src", derived), recursive = true));
+    expect(write_entire_file(replacement, "Helper :: 2;\n"));
+
+    stage: Prestep_Stage;
+    stage.package_root = root;
+    stage.derived_root = derived;
+    stage.enforce_private_output = true;
+    diags: [..] Lifecycle_Diagnostic;
+    ctx: Lifecycle_Context;
+    ctx.diagnostics = *diags;
+    ctx.prestep = *stage;
+
+    expect(prestep_add_substitution(*ctx, "src/helper.jai", replacement));
+    expect(!prestep_add_substitution(*ctx, "src/helper.jai", replacement));
+    expect(find_index_from_left(fr_last_error(diags), "duplicate source substitution") >= 0);
+    expect(stage.substitutions.count == 1);
+} @test
+
+// A confirmed report of a physical file that lives outside the derived area is
+// rejected — the host's own registration channel gets the same canonical check
+// as the in-process one.
+final_review_generated_rejects_foreign_physical_path :: () {
+    scratch := dr_scratch("fr-derived-generated");
+    defer delete_directory_full(scratch);
+    root := dr_path(scratch, "pkg");
+    expect(dr_write_file(dr_path(root, "src"), "main.jai", "main :: () {}\n"));
+    derived := dr_path(root, "target/plugins/derived/pkg");
+    expect(make_directory_if_it_does_not_exist(derived, recursive = true));
+    foreign := dr_path(scratch, "outside.jai");
+    expect(write_entire_file(foreign, "Foreign :: 1;\n"));
+
+    stage: Prestep_Stage;
+    stage.package_root = root;
+    stage.derived_root = derived;
+    stage.enforce_private_output = true;
+    diags: [..] Lifecycle_Diagnostic;
+    ctx: Lifecycle_Context;
+    ctx.diagnostics = *diags;
+    ctx.prestep = *stage;
+
+    expect(!prestep_register_generated(*ctx, "src/generated.jai", foreign));
+    expect(find_index_from_left(fr_last_error(diags), "outside the package's private derived area") >= 0);
+    // The dot-segment spelling of the same escape is rejected too.
+    array_reset(*diags);
+    escape := tprint("%1/../../outside.jai", derived);
+    expect(!prestep_register_generated(*ctx, "src/generated.jai", escape));
+} @test
+
+// A stale private derived area that cannot be cleared stops the package instead
+// of warning: the run would otherwise consume files from a directory the plugin
+// layer no longer owns (decision 24: 创建、清理、写入或注册失败中止当前包).
+final_review_stale_derived_area_failure_is_fatal :: () {
+    scratch := dr_scratch("fr-derived-cleanup");
+    defer delete_directory_full(scratch);
+    root := dr_path(scratch, "pkg");
+    expect(dr_write_file(dr_path(root, "src"), "main.jai", "main :: () {}\n"));
+    derived := dr_path(root, "target/plugins/derived/pkg");
+    expect(make_directory_if_it_does_not_exist(derived, recursive = true));
+    // The cleanup seam reports failure (a real undeletable directory needs a
+    // platform lock, so the decision logic is what this case pins).
+    refuse :: (path: string) -> bool {
+        return false;
+    }
+    stage: Prestep_Stage;
+    package_view: Prepared_Package_Plugins;
+    package_view.package_root = root;
+    package_view.derived_root = derived;
+    expect(!prepare_package_derived_view(*package_view, *stage, refuse));
+    // The same view with a working cleanup proceeds and hands the stage its roots.
+    stage_ok: Prestep_Stage;
+    expect(prepare_package_derived_view(*package_view, *stage_ok, delete_directory_full));
+    expect(stage_ok.derived_root == derived && stage_ok.package_root == root);
+} @test

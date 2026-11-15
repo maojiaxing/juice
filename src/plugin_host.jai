@@ -250,12 +250,30 @@ write_package_plugin_registration :: (
 // stale derived tree is removed for hygiene only — correctness comes from the
 // registration table, because nothing ever scans the derived directory (a file
 // an earlier run left behind can therefore never be consumed).
-prepare_package_derived_view :: (package_view: *Prepared_Package_Plugins, stage: *Prestep_Stage) -> bool {
+// The default cleanup: the platform directory removal the rest of the tool uses.
+derived_remove_directory :: (path: string) -> bool {
+    return delete_directory_full(path);
+}
+
+// The cleanup seam is an internal injection point, not a lifecycle mount: a real
+// undeletable directory needs a platform-specific lock, so the decision logic is
+// tested through a recording fake — the same discipline as the build front's
+// is_running/handoff seams.
+prepare_package_derived_view :: (
+    package_view: *Prepared_Package_Plugins,
+    stage: *Prestep_Stage,
+    remove_directory: #type (path: string) -> bool = derived_remove_directory
+) -> bool {
     stage.package_root = package_view.package_root;
     stage.derived_root = package_view.derived_root;
     if package_view.derived_root == "" return true;
-    if is_directory(package_view.derived_root) && !delete_directory_full(package_view.derived_root) {
-        print("[juice WARNING] Could not clear the stale private derived area: %\n", package_view.derived_root);
+    // Decision 24: 创建、清理、写入或注册失败中止当前包. A stale area that cannot be
+    // removed is not a hygiene warning: the run would go on to consume files from
+    // a directory the plugin layer can no longer own, so the failure stops the
+    // package here, before any hook fills the stage.
+    if is_directory(package_view.derived_root) && !remove_directory(package_view.derived_root) {
+        print("[juice ERROR] Could not clear the stale private derived area: %\n", package_view.derived_root);
+        return false;
     }
     return true;
 }

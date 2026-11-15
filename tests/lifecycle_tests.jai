@@ -583,17 +583,22 @@ test "Lifecycle: the prestep table rules absorb duplicates and reject both cross
     ctx := rec_ctx(.PRESTEP, *diags);
     ctx.prestep = *stage;
 
-    // The same original with the same replacement: a no-op (stacked hooks
-    // re-adding an identical row never fail, the row is not duplicated).
+    // Decision 24: a repeated substitution for the same logical input fails even
+    // when both rows name the same replacement. The second registration cannot
+    // know what the first one already wrote, so agreeing is not the same as
+    // being safe.
     expect(prestep_add_substitution(*ctx, "src/a.jai", "C:/mirror/a.jai"));
-    expect(prestep_add_substitution(*ctx, "src/a.jai", "C:/mirror/a.jai"));
-    expect(stage.substitutions.count == 1 && diags.count == 0);
+    expect(!prestep_add_substitution(*ctx, "src/a.jai", "C:/mirror/a.jai"));
+    expect(stage.substitutions.count == 1);
+    expect(diags.count == 1 && diags[0].level == .ERROR);
+    expect(diags[0].message == "duplicate source substitution: src/a.jai");
 
-    // The same original with a different replacement: stage failure.
+    // The same original with a different replacement: the same failure.
+    array_reset(*diags);
     expect(!prestep_add_substitution(*ctx, "src/a.jai", "C:/other/a.jai"));
     expect(stage.substitutions.count == 1);
     expect(diags.count == 1 && diags[0].level == .ERROR);
-    expect(diags[0].message == "conflicting source substitution: src/a.jai");
+    expect(diags[0].message == "duplicate source substitution: src/a.jai");
 
     // A drop of a substituted key: stage failure (one direction).
     array_reset(*diags);

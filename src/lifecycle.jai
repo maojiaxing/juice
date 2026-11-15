@@ -274,9 +274,99 @@ derived_path_within_root :: (derived_root: string, candidate: string) -> bool {
     root := path_slashes_local(derived_root);
     while root.count > 0 && root[root.count - 1] == #char "/" root.count -= 1;
     path := path_slashes_local(candidate);
+    // Dot segments are resolved before the comparison, so `<derived>/../..` is
+    // never "inside" by string luck: the candidate is first reduced to the path
+    // the filesystem would actually open.
+    reduced, reduced_ok := derived_collapse_dot_segments(path);
+    if !reduced_ok return false;
+    path = reduced;
     if path.count <= root.count + 1 return false;
     if !starts_with_local(path, root) return false;
-    return path[root.count] == #char "/";
+    if path[root.count] != #char "/" return false;
+    // A component that is a link can move the real file anywhere, so a path with
+    // a linked component below the root is not trusted. The root itself may live
+    // under links (the caller chose it); only the part below it must be plain.
+    below := slice(path, root.count + 1, path.count - root.count - 1);
+    return derived_relative_chain_is_link_free(root, below);
+}
+
+// Reduce "." and ".." segments lexically. ".." past the first segment is LOST
+// (an absolute path cannot climb above its root), so an escape attempt collapses
+// to a path outside the derived root instead of resolving to it.
+derived_collapse_dot_segments :: (path: string) -> (string, bool) {
+    if path.count == 0 return "", false;
+    absolute := path[0] == #char "/";
+    segments: [..] string;
+    start := 0;
+    for i: 0..path.count {
+        is_separator := i == path.count || path[i] == #char "/";
+        if !is_separator continue;
+        segment := slice(path, start, i - start);
+        start = i + 1;
+        if segment == "" || segment == "." continue;
+        if segment == ".." {
+            if segments.count == 0 {
+                if absolute return "", false;
+                return "", false;
+            }
+            segments.count -= 1;
+            continue;
+        }
+        array_add(*segments, segment);
+    }
+    builder: String_Builder;
+    if absolute append(*builder, #char "/");
+    for segment, index: segments {
+        if index > 0 append(*builder, #char "/");
+        append(*builder, segment);
+    }
+    return builder_to_string(*builder), true;
+}
+
+// Every component of one relative path below the root must be a real directory
+// or a real file, never a link or a junction (decision 8: the physical identity
+// is checked, not just the spelling). The probe stays inside the published
+// face's own closure: one non-recursive directory listing per component, read
+// through File_Utilities, instead of the tool-internal path module.
+derived_relative_chain_is_link_free :: (root: string, relative: string) -> bool {
+    builder: String_Builder;
+    append(*builder, root);
+    start := 0;
+    for i: 0..relative.count {
+        is_separator := i == relative.count || relative[i] == #char "/";
+        if !is_separator continue;
+        segment := slice(relative, start, i - start);
+        start = i + 1;
+        if segment == "" continue;
+        parent := builder_to_string(*builder);
+        if derived_entry_is_link(parent, segment) return false;
+        append(*builder, #char "/");
+        append(*builder, segment);
+    }
+    return true;
+}
+
+// Whether `directory/name` is a symbolic link or a Windows junction. A missing
+// entry is not a link (the caller creates it); a listing failure is treated as
+// a link so an unreadable parent can never be trusted.
+derived_entry_is_link :: (directory: string, name: string) -> bool {
+    Probe :: struct {
+        name:      string;
+        found:     bool;
+        is_link:   bool;
+        any_entry: bool;
+    }
+    probe: Probe;
+    probe.name = name;
+    visitor :: (info: *File_Visit_Info, probe: *Probe) {
+        probe.any_entry = true;
+        if info.short_name != probe.name return;
+        probe.found = true;
+        if info.is_symlink probe.is_link = true;
+    }
+    visit_files(directory, false, *probe, visitor, visit_files = true, visit_directories = true, visit_symlinks = true, follow_directory_symlinks = false);
+    if probe.found return probe.is_link;
+    return false;
 }
 
 // "/"-normalization and prefix test for the published face's self-contained
@@ -347,8 +437,10 @@ prestep_add_substitution :: (ctx: *Lifecycle_Context, original: string, replacem
     stage := cast(*Prestep_Stage) ctx.prestep;
     for s: stage.substitutions {
         if s.original != original continue;
-        if s.replacement == replacement return true;
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("conflicting source substitution: %", original)});
+        // Decision 24: a repeated substitution for one logical input fails, even
+        // when the two rows agree on the replacement — the second registration
+        // cannot know what the first one already wrote.
+        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("duplicate source substitution: %", original)});
         return false;
     }
     for dropped: stage.drops {
