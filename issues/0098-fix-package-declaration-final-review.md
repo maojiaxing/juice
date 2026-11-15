@@ -99,8 +99,26 @@ J1/J2/J3 为维护性判断而非硬错误：普通依赖与插件重复来源�
 | 完整套件第 2 轮 | 已验证 380 passed / 0 failed，exit 0（`GATE-round2.log`） | 未验证 |
 | 合入 integration 后完整套件 | 已验证 380 passed / 0 failed，exit 0（`GATE-postmerge.log`） | 未验证 |
 | H1 后完整套件 | 已验证 380 passed / 0 failed，exit 0（`GATE-h1.log`） | 未验证 |
+| H2/J1/J2a–g/J3 全部完成后 debug 自举 | 已验证 exit 0（`GATE3-debug.log`） | 未验证（本轮范围外） |
+| H2/J1/J2a–g/J3 全部完成后 release 自举 | 已验证 exit 0，`target/juice.exe` 1051136 B（`GATE3-release.log`） | 未验证（本轮范围外） |
+| `publication_install` 过滤（终轮） | 已验证 15/0 exit 0（`GATE3-publication_install.log`） | 未验证（本轮范围外） |
+| S01 单实例（ASCII + Unicode）按名称 | 已验证 1/0 exit 0，两个子进程均 exit 0（`GATE3-s01.log`） | 未验证（本轮范围外） |
+| `final_review_` 按名称 | 已验证 32/0 exit 0（`GATE3-final_review.log`） | 未验证（本轮范围外） |
+| 完整套件（终轮第 1 轮） | 已验证 380 passed / 0 failed，exit 0（`GATE3-round1.log`） | 未验证 |
+| 完整套件（终轮第 2 轮） | 已验证 380 passed / 0 failed，exit 0（`GATE3-round2.log`） | 未验证 |
 | L01 `ic_create_install` 模式复刻 | Windows 分支立即返回 true，POSIX 分支未被触及 → Windows 不构成该分支的证据 | **未验证**：POSIX 分支（`POSIX.stat`/`chmod`）在任何平台都未执行过 |
 
 Linux 历史记录（仅对 `e1743fb` 及其修复前状态有效，不得读作当前通过）：debug/release 自举 exit 0；S01 红；
 安装复制把 0755 降为 0644。
 
+
+**计数口径说明（不得改写）**：完整套件的 `380` 不含 S16b 新增的两个测试。把这两个测试的 `@test`
+标记去掉后套件同样报 380（`CNT-withNew.log` / `CNT-noNew.log` 双向实测），因为汇总把内联
+`test "…"` 块计为 `juice_test_N`。它们的证据是按名称运行的结果，以及 `final_review_` 由 30/0
+增长到 32/0，而不是这 380。
+
+**Standards 终轮处置**：H2 的 100 处声明（首轮 38 + 补充 62）已全部改为完整词，全程未使用保留字
+`context`；J1 抽出共享的来源定位与 Git 选择步骤，保留两侧各自的能力校验、错误文案与离线策略差异，
+WORKSPACE 分支给出不合并的具体技术反证（祖先工作区发现 vs 消费方 discovery 根）；J2a–g 逐项
+或抽取或给出反证；J3 两处转发包装已内联。逐项记录见
+`target/evidence/final-review-fixes/ledger.md`。
