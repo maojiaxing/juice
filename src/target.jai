@@ -29,10 +29,10 @@ make_resolution_failure :: (error: Target_Resolution_Error, message: string) -> 
 make_artifact_failure :: (error: Target_Resolution_Error, message: string) -> Artifact_Plan_Result {
     return .{error = error, error_message = copy_string(message)};
 }
-validate_package_identity :: (pkg: Normalized_Package) -> Target_Resolution_Result, bool {
-    if !package_name_is_valid(pkg.name) return make_resolution_failure(.INVALID_PACKAGE_NAME, "Package name must match [A-Za-z0-9][A-Za-z0-9._-]*."), false;
-    if pkg.version == "" return make_resolution_failure(.INVALID_PACKAGE_VERSION, "Package version must be nonempty."), false;
-    if pkg.dir == "" || !path_exists_as_directory(pkg.dir) || !path_chain_is_link_free(pkg.dir) return make_resolution_failure(.INVALID_PACKAGE_ROOT, "Package root must be an existing real directory."), false;
+validate_package_identity :: (package: Normalized_Package) -> Target_Resolution_Result, bool {
+    if !package_name_is_valid(package.name) return make_resolution_failure(.INVALID_PACKAGE_NAME, "Package name must match [A-Za-z0-9][A-Za-z0-9._-]*."), false;
+    if package.version == "" return make_resolution_failure(.INVALID_PACKAGE_VERSION, "Package version must be nonempty."), false;
+    if package.dir == "" || !path_exists_as_directory(package.dir) || !path_chain_is_link_free(package.dir) return make_resolution_failure(.INVALID_PACKAGE_ROOT, "Package root must be an existing real directory."), false;
     return .{}, true;
 }
 make_effective_target :: (pkg: Normalized_Package, name: string, main_file: string) -> Effective_Target, Target_Resolution_Error, string {
@@ -48,14 +48,14 @@ make_effective_target :: (pkg: Normalized_Package, name: string, main_file: stri
     if !path_is_within(pkg.dir, source_path) return .{}, .SOURCE_OUTSIDE_PACKAGE, "Product entry escapes package root.";
     return .{name = copy_string(name), main_file = copy_string(logical.path), source_path = source_path}, .NONE, "";
 }
-resolve_product_list :: (pkg: Normalized_Package, declarations: [] Declared_Product, omitted: bool, is_module: bool) -> Target_Resolution_Result {
+resolve_product_list :: (package: Normalized_Package, declarations: [] Declared_Product, omitted: bool, is_module: bool) -> Target_Resolution_Result {
     products: [..] Effective_Target;
     if omitted && declarations.count == 0 {
         candidates: [] string = .["src/main.jai"];
         if is_module candidates = .["module.jai", "src/module.jai"];
         for candidate: candidates {
-            if !inspect_path_entry(tprint("%/%", pkg.dir, candidate)).exists continue;
-            product, error, message := make_effective_target(pkg, pkg.name, candidate);
+            if !inspect_path_entry(tprint("%/%", package.dir, candidate)).exists continue;
+            product, error, message := make_effective_target(package, package.name, candidate);
             if error != .NONE return make_resolution_failure(error, message);
             array_add(*products, product);
         }
@@ -65,9 +65,9 @@ resolve_product_list :: (pkg: Normalized_Package, declarations: [] Declared_Prod
             name := declaration.name;
             if !declaration.name_present {
                 if declarations.count != 1 return make_resolution_failure(.INVALID_TARGET_NAME, "Every item in a multiple-product list must declare name.");
-                name = pkg.name;
+                name = package.name;
             }
-            product, error, message := make_effective_target(pkg, name, declaration.entry);
+            product, error, message := make_effective_target(package, name, declaration.entry);
             if error != .NONE return make_resolution_failure(error, tprint("%[%]: %", ifx is_module then "modules" else "executables", index, message));
             for previous: products {
                 if ascii_names_equal(previous.name, product.name) return make_resolution_failure(.DUPLICATE_TARGET_NAME, tprint("Duplicate product name: %", name));

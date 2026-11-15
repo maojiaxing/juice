@@ -112,10 +112,10 @@ Hook_Position :: enum u8 {
 Lifecycle_Hook :: struct {
     stage:    Lifecycle_Stage;
     position: Hook_Position;
-    // The hook body: observes/transforms through ctx, reads its
+    // The hook body: observes/transforms through lifecycle_context, reads its
     // registration's plugin_state slot through state. Returns false =
     // stage failure (same as adding an ERROR diagnostic).
-    hook: #type (ctx: *Lifecycle_Context, state: *void) -> bool;
+    hook: #type (lifecycle_context: *Lifecycle_Context, state: *void) -> bool;
 }
 
 // ---------------------------------------------------------------------------
@@ -274,21 +274,111 @@ derived_path_within_root :: (derived_root: string, candidate: string) -> bool {
     root := path_slashes_local(derived_root);
     while root.count > 0 && root[root.count - 1] == #char "/" root.count -= 1;
     path := path_slashes_local(candidate);
+    // Dot segments are resolved before the comparison, so `<derived>/../..` is
+    // never "inside" by string luck: the candidate is first reduced to the path
+    // the filesystem would actually open.
+    reduced, reduced_ok := derived_collapse_dot_segments(path);
+    if !reduced_ok return false;
+    path = reduced;
     if path.count <= root.count + 1 return false;
     if !starts_with_local(path, root) return false;
-    return path[root.count] == #char "/";
+    if path[root.count] != #char "/" return false;
+    // A component that is a link can move the real file anywhere, so a path with
+    // a linked component below the root is not trusted. The root itself may live
+    // under links (the caller chose it); only the part below it must be plain.
+    below := slice(path, root.count + 1, path.count - root.count - 1);
+    return derived_relative_chain_is_link_free(root, below);
+}
+
+// Reduce "." and ".." segments lexically. ".." past the first segment is LOST
+// (an absolute path cannot climb above its root), so an escape attempt collapses
+// to a path outside the derived root instead of resolving to it.
+derived_collapse_dot_segments :: (path: string) -> (string, bool) {
+    if path.count == 0 return "", false;
+    absolute := path[0] == #char "/";
+    segments: [..] string;
+    start := 0;
+    for character_index: 0..path.count {
+        is_separator := character_index == path.count || path[character_index] == #char "/";
+        if !is_separator continue;
+        segment := slice(path, start, character_index - start);
+        start = character_index + 1;
+        if segment == "" || segment == "." continue;
+        if segment == ".." {
+            if segments.count == 0 {
+                if absolute return "", false;
+                return "", false;
+            }
+            segments.count -= 1;
+            continue;
+        }
+        array_add(*segments, segment);
+    }
+    builder: String_Builder;
+    if absolute append(*builder, #char "/");
+    for segment, index: segments {
+        if index > 0 append(*builder, #char "/");
+        append(*builder, segment);
+    }
+    return builder_to_string(*builder), true;
+}
+
+// Every component of one relative path below the root must be a real directory
+// or a real file, never a link or a junction (decision 8: the physical identity
+// is checked, not just the spelling). The probe stays inside the published
+// face's own closure: one non-recursive directory listing per component, read
+// through File_Utilities, instead of the tool-internal path module.
+derived_relative_chain_is_link_free :: (root: string, relative: string) -> bool {
+    builder: String_Builder;
+    append(*builder, root);
+    start := 0;
+    for character_index: 0..relative.count {
+        is_separator := character_index == relative.count || relative[character_index] == #char "/";
+        if !is_separator continue;
+        segment := slice(relative, start, character_index - start);
+        start = character_index + 1;
+        if segment == "" continue;
+        parent := builder_to_string(*builder);
+        if derived_entry_is_link(parent, segment) return false;
+        append(*builder, #char "/");
+        append(*builder, segment);
+    }
+    return true;
+}
+
+// Whether `directory/name` is a symbolic link or a Windows junction. A missing
+// entry is not a link (the caller creates it); a listing failure is treated as
+// a link so an unreadable parent can never be trusted.
+derived_entry_is_link :: (directory: string, name: string) -> bool {
+    Probe :: struct {
+        name:      string;
+        found:     bool;
+        is_link:   bool;
+        any_entry: bool;
+    }
+    probe: Probe;
+    probe.name = name;
+    visitor :: (info: *File_Visit_Info, probe: *Probe) {
+        probe.any_entry = true;
+        if info.short_name != probe.name return;
+        probe.found = true;
+        if info.is_symlink probe.is_link = true;
+    }
+    visit_files(directory, false, *probe, visitor, visit_files = true, visit_directories = true, visit_symlinks = true, follow_directory_symlinks = false);
+    if probe.found return probe.is_link;
+    return false;
 }
 
 // "/"-normalization and prefix test for the published face's self-contained
 // path checks (the path_safety module is not part of the plugin face closure).
 path_slashes_local :: (path: string) -> string {
-    out: [..] u8;
-    for i: 0..path.count-1 {
-        c := path[i];
-        array_add(*out, ifx c == #char "\\" then #char "/" else c);
+    normalized_bytes: [..] u8;
+    for character_index: 0..path.count-1 {
+        character := path[character_index];
+        array_add(*normalized_bytes, ifx character == #char "\\" then #char "/" else character);
     }
-    if out.count == 0 return "";
-    return to_string(out.data, out.count);
+    if normalized_bytes.count == 0 return "";
+    return to_string(normalized_bytes.data, normalized_bytes.count);
 }
 
 starts_with_local :: (path: string, prefix: string) -> bool {
@@ -339,34 +429,36 @@ derived_covers_retained_source :: (stage: *Prestep_Stage, logical_path: string) 
 // A failure records an ERROR diagnostic on the context (the ordinary
 // dispatch failure rule then fails the stage even when the hook returns
 // true) and returns false. A missing prestep slot is the same failure.
-prestep_add_substitution :: (ctx: *Lifecycle_Context, original: string, replacement: string) -> bool {
-    if ctx.prestep == null {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = "source substitution without prestep state"});
+prestep_add_substitution :: (lifecycle_context: *Lifecycle_Context, original: string, replacement: string) -> bool {
+    if lifecycle_context.prestep == null {
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = "source substitution without prestep state"});
         return false;
     }
-    stage := cast(*Prestep_Stage) ctx.prestep;
-    for s: stage.substitutions {
-        if s.original != original continue;
-        if s.replacement == replacement return true;
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("conflicting source substitution: %", original)});
+    stage := cast(*Prestep_Stage) lifecycle_context.prestep;
+    for substitution: stage.substitutions {
+        if substitution.original != original continue;
+        // Decision 24: a repeated substitution for one logical input fails, even
+        // when the two rows agree on the replacement — the second registration
+        // cannot know what the first one already wrote.
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("duplicate source substitution: %", original)});
         return false;
     }
     for dropped: stage.drops {
         if dropped != original continue;
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("source substitution conflicts with a drop: %", original)});
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("source substitution conflicts with a drop: %", original)});
         return false;
     }
     for generated: stage.generated {
         if generated.logical_path != original continue;
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("source substitution conflicts with an auxiliary source: %", original)});
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("source substitution conflicts with an auxiliary source: %", original)});
         return false;
     }
     if !derived_logical_path_ok(original, true) {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("substitution original is not a package-relative source path: %", original)});
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("substitution original is not a package-relative source path: %", original)});
         return false;
     }
     if stage.package_root.count > 0 && !derived_covers_retained_source(stage, original) {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("substitution original is not a retained package source: %", original)});
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("substitution original is not a retained package source: %", original)});
         return false;
     }
     if stage.enforce_private_output && stage.derived_root.count > 0 {
@@ -378,7 +470,7 @@ prestep_add_substitution :: (ctx: *Lifecycle_Context, original: string, replacem
         inside_derived := derived_path_within_root(stage.derived_root, replacement);
         inside_target := stage.target_root.count > 0 && derived_path_within_root(stage.target_root, replacement);
         if !inside_derived && !inside_target {
-            array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("substitution replacement is outside the package's private derived area: %", replacement)});
+            array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("substitution replacement is outside the package's private derived area: %", replacement)});
             return false;
         }
     }
@@ -394,23 +486,23 @@ prestep_add_substitution :: (ctx: *Lifecycle_Context, original: string, replacem
 // active the path must be a package-relative "".jai" input (a declared drop
 // only ever names a compilable input). Failures record an ERROR diagnostic and
 // return false.
-prestep_add_drop :: (ctx: *Lifecycle_Context, original: string) -> bool {
-    if ctx.prestep == null {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = "source drop without prestep state"});
+prestep_add_drop :: (lifecycle_context: *Lifecycle_Context, original: string) -> bool {
+    if lifecycle_context.prestep == null {
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = "source drop without prestep state"});
         return false;
     }
-    stage := cast(*Prestep_Stage) ctx.prestep;
+    stage := cast(*Prestep_Stage) lifecycle_context.prestep;
     for dropped: stage.drops {
         if dropped == original return true;
     }
-    for s: stage.substitutions {
-        if s.original != original continue;
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("drop conflicts with a source substitution: %", original)});
+    for substitution: stage.substitutions {
+        if substitution.original != original continue;
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("drop conflicts with a source substitution: %", original)});
         return false;
     }
     for generated: stage.generated {
         if generated.logical_path != original continue;
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("drop conflicts with an auxiliary source: %", original)});
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("drop conflicts with an auxiliary source: %", original)});
         return false;
     }
     array_add(*stage.drops, original);
@@ -424,23 +516,23 @@ prestep_add_drop :: (ctx: *Lifecycle_Context, original: string) -> bool {
 // shared Git checkout or anywhere else (spec 0087 decision 24: 源与共享检出只读,
 // 物理输出限于消费工程私有派生区). The parents are created on demand; a creation
 // or write failure is a plugin error.
-prestep_write_derived :: (ctx: *Lifecycle_Context, logical_path: string, contents: string) -> (string, bool) {
-    if ctx.prestep == null {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = "derived write without prestep state"});
+prestep_write_derived :: (lifecycle_context: *Lifecycle_Context, logical_path: string, contents: string) -> (string, bool) {
+    if lifecycle_context.prestep == null {
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = "derived write without prestep state"});
         return "", false;
     }
-    stage := cast(*Prestep_Stage) ctx.prestep;
+    stage := cast(*Prestep_Stage) lifecycle_context.prestep;
     if stage.derived_root.count == 0 {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("no private derived area for the derived source: %", logical_path)});
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("no private derived area for the derived source: %", logical_path)});
         return "", false;
     }
     if !derived_logical_path_ok(logical_path, true) {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("derived source path is not a package-relative .jai path: %", logical_path)});
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("derived source path is not a package-relative .jai path: %", logical_path)});
         return "", false;
     }
     physical := derived_physical_path(stage.derived_root, logical_path);
     if physical == "" || !derived_path_within_root(stage.derived_root, physical) {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("could not derive a private landing path for: %", logical_path)});
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("could not derive a private landing path for: %", logical_path)});
         return "", false;
     }
     last_slash := -1;
@@ -450,12 +542,12 @@ prestep_write_derived :: (ctx: *Lifecycle_Context, logical_path: string, content
     if last_slash > 0 {
         parent := slice(physical, 0, last_slash);
         if !make_directory_if_it_does_not_exist(parent, recursive = true) {
-            array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("could not create the private derived directory: %", parent)});
+            array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("could not create the private derived directory: %", parent)});
             return "", false;
         }
     }
     if !write_entire_file(physical, contents) {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("could not write the derived source: %", physical)});
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("could not write the derived source: %", physical)});
         return "", false;
     }
     return physical, true;
@@ -476,40 +568,63 @@ prestep_write_derived :: (ctx: *Lifecycle_Context, logical_path: string, content
 //   is for);
 // - a logical path that is substituted or dropped is a conflict (the same
 //   input would have two providers).
-prestep_add_generated :: (ctx: *Lifecycle_Context, logical_path: string, contents: string) -> bool {
-    if ctx.prestep == null {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = "derived source registration without prestep state"});
-        return false;
+// The stage and path-shape precondition both auxiliary-source registrations
+// share (spec 0087 decision 24's `generated` channel): the pre-step slot must
+// exist, its private derived area must be active, and the logical path must be
+// a normal package-relative ".jai" input. Records the ERROR diagnostic and
+// returns null on failure. The two entries differ only below this point — one
+// queues a write, the other validates a physical path the plugin already wrote.
+prestep_auxiliary_stage :: (lifecycle_context: *Lifecycle_Context, logical_path: string) -> *Prestep_Stage {
+    if lifecycle_context.prestep == null {
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = "derived source registration without prestep state"});
+        return null;
     }
-    stage := cast(*Prestep_Stage) ctx.prestep;
+    stage := cast(*Prestep_Stage) lifecycle_context.prestep;
     if stage.derived_root.count == 0 {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("no private derived area for the auxiliary source: %", logical_path)});
-        return false;
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("no private derived area for the auxiliary source: %", logical_path)});
+        return null;
     }
     if !derived_logical_path_ok(logical_path, true) {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source path is not a package-relative .jai path: %", logical_path)});
-        return false;
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("auxiliary source path is not a package-relative .jai path: %", logical_path)});
+        return null;
     }
+    return stage;
+}
+
+// The cross-table conflict rules for one auxiliary logical path: it must not be
+// registered twice (two plugins must not silently agree on one output), cover a
+// retained package source, or be a substituted or dropped input (the same input
+// would then have two providers). Returns false having recorded the ERROR
+// diagnostic when any rule rejects the path. Adding a new conflict condition is
+// one edit here, so the two registration entries cannot diverge.
+prestep_auxiliary_path_is_free :: (lifecycle_context: *Lifecycle_Context, stage: *Prestep_Stage, logical_path: string) -> bool {
     for generated: stage.generated {
         if generated.logical_path != logical_path continue;
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("duplicate auxiliary source path: %", logical_path)});
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("duplicate auxiliary source path: %", logical_path)});
         return false;
     }
     if derived_covers_retained_source(stage, logical_path) {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source would cover a retained package source: %", logical_path)});
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("auxiliary source would cover a retained package source: %", logical_path)});
         return false;
     }
-    for s: stage.substitutions {
-        if s.original != logical_path continue;
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source conflicts with a source substitution: %", logical_path)});
+    for substitution: stage.substitutions {
+        if substitution.original != logical_path continue;
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("auxiliary source conflicts with a source substitution: %", logical_path)});
         return false;
     }
     for dropped: stage.drops {
         if dropped != logical_path continue;
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source conflicts with a drop: %", logical_path)});
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("auxiliary source conflicts with a drop: %", logical_path)});
         return false;
     }
-    physical, written := prestep_write_derived(ctx, logical_path, contents);
+    return true;
+}
+
+prestep_add_generated :: (lifecycle_context: *Lifecycle_Context, logical_path: string, contents: string) -> bool {
+    stage := prestep_auxiliary_stage(lifecycle_context, logical_path);
+    if stage == null return false;
+    if !prestep_auxiliary_path_is_free(lifecycle_context, stage, logical_path) return false;
+    physical, written := prestep_write_derived(lifecycle_context, logical_path, contents);
     if !written return false;
     array_add(*stage.generated, .{logical_path = logical_path, physical_path = physical});
     return true;
@@ -519,8 +634,8 @@ prestep_add_generated :: (ctx: *Lifecycle_Context, logical_path: string, content
 // not substituted (or the stage is null — the undeclared no-op shape).
 prestep_substitution_for :: (stage: *Prestep_Stage, original: string) -> (string, bool) {
     if stage == null return "", false;
-    for s: stage.substitutions {
-        if s.original == original return s.replacement, true;
+    for substitution: stage.substitutions {
+        if substitution.original == original return substitution.replacement, true;
     }
     return "", false;
 }
@@ -541,43 +656,14 @@ prestep_is_dropped :: (stage: *Prestep_Stage, original: string) -> bool {
 // path must be inside the package's private derived area — a plugin that
 // reports a file elsewhere is the read-only violation (spec 0087 decision 24:
 // 源与共享检出只读).
-prestep_register_generated :: (ctx: *Lifecycle_Context, logical_path: string, physical_path: string) -> bool {
-    if ctx.prestep == null {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = "derived source registration without prestep state"});
-        return false;
-    }
-    stage := cast(*Prestep_Stage) ctx.prestep;
-    if stage.derived_root.count == 0 {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("no private derived area for the auxiliary source: %", logical_path)});
-        return false;
-    }
-    if !derived_logical_path_ok(logical_path, true) {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source path is not a package-relative .jai path: %", logical_path)});
-        return false;
-    }
+prestep_register_generated :: (lifecycle_context: *Lifecycle_Context, logical_path: string, physical_path: string) -> bool {
+    stage := prestep_auxiliary_stage(lifecycle_context, logical_path);
+    if stage == null return false;
     if !derived_path_within_root(stage.derived_root, physical_path) {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source is outside the package's private derived area: %", physical_path)});
+        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("auxiliary source is outside the package's private derived area: %", physical_path)});
         return false;
     }
-    for generated: stage.generated {
-        if generated.logical_path != logical_path continue;
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("duplicate auxiliary source path: %", logical_path)});
-        return false;
-    }
-    if derived_covers_retained_source(stage, logical_path) {
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source would cover a retained package source: %", logical_path)});
-        return false;
-    }
-    for s: stage.substitutions {
-        if s.original != logical_path continue;
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source conflicts with a source substitution: %", logical_path)});
-        return false;
-    }
-    for dropped: stage.drops {
-        if dropped != logical_path continue;
-        array_add(ctx.diagnostics, .{level = .ERROR, message = tprint("auxiliary source conflicts with a drop: %", logical_path)});
-        return false;
-    }
+    if !prestep_auxiliary_path_is_free(lifecycle_context, stage, logical_path) return false;
     array_add(*stage.generated, .{logical_path = logical_path, physical_path = physical_path});
     return true;
 }
@@ -603,6 +689,78 @@ prestep_derived_source_for :: (stage: *Prestep_Stage, logical_path: string) -> (
     physical, generated := prestep_generated_for(stage, logical_path);
     if generated return physical, true;
     return "", false;
+}
+
+// Whether any file of the closure is a derived input of THIS round.
+prestep_closure_is_derived :: (stage: *Prestep_Stage, closure_paths: [] string) -> bool {
+    if stage == null return false;
+    for path: closure_paths {
+        _, derived := prestep_derived_source_for(stage, path);
+        if derived return true;
+    }
+    return false;
+}
+
+// Materialize one closure's derived inputs into the private derived root at their
+// OWN logical paths, so a verbatim (test-free) compile reads the derived text and
+// every relative `#load` beside it still resolves. Returns the derived entry path,
+// or "" when nothing in the closure is derived (the caller then compiles the
+// package's own entry, byte-for-byte as before).
+//
+// This is what makes one substitution anywhere in the closure reach the compile:
+// the closure is the logical input graph of the run, not just its entry.
+prestep_materialize_closure :: (
+    stage: *Prestep_Stage,
+    entry_logical: string,
+    closure_paths: [] string,
+    read_text: #type (state: *void, logical_path: string) -> (string, bool),
+    read_state: *void
+) -> (string, string, bool) {
+    // (derived entry path, error message, ok). The second result is "" unless the
+    // materialization failed; the caller reports it through its own stage sink, so
+    // this procedure stays usable from the command front and from the host.
+    if stage == null return "", "", true;
+    if !prestep_closure_is_derived(stage, closure_paths) return "", "", true;
+    // A derived input with no private root to land in is a contradiction, not a
+    // reason to compile the original source: the pre-step said this input's
+    // content is replaced, and silently ignoring that would ship the wrong build
+    // (the 0098 review's "substitution must reach the whole closure" rule).
+    if stage.derived_root.count == 0 {
+        return "", "the pre-step registered a derived input but no private derived root exists", false;
+    }
+    for path: closure_paths {
+        text, read_ok := read_text(read_state, path);
+        if !read_ok return "", tprint("could not read the closure input: %", path), false;
+        physical := derived_physical_path(stage.derived_root, path);
+        if physical == "" || !derived_path_within_root(stage.derived_root, physical) {
+            return "", tprint("could not derive a private landing path for: %", path), false;
+        }
+        last_slash := -1;
+        for i: 0..physical.count-1 {
+            if physical[i] == #char "/" last_slash = i;
+        }
+        if last_slash > 0 {
+            parent := slice(physical, 0, last_slash);
+            if !make_directory_if_it_does_not_exist(parent, recursive = true) {
+                return "", tprint("could not create the private derived directory: %", parent), false;
+            }
+        }
+        if !write_entire_file(physical, text) {
+            return "", tprint("could not write the derived closure input: %", physical), false;
+        }
+    }
+    entry_physical := derived_physical_path(stage.derived_root, entry_logical);
+    if entry_physical == "" return "", tprint("could not derive the entry path: %", entry_logical), false;
+    return entry_physical, "", true;
+}
+
+// The derived-source probe as a plain procedure over an explicit stage, so a
+// caller can pass it to a closure probe (Jai has no closures, so the stage
+// travels as the argument instead of being captured).
+prestep_derived_probe :: (stage: *Prestep_Stage, logical_path: string) -> (string, bool) {
+    replacement, derived := prestep_derived_source_for(stage, logical_path);
+    if !derived return "", false;
+    return replacement, true;
 }
 
 // ---------------------------------------------------------------------------
@@ -653,16 +811,16 @@ merge_hook_tables :: (a: [] Hook_Registration, b: [] Hook_Registration) -> [..] 
 // (fail fast; observer hooks get the same abort treatment) and the caller
 // fails the command. Only diagnostics added during this dispatch count, so
 // the host may reuse one sink across stages.
-run_mounted_hooks :: (table: [] Hook_Registration, stage: Lifecycle_Stage, position: Hook_Position, ctx: *Lifecycle_Context) -> bool {
-    ctx.stage = stage;
-    before := ctx.diagnostics.count;
-    for r, i: table {
-        for h: r.hooks {
+run_mounted_hooks :: (table: [] Hook_Registration, stage: Lifecycle_Stage, position: Hook_Position, lifecycle_context: *Lifecycle_Context) -> bool {
+    lifecycle_context.stage = stage;
+    before := lifecycle_context.diagnostics.count;
+    for registration, registration_index: table {
+        for h: registration.hooks {
             if h.stage != stage || h.position != position continue;
             state: *void = null;
-            if i < ctx.plugin_state.count state = ctx.plugin_state[i];
-            if !h.hook(ctx, state) return false;
-            if has_new_error(ctx.diagnostics, before) return false;
+            if registration_index < lifecycle_context.plugin_state.count state = lifecycle_context.plugin_state[registration_index];
+            if !h.hook(lifecycle_context, state) return false;
+            if has_new_error(lifecycle_context.diagnostics, before) return false;
         }
     }
     return true;

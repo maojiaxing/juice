@@ -221,22 +221,22 @@ scan_plugin_package :: (root: string) -> Plugin_Scan_Result {
             result.ok = false;
             continue;
         }
-        s := normalize_view_line_endings(source);
-        tokens := lex_source(s);
-        i := 0;
-        while i < tokens.count {
+        normalized_source := normalize_view_line_endings(source);
+        tokens := lex_source(normalized_source);
+        token_index := 0;
+        while token_index < tokens.count {
             // The hooks-face probe (ticket 060): one IDENT token named
             // "hooks" anywhere in the package marks the scan result — the
-            // prepare's conservative host trigger (see Plugin_Scan_Result).
-            if tokens[i].kind == .IDENT && token_text(s, tokens[i]) == "hooks" result.has_hooks = true;
-            if is_juice_plugin_anchor(s, tokens, i) {
+            // prepare'normalized_source conservative host trigger (see Plugin_Scan_Result).
+            if tokens[token_index].kind == .IDENT && token_text(normalized_source, tokens[token_index]) == "hooks" result.has_hooks = true;
+            if is_juice_plugin_anchor(normalized_source, tokens, token_index) {
                 hit: Plugin_Scan_Hit;
                 hit.module_name = plugin_module_name(file.rel_path, collect.pkg_name);
                 hit.rel_path = file.rel_path;
                 hit.abs_path = file.abs_path;
                 place_scan_hit(*result, hit);
             }
-            i += 1;
+            token_index += 1;
         }
     }
     return result;
@@ -297,6 +297,18 @@ Resolved_Plugin_Source :: struct {
     import_name:       string;
     identity:          string;
     anchor_rel_path:   string;
+    // The Git selector this source resolved through ("" for PATH/WORKSPACE).
+    // A plugin Git source is a resolution like any other: the command records
+    // it in the same state transaction as the package's dependency selections
+    // (decision 9/13-15), so a later offline run reuses the same commit.
+    // The provider package's own declaration, so the caller can resolve the
+    // provider's dependency graph (decision 21: the consumer does not repeat it).
+    provider_package:  Normalized_Package;
+    git_url:           string;
+    git_branch:        string;
+    git_tag:           string;
+    git_rev:           string;
+    git_commit:        string;
 }
 
 // The plugin-source resolution product. ok=false means the command must stop
@@ -318,14 +330,20 @@ plugin_source_identity :: (commit: string, package_dir: string, export_name: str
 // declaration): the provider package directory, the selected public module, its
 // entry file, and the identity/commit the source resolution produced.
 Reference_Module :: struct {
-    ok:          bool;
-    error:       string;
-    commit:      string;
+    ok:           bool;
+    error:        string;
+    commit:       string;
     provider_dir: string;
-    package:     Normalized_Package;
-    export_name: string;
-    entry_path:  string;
-    identity:    string;
+    package:      Normalized_Package;
+    export_name:  string;
+    entry_path:   string;
+    identity:     string;
+    // The selector spelling the reference resolved through (empty = PATH or
+    // WORKSPACE). Kept so a caller can publish the record it reused.
+    url:          string;
+    branch:       string;
+    tag:          string;
+    rev:          string;
 }
 
 // Resolve one typed source + module selection to a provider package and one of
@@ -341,103 +359,90 @@ resolve_reference_module :: (
     source: Source_Reference,
     selection: Module_Reference
 ) -> Reference_Module {
-    out: Reference_Module;
+    reference: Reference_Module;
 
     source_root := "";
     if source.kind == .PATH {
-        if source.path == "" {
-            out.error = "path source is empty";
-            return out;
+        normalized, path_status := source_path_root(source.path, declaring_dir);
+        if path_status == .EMPTY {
+            reference.error = "path source is empty";
+            return reference;
         }
-        candidate := source.path;
-        if !path_is_absolute_portable(candidate) candidate = tprint("%1/%2", declaring_dir, source.path);
-        normalized, normalized_ok := normalize_existing_path(candidate);
-        if !normalized_ok {
-            out.error = tprint("path source could not be normalized: %", source.path);
-            return out;
+        if path_status == .NOT_NORMALIZED {
+            reference.error = tprint("path source could not be normalized: %", source.path);
+            return reference;
         }
         source_root = normalized;
     } else if source.kind == .WORKSPACE {
         if discovery.root_dir == "" || !discovery.has_workspace {
-            out.error = "workspace source needs a workspace declaration";
-            return out;
+            reference.error = "workspace source needs a workspace declaration";
+            return reference;
         }
         source_root = path_slashes(discovery.root_dir);
     } else if source.kind == .GIT {
         if source.url == "" {
-            out.error = "Git source has an empty URL";
-            return out;
+            reference.error = "Git source has an empty URL";
+            return reference;
         }
-        commit := "";
         state := read_resolution_state(resolution_state_file(environment, discovery.root_dir));
         if state.corrupt {
-            out.error = state.error;
-            return out;
+            reference.error = state.error;
+            return reference;
         }
-        declaring_key := resolution_declaring_key_git(source.url, "", "");
-        recorded := -1;
-        if environment.mode != .UPDATE {
-            recorded = find_resolved_selection(state, declaring_key, source.url, source.branch, source.tag, source.rev);
+        reference.url = source.url;
+        reference.branch = source.branch;
+        reference.tag = source.tag;
+        reference.rev = source.rev;
+        declaring_key := plugin_scoped_git_declaring_key(discovery.root_dir, declaring_dir, source.url);
+        // Same Git selection step as the dependency graph; the plugin declaration
+        // trusts a pinned full commit id and phrases its own offline diagnostic.
+        resolved := git_resolve_source(state, environment, declaring_key, source, .TRUST_PINNED_COMMIT);
+        if resolved.error == .OFFLINE_UNRECORDED {
+            reference.error = tprint("offline resolution has no recorded plugin source for %", source.url);
+            return reference;
         }
-        if recorded >= 0 {
-            commit = state.selections[recorded].commit;
-        } else if environment.mode == .OFFLINE {
-            if source.rev != "" && is_full_commit_id(source.rev) commit = source.rev;
-            if commit == "" {
-                out.error = tprint("offline resolution has no recorded plugin source for %", source.url);
-                return out;
-            }
-        } else {
-            resolved, resolution_error := git_resolve_selector(environment, source.url, source.branch, source.tag, source.rev);
-            if resolution_error != "" {
-                out.error = resolution_error;
-                return out;
-            }
-            commit = resolved;
+        if resolved.error != .NONE {
+            reference.error = resolved.message;
+            return reference;
         }
-        content_dir, content_error := git_ensure_content(environment, source.url, commit);
-        if content_error != "" {
-            out.error = content_error;
-            return out;
-        }
-        out.commit = commit;
-        source_root = path_slashes(content_dir);
+        reference.commit = resolved.commit;
+        source_root = path_slashes(resolved.content_dir);
     } else {
-        out.error = "an explicit PATH, GIT or WORKSPACE source is required";
-        return out;
+        reference.error = "an explicit PATH, GIT or WORKSPACE source is required";
+        return reference;
     }
 
     logical := normalize_package_relative_path(selection.path);
     if !logical.success {
-        out.error = tprint("module path escapes its source root: %", selection.path);
-        return out;
+        reference.error = tprint("module path escapes its source root: %", selection.path);
+        return reference;
     }
     if source.kind == .WORKSPACE {
         expected := ifx logical.path == "." then source_root else tprint("%1/%2", source_root, logical.path);
         normalized_expected, expected_ok := normalize_existing_path(expected);
         if !expected_ok {
-            out.error = tprint("workspace module path does not exist: %", selection.path);
-            return out;
+            reference.error = tprint("workspace module path does not exist: %", selection.path);
+            return reference;
         }
         member := false;
         for candidate: discovery.member_packages {
             if paths_equal(candidate.dir, normalized_expected) member = true;
         }
         if !member {
-            out.error = tprint("workspace source selects a directory that is not a workspace member: %", selection.path);
-            return out;
+            reference.error = tprint("workspace source selects a directory that is not a workspace member: %", selection.path);
+            return reference;
         }
     }
 
     provider_spelling := ifx logical.path == "." then source_root else tprint("%1/%2", source_root, logical.path);
     provider_dir, provider_ok := normalize_existing_path(provider_spelling);
     if !provider_ok {
-        out.error = tprint("module path could not be normalized: %", selection.path);
-        return out;
+        reference.error = tprint("module path could not be normalized: %", selection.path);
+        return reference;
     }
     if !resolution_path_within(source_root, provider_dir) {
-        out.error = tprint("module path escapes its source root: %", selection.path);
-        return out;
+        reference.error = tprint("module path escapes its source root: %", selection.path);
+        return reference;
     }
 
     // The provider must be a package with a declaration: plugins come from
@@ -454,47 +459,56 @@ resolve_reference_module :: (
     }
     if !package_ok package, package_ok = load_package_manifest(tprint("%1/manifest", package_target_dir(discovery.root_dir)), provider_dir);
     if !package_ok || !package.has_package {
-        out.error = tprint("provider package has no declaration: %", path_slashes(provider_dir));
-        return out;
+        reference.error = tprint("provider package has no declaration: %", path_slashes(provider_dir));
+        return reference;
     }
     if path_slashes(package.dir) != path_slashes(provider_dir) {
         package.dir = path_slashes(provider_dir);
     }
-    out.package = package;
-    out.provider_dir = path_slashes(provider_dir);
+    reference.package = package;
+    reference.provider_dir = path_slashes(provider_dir);
 
     exports := resolve_product_list(package, package.modules, package.modules_omitted, true);
     if !exports.success {
-        out.error = tprint("provider package products are invalid: %", exports.error);
-        return out;
+        reference.error = tprint("provider package products are invalid: %", exports.error);
+        return reference;
     }
     export, selection_error := resolution_select_export(exports.targets, selection);
     if selection_error != "" {
-        out.error = selection_error;
-        return out;
+        reference.error = selection_error;
+        return reference;
     }
-    out.export_name = export.name;
-    out.entry_path = path_slashes(export.source_path);
-    out.identity = plugin_source_identity(out.commit, provider_dir, export.name);
-    out.ok = true;
-    return out;
+    reference.export_name = export.name;
+    reference.entry_path = path_slashes(export.source_path);
+    reference.identity = plugin_source_identity(reference.commit, provider_dir, export.name);
+    reference.ok = true;
+    return reference;
 }
 
-// Count the plugin entry anchors in ONE module entry file (the selected public
-// module — not the whole package): the provider advertises a plugin through the
-// module the enablement selected, so an unrelated module's anchor never
-// activates. Lexical recognition only (the contract above), so the file need
-// not compile.
-plugin_entry_anchor_count :: (entry_path: string) -> (s64, string, bool) {
-    source, read_ok := read_entire_file(entry_path);
-    if !read_ok return 0, "", false;
-    s := normalize_view_line_endings(source);
-    tokens := lex_source(s);
-    count := 0;
-    for i: 0..tokens.count-1 {
-        if is_juice_plugin_anchor(s, tokens, i) count += 1;
+// Count the plugin entry anchors of the selected public module: its own entry
+// file plus every file that entry reaches through literal in-package #load
+// edges. The module VALUE is what counts, not the spelling location, so an
+// entry that only `#load`s its implementation file carrying the single
+// get_juice_plugin is valid. Lexical recognition only (the contract above), so
+// the closure need not compile. The second result is the module's closure text
+// in probe order, used by the hooks-face probe.
+plugin_entry_anchor_count :: (package_root: string, entry_path: string) -> (s64, string, bool) {
+    entry_rel := scan_rel_path(entry_path, package_root);
+    closure, probe_ok := probe_package_closure(package_root, entry_rel);
+    if !probe_ok return 0, "", false;
+    count: s64 = 0;
+    builder: String_Builder;
+    for file: closure {
+        source, read_ok := read_entire_file(tprint("%1/%2", package_root, file.file.rel_path));
+        if !read_ok return 0, "", false;
+        normalized := normalize_view_line_endings(source);
+        tokens := lex_source(normalized);
+        for token_index: 0..tokens.count-1 {
+            if is_juice_plugin_anchor(normalized, tokens, token_index) count += 1;
+        }
+        print_to_builder(*builder, "%\n", normalized);
     }
-    return count, s, true;
+    return count, builder_to_string(*builder), true;
 }
 
 // Whether the consumer's ordinary dependencies already select this exact
@@ -508,7 +522,7 @@ plugin_dependency_module_conflict :: (request: Plugin_Source_Request, candidate:
     for dependency: consumer.dependencies {
         selections: [..] Module_Reference;
         if dependency.modules_omitted {
-            array_add(*selections, Module_Reference.{path = "."});
+            array_add(*selections, .{path = "."});
         } else {
             for module: dependency.modules array_add(*selections, module);
         }
@@ -531,9 +545,83 @@ plugin_dependency_module_conflict :: (request: Plugin_Source_Request, candidate:
 // selected module with zero plugin entries (capability missing), a selected
 // module with several (entry ambiguity), the same actual plugin enabled twice,
 // and a module the ordinary dependencies already selected.
+// The declaring key of a plugin Git source. Plugins and ordinary dependencies
+// are different roles over the same content cache (decision 21), so their
+// records are kept apart even when they name the same URL: one role's record
+// never satisfies the other's lookup, and neither can overwrite the other.
+plugin_git_declaring_key :: (url: string) -> string {
+    return resolution_declaring_key_git(url, "", "plugin");
+}
+
+// A plugin record is scoped to the package that declared it, exactly like a
+// dependency record: two members enabling the same Git plugin keep independent
+// records, and neither reads the other's. The lookup and the publication build
+// the key through this one function, so they cannot drift apart.
+plugin_scoped_git_declaring_key :: (consumer_root: string, declaring_dir: string, url: string) -> string {
+    return tprint("consumer:%1|%2", resolution_declaring_key_local(consumer_root, declaring_dir), plugin_git_declaring_key(url));
+}
+
+// The Git selections this resolution actually used, in declaration order, as
+// state records ready for the command's single publication.
+plugin_resolution_selections :: (consumer_root: string, consumer: Normalized_Package, sources: [] Resolved_Plugin_Source) -> [..] Resolved_Selection {
+    selections: [..] Resolved_Selection;
+    for source: sources {
+        if source.git_url == "" continue;
+        declaring_key := plugin_scoped_git_declaring_key(consumer_root, consumer.dir, source.git_url);
+        array_add(*selections, Resolved_Selection.{
+            declaring_key = declaring_key,
+            url           = source.git_url,
+            branch        = source.git_branch,
+            tag           = source.git_tag,
+            rev           = source.git_rev,
+            commit        = source.git_commit,
+        });
+    }
+    return selections;
+}
+
+// Resolve one enablement's PROVIDER graph. The provider is a package like any
+// other, so its own dependency declarations must resolve before its module can
+// compile; the consumer never repeats them (decision 21). The import names land
+// in this enablement's private directory, because the provider may be a
+// read-only Git checkout and every derived name belongs to the consuming project
+// (decision 24). Publication is deferred to the caller's single transaction.
+resolve_plugin_provider_dependencies :: (
+    request: Plugin_Source_Request,
+    source: Resolved_Plugin_Source,
+    pending: *Prepared_Workspace = null
+) -> (Resolution_Graph, bool) {
+    graph: Resolution_Graph;
+    package := source.provider_package;
+    selected_on_behalf: Package_Selection;
+    declared_any := false;
+    for dependency: package.dependencies {
+        declared_any = true;
+    }
+    if !declared_any return graph, true;
+
+    preparation: Dependency_Preparation_Request;
+    preparation.discovery = request.discovery;
+    preparation.environment = request.environment;
+    // The manifest evaluator's scratch area: the same per-workspace path the
+    // provider manifest load above already uses, so the provider graph needs no
+    // extra cache plumbing through the plugin layer.
+    preparation.cache_dir = tprint("%1/manifest", package_target_dir(request.discovery.root_dir));
+    preparation.invocation_dir = request.consumer.dir;
+    preparation.selection = .{success = true, packages = .[package], paths = .[""]};
+    preparation.shim_root_override = target_plugin_provider_imports_dir(package_target_dir(request.discovery.root_dir), source.import_name);
+    graph = resolution_resolve_consumer(preparation, package, defer_publication = true);
+    if !graph.success return graph, false;
+    if !resolution_write_shims(*graph) return graph, false;
+    if pending != null {
+        for selection_record: graph.selections array_add(*pending.pending_selections, selection_record);
+    }
+    return graph, true;
+}
+
 resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Resolution {
-    out: Plugin_Source_Resolution;
-    out.ok = true;
+    resolution: Plugin_Source_Resolution;
+    resolution.ok = true;
 
     identities: [..] string;
     identity_ids: [..] string;
@@ -550,25 +638,25 @@ resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Reso
 
         resolved := resolve_reference_module(request.consumer.dir, request.discovery, request.environment, source, declaration.module);
         if !resolved.ok {
-            array_add(*out.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin '%' source: %", declaration.id, resolved.error), fatal = true});
-            out.ok = false;
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin '%' source: %", declaration.id, resolved.error), fatal = true});
+            resolution.ok = false;
             continue;
         }
 
-        count, _, read_ok := plugin_entry_anchor_count(resolved.entry_path);
+        count, _, read_ok := plugin_entry_anchor_count(resolved.provider_dir, resolved.entry_path);
         if !read_ok {
-            array_add(*out.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin module source could not be read: %", resolved.entry_path), fatal = true});
-            out.ok = false;
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin module source could not be read: %", resolved.entry_path), fatal = true});
+            resolution.ok = false;
             continue;
         }
         if count == 0 {
-            array_add(*out.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin capability missing: module '%' of package '%' has no plugin entry", resolved.export_name, resolved.package.name), fatal = true});
-            out.ok = false;
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin capability missing: module '%' of package '%' has no plugin entry", resolved.export_name, resolved.package.name), fatal = true});
+            resolution.ok = false;
             continue;
         }
         if count > 1 {
-            array_add(*out.diagnostics, .{rel_path = declaration.id, message = tprint("ambiguous plugin entry: module '%' of package '%' has % entries", resolved.export_name, resolved.package.name, count), fatal = true});
-            out.ok = false;
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = tprint("ambiguous plugin entry: module '%' of package '%' has % entries", resolved.export_name, resolved.package.name, count), fatal = true});
+            resolution.ok = false;
             continue;
         }
 
@@ -578,9 +666,15 @@ resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Reso
         candidate.package_dir = resolved.provider_dir;
         candidate.module_export = resolved.export_name;
         candidate.entry_path = resolved.entry_path;
-        candidate.import_name = declaration.id;
+        candidate.import_name = plugin_import_name(declaration.id, resolved.identity);
         candidate.identity = resolved.identity;
         candidate.anchor_rel_path = scan_rel_path(resolved.entry_path, resolved.provider_dir);
+        candidate.provider_package = resolved.package;
+        candidate.git_url = resolved.url;
+        candidate.git_branch = resolved.branch;
+        candidate.git_tag = resolved.tag;
+        candidate.git_rev = resolved.rev;
+        candidate.git_commit = resolved.commit;
 
         conflict := "";
         for identity, i: identities {
@@ -589,16 +683,16 @@ resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Reso
         }
         if conflict == "" conflict = plugin_dependency_module_conflict(request, candidate);
         if conflict != "" {
-            array_add(*out.diagnostics, .{rel_path = declaration.id, message = conflict, fatal = true});
-            out.ok = false;
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = conflict, fatal = true});
+            resolution.ok = false;
             continue;
         }
 
         array_add(*identities, candidate.identity);
         array_add(*identity_ids, candidate.id);
-        array_add(*out.sources, candidate);
+        array_add(*resolution.sources, candidate);
     }
-    return out;
+    return resolution;
 }
 
 // The workspace-level scan: Package.plugins is the only activation surface
@@ -641,19 +735,14 @@ plugin_scan_result_from_sources :: (discovery: Workspace_Discovery, resolved: Pl
 
     shim_dir_ready := false;
     for source: resolved.sources {
-        // The hooks-face probe (ticket 060): an IDENT token "hooks" in the
-        // selected module's entry marks the result — the prepare's
-        // conservative host trigger.
-        count, text, read_ok := plugin_entry_anchor_count(source.entry_path);
-        if read_ok && count == 1 {
-            tokens := lex_source(text);
-            for token: tokens {
-                if token.kind == .IDENT && token_text(text, token) == "hooks" result.has_hooks = true;
-            }
-        }
+        // Every enabled external plugin needs the host: only a compiled child
+        // can read the module's real values, and the ABI/options check must not
+        // depend on whether the entry happens to spell its hooks face
+        // (decision 22: unknown or invalid options fail before any hook).
+        result.has_hooks = true;
 
         if !shim_dir_ready {
-            shim_dir := packages_dir(discovery.root_dir);
+            shim_dir := plugin_imports_dir(discovery.root_dir);
             if !make_directory_if_it_does_not_exist(shim_dir, recursive = true) {
                 array_add(*result.diagnostics, .{rel_path = source.id, message = tprint("Could not create the plugin shim directory: %", shim_dir), fatal = true});
                 result.ok = false;
@@ -661,7 +750,7 @@ plugin_scan_result_from_sources :: (discovery: Workspace_Discovery, resolved: Pl
             }
             shim_dir_ready = true;
         }
-        shim_path := tprint("%1/%2.jai", packages_dir(discovery.root_dir), source.import_name);
+        shim_path := tprint("%1/%2.jai", plugin_imports_dir(discovery.root_dir), source.import_name);
         if !write_entire_file(shim_path, dependency_shim_content(source.import_name, source.entry_path)) {
             array_add(*result.diagnostics, .{rel_path = source.id, message = tprint("Could not link the plugin module: %", source.id), fatal = true});
             result.ok = false;
@@ -776,6 +865,23 @@ plugin_probe_rank :: (rel_path: string) -> s64 {
 // ---------------------------------------------------------------------------
 // Registration codegen
 // ---------------------------------------------------------------------------
+
+// The import name a plugin enablement's shim carries. It is derived from the
+// declaration id and the resolved module identity, never equal to the bare id,
+// so enabling a plugin can neither overwrite a business dependency alias nor
+// make `<id>` an ordinary import name of the consuming package (decision 21:
+// a plugin enablement is not an ordinary module selection).
+plugin_import_name :: (id: string, identity: string) -> string {
+    digest := u64_hex(hash_text_fnv1a(tprint("%1|%2", id, identity)));
+    return tprint("%1__plugin_%2", resolution_sanitized_identifier(id), slice(digest, 0, 8));
+}
+
+// The import directory plugin shims are written to
+// (<target>/plugins/imports): only the generated host driver and the test
+// metaprogram that loads the registration search it.
+plugin_imports_dir :: (root_dir: string) -> string {
+    return target_plugin_imports_dir(package_target_dir(root_dir));
+}
 
 // The registration file's landing path: target/plugins/<package>/
 // registration.jai — under target/, so it is a session artifact

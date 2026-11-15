@@ -130,6 +130,59 @@ command_selection_flags_cli :: () {
     expect(output_matches("member-default", combined, .["Compiling Target 'alpha'"], want = false));
 } @test
 
+// A member keeps its nearest declaration as the current package, but explicit
+// selections and declaration validation use its containing workspace.
+command_selection_member_workspace_cli :: () {
+    root := otter_scratch("command-selection-member-workspace");
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "package.jai", "#import \"Juice\";\nPACKAGE :: Package.{workspace = .{members = .[\"members/*\"]}};\n"));
+    expect(cs_write_program_member(root, "members/alpha", "alpha"));
+    expect(cs_write_program_member(root, "members/beta", "beta"));
+
+    working_directory := cs_package(root, "members/alpha/src");
+    result, output, errors := run_otter_child_at(working_directory, .["build", "--package-path", "members/beta"]);
+    combined := tprint("%\n%", output, errors);
+    expect(expect_exit("member-selects-sibling", result, 0));
+    expect(output_matches("member-selects-sibling", combined, .["Compiling Target 'beta'"]));
+    expect(!cs_artifact_exists(root, "members/alpha", "alpha"));
+    expect(cs_artifact_exists(root, "members/beta", "beta"));
+
+    expect(build_seam_write(cs_package(root, "members/beta"), "package.jai", "#import \"Juice\";\nPACKAGE :: Package.{name = \"beta\"};\n"));
+    result, output, errors = run_otter_child_at(working_directory, .["build"]);
+    expect(expect_exit("member-invalid-sibling", result, 1));
+    expect(!cs_artifact_exists(root, "members/alpha", "alpha"));
+} @test
+
+// Declaration validity does not depend on whether defaults are selected.
+command_selection_workspace_declaration_preflight_cli :: () {
+    root := otter_scratch("command-selection-declaration-preflight");
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(cs_write_program_member(root, "members/alpha", "alpha"));
+    expect(build_seam_write(root, "package.jai", "#import \"Juice\";\nPACKAGE :: Package.{workspace = .{members = .[\"members/alpha\"], default_members = .[\"missing\"]}};\n"));
+    result, output, errors := run_otter_child_at(root, .["build", "-p", "alpha"]);
+    expect(expect_exit("explicit-selection-invalid-default", result, 1));
+    expect(!cs_artifact_exists(root, "members/alpha", "alpha"));
+} @test
+
+command_selection_workspace_root_exclude_cli :: () {
+    root := otter_scratch("command-selection-root-exclude");
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(cs_write_program_member(root, "members/alpha", "alpha"));
+    expect(build_seam_write(root, "package.jai", "#import \"Juice\";\nPACKAGE :: Package.{name = \"root\", version = \"1\", modules = .[], executables = .[], workspace = .{members = .[\"members/alpha\"], exclude = .[\".\"]}};\n"));
+    result, output, errors := run_otter_child_at(root, .["build"]);
+    expect(expect_exit("cannot-exclude-root-package", result, 1));
+
+    // Explicit empty defaults remain valid, and an explicit selection can
+    // replace that empty default set.
+    expect(build_seam_write(root, "package.jai", "#import \"Juice\";\nPACKAGE :: Package.{workspace = .{members = .[\"members/alpha\"], default_members = .[]}};\n"));
+    result, output, errors = run_otter_child_at(root, .["build", "-p", "alpha"]);
+    expect(expect_exit("explicit-selection-empty-default", result, 0));
+    expect(cs_artifact_exists(root, "members/alpha", "alpha"));
+} @test
+
 // ---------------------------------------------------------------------------
 // Selection failures stop before any command work (decision 18/70): no program
 // is compiled and no artifact appears.
@@ -191,6 +244,70 @@ command_selection_run_cardinality_cli :: () {
     expect(expect_exit("run-one-package", result, 0));
     expect(output_matches("run-one-package", combined, .["Compiling Target 'beta'", "beta says hello"]));
     expect(output_matches("run-one-package", combined, .["Compiling Target 'alpha'"], want = false));
+} @test
+
+// A real local Git provider proves preflight is not merely before compilation:
+// invalid cardinality must not acquire content or publish any selection.
+command_selection_run_preflight_no_fetch_cli :: () {
+    scratch := dr_scratch("selection-preflight");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    provider := dr_path(scratch, "provider");
+    expect(dr_git_init(provider));
+    expect(dr_write_module_provider(provider, "provider", "Provider_Value :: 7;\n"));
+    commit := dr_git_commit_all(provider, "preflight provider");
+    expect(commit != "");
+    root := dr_path(scratch, "workspace");
+    expect(build_seam_write(root, "package.jai", "#import \"Juice\";\nPACKAGE :: Package.{workspace = .{members = .[\"members/*\"]}};\n"));
+    expect(cs_write_program_member(root, "members/alpha", "alpha"));
+    expect(cs_write_program_member(root, "members/beta", "beta"));
+    declaration := tprint("#import \"Juice\";\nPACKAGE :: Package.{name = \"beta\", version = \"1\", dependencies = .[.{name = \"provider\", source = .{kind = .GIT, git = .{url = %1, branch = \"main\"}}}]};\n", quote_jai_string(provider));
+    expect(build_seam_write(cs_package(root, "members/beta"), "package.jai", declaration));
+
+    result, output, errors := run_otter_child_at(root, .["run", "--workspace"]);
+    expect(expect_exit("run-cardinality-preflight", result, 1));
+    expect(output_matches("run-cardinality-preflight", tprint("%\n%", output, errors), .["run requires exactly one selected package"]));
+    expect(!dr_content_has_commit(scratch, commit));
+    expect(dr_state_text(scratch) == "");
+    expect(!cs_artifact_exists(root, "members/alpha", "alpha"));
+} @test
+
+command_selection_first_failure_no_later_fetch_cli :: () {
+    scratch := dr_scratch("selection-first-failure");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    provider := dr_path(scratch, "provider");
+    expect(dr_git_init(provider));
+    expect(dr_write_module_provider(provider, "provider", "Provider_Value :: 7;\n"));
+    previous_commit := copy_string(dr_git_commit_all(provider, "earlier provider"));
+    expect(previous_commit != "");
+    expect(dr_write_module_provider(provider, "provider", "Provider_Value :: 9;\n"));
+    commit := copy_string(dr_git_commit_all(provider, "later provider"));
+    expect(commit != "" && commit != previous_commit);
+    root := dr_path(scratch, "workspace");
+    expect(build_seam_write(root, "package.jai", "#import \"Juice\";\nPACKAGE :: Package.{workspace = .{members = .[\"members/*\"]}};\n"));
+    expect(cs_write_program_member(root, "members/alpha", "alpha"));
+    expect(cs_write_program_member(root, "members/beta", "beta"));
+    expect(cs_write_program_member(root, "members/gamma", "gamma"));
+    for member_name: string.["alpha", "beta"] {
+        earlier_declaration := tprint("#import \"Juice\";\nPACKAGE :: Package.{name = \"%1\", version = \"1\", dependencies = .[.{name = \"provider\", source = .{kind = .GIT, git = .{url = %2, rev = %3}}}]};\n", member_name, quote_jai_string(provider), quote_jai_string(previous_commit));
+        expect(build_seam_write(cs_package(root, tprint("members/%", member_name)), "package.jai", earlier_declaration));
+    }
+    expect(build_seam_write(cs_package(root, "members/beta"), "src/main.jai", "main :: () { this does not compile }\n"));
+    declaration := tprint("#import \"Juice\";\nPACKAGE :: Package.{name = \"gamma\", version = \"1\", dependencies = .[.{name = \"provider\", source = .{kind = .GIT, git = .{url = %1, branch = \"main\"}}}]};\n", quote_jai_string(provider));
+    expect(build_seam_write(cs_package(root, "members/gamma"), "package.jai", declaration));
+
+    result, output, errors := run_otter_child_at(root, .["build", "--workspace"]);
+    expect(expect_exit("batch-no-later-fetch", result, 1));
+    expect(output_matches("batch-no-later-fetch", tprint("%\n%", output, errors), .["build: completed members/alpha", "build: failed members/beta", "build: not executed members/gamma"]));
+    expect(cs_artifact_exists(root, "members/alpha", "alpha"));
+    expect(!dr_content_has_commit(scratch, commit));
+    expect(!contains(dr_state_text(scratch), commit));
+    expect(contains(dr_state_text(scratch), previous_commit));
+    // An earlier valid resolution is kept even though the next compilation
+    // failed; the successful package remains buildable from its offline state.
+    result, output, errors = run_otter_child_at(root, .["build", "-p", "alpha", "--offline"]);
+    expect(expect_exit("completed-package-keeps-resolution", result, 0));
 } @test
 
 // ---------------------------------------------------------------------------
@@ -289,18 +406,18 @@ command_selection_update_scope_cli :: () {
     expect(dr_write_file(git_member, "package.jai", git_declaration));
 
     // Offline update is rejected before any declaration work.
-    offline, offline_output, offline_errors := dr_run(root, string.["update", "--offline"]);
+    offline, offline_output, offline_errors := run_otter_child_at(root, string.["update", "--offline"]);
     expect(expect_exit("update-offline", offline, 1));
     expect(output_matches("update-offline", tprint("%\n%", offline_output, offline_errors), .["update cannot run offline"]));
 
     // Updating the plain member never resolves the Git source.
-    plain, plain_output, plain_errors := dr_run(root, string.["update", "-p", "plain"]);
+    plain, plain_output, plain_errors := run_otter_child_at(root, string.["update", "-p", "plain"]);
     expect(expect_exit("update-plain", plain, 0));
     expect(output_matches("update-plain", tprint("%\n%", plain_output, plain_errors), .["Dependency resolution graph updated."]));
     expect(!dr_content_has_commit(scratch, commit));
 
     // Updating the whole workspace does resolve it, once.
-    all, all_output, all_errors := dr_run(root, string.["update", "--workspace"]);
+    all, all_output, all_errors := run_otter_child_at(root, string.["update", "--workspace"]);
     expect(expect_exit("update-all", all, 0));
     expect(output_matches("update-all", tprint("%\n%", all_output, all_errors), .["Dependency resolution graph updated."]));
     expect(dr_content_has_commit(scratch, commit));

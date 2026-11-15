@@ -27,17 +27,13 @@
 // address a recycled buffer.
 // ---------------------------------------------------------------------------
 
-dr_root :: () -> string {
-    return copy_string(tprint("%1/target/dep-resolution", otter_root()));
-}
-
 // A fresh directory per case: pick the first unused ordinal instead of deleting a
 // previous tree. A recursive delete returns before the filesystem finishes on
 // Windows, so reusing a name could remove the tree a case just created.
 dr_scratch :: (name: string) -> string {
     root := "";
     for 1..1000000 {
-        candidate := copy_string(tprint("%1/%2-%3", dr_root(), name, it));
+        candidate := copy_string(tprint("%1/target/dep-resolution/%2-%3", otter_root(), name, it));
         if file_exists(candidate) continue;
         root = candidate;
         break;
@@ -66,10 +62,10 @@ dr_path :: (base: string, name: string) -> string {
 // path formatting. Directory names must be at least two characters long: Jai's
 // recursive make_directory_if_it_does_not_exist returns success without creating
 // a one-character final segment (its start_index == name.count - 1 shortcut).
-dr_write_file :: (dir: string, file_name: string, content: string) -> bool {
+dr_write_file :: (directory: string, file_name: string, content: string) -> bool {
     content_copy := copy_string(content);
-    path := dr_path(dir, file_name);
-    make_directory_if_it_does_not_exist(dir, recursive = true);
+    path := dr_path(directory, file_name);
+    make_directory_if_it_does_not_exist(directory, recursive = true);
     return write_entire_file(path, content_copy);
 }
 
@@ -170,11 +166,6 @@ dr_restore_env :: () {
     dr_saved_environment.active = false;
 }
 
-dr_run :: (working_dir: string, arguments: [] string) -> (Process_Result, string, string) {
-    result, output, errors := run_otter_child_at(working_dir, arguments);
-    return result, output, errors;
-}
-
 dr_package_source :: (name: string, body: string) -> string {
     body_copy := copy_string(body);
     return tprint("#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"0.1.0\",\n    name    = \"%1\",\n%2};\n", name, body_copy);
@@ -182,16 +173,16 @@ dr_package_source :: (name: string, body: string) -> string {
 
 // A single-export provider: the fixed auto-discovery candidate `module.jai`
 // carries the export, so the declaration needs no module list.
-dr_write_module_provider :: (dir: string, name: string, module_body: string) -> bool {
+dr_write_module_provider :: (directory: string, name: string, module_body: string) -> bool {
     declaration := dr_package_source(name, "");
-    if !dr_write_file(dir, "package.jai", declaration) return false;
-    return dr_write_file(dir, "module.jai", module_body);
+    if !dr_write_file(directory, "package.jai", declaration) return false;
+    return dr_write_file(directory, "module.jai", module_body);
 }
 
-dr_write_app :: (dir: string, declaration_body: string, main_source: string) -> bool {
+dr_write_app :: (directory: string, declaration_body: string, main_source: string) -> bool {
     declaration := dr_package_source("app", declaration_body);
-    if !dr_write_file(dir, "package.jai", declaration) return false;
-    return dr_write_file(dr_path(dir, "src"), "main.jai", main_source);
+    if !dr_write_file(directory, "package.jai", declaration) return false;
+    return dr_write_file(dr_path(directory, "src"), "main.jai", main_source);
 }
 
 dr_git :: (arguments: [] string) -> (Process_Result, string) {
@@ -202,24 +193,24 @@ dr_git :: (arguments: [] string) -> (Process_Result, string) {
     return result, trim(output);
 }
 
-dr_git_init :: (repo: string) -> bool {
-    if !make_directory_if_it_does_not_exist(repo, recursive = true) return false;
-    result, _ := dr_git(string.["init", "-q", "-b", "main", repo]);
+dr_git_init :: (repository: string) -> bool {
+    if !make_directory_if_it_does_not_exist(repository, recursive = true) return false;
+    result, _ := dr_git(string.["init", "-q", "-b", "main", repository]);
     if result.exit_code != 0 return false;
-    dr_git(string.["-C", repo, "config", "user.email", "juice@example.test"]);
-    dr_git(string.["-C", repo, "config", "user.name", "Juice Test"]);
+    dr_git(string.["-C", repository, "config", "user.email", "juice@example.test"]);
+    dr_git(string.["-C", repository, "config", "user.name", "Juice Test"]);
     return true;
 }
 
-dr_git_commit_all :: (repo: string, message: string) -> string {
-    dr_git(string.["-C", repo, "add", "-A"]);
-    result, _ := dr_git(string.["-C", repo, "commit", "-qm", message]);
+dr_git_commit_all :: (repository: string, message: string) -> string {
+    dr_git(string.["-C", repository, "add", "-A"]);
+    result, _ := dr_git(string.["-C", repository, "commit", "-qm", message]);
     if result.exit_code != 0 return "";
-    return copy_string(dr_git_head(repo));
+    return copy_string(dr_git_head(repository));
 }
 
-dr_git_head :: (repo: string) -> string {
-    _, head := dr_git(string.["-C", repo, "rev-parse", "HEAD"]);
+dr_git_head :: (repository: string) -> string {
+    _, head := dr_git(string.["-C", repository, "rev-parse", "HEAD"]);
     return head;
 }
 
@@ -271,8 +262,12 @@ dr_state_text :: (scratch: string) -> string {
     return text;
 }
 
+// Import shims are package-private: the package's own modules land in its
+// target/packages, its dependency import names in target/imports. No other
+// package searches either directory.
 dr_has_shim :: (package_dir: string, shim_name: string) -> bool {
-    return file_exists(dr_path(dr_path(package_dir, "target/packages"), tprint("%.jai", shim_name)));
+    name := tprint("%.jai", shim_name);
+    return file_exists(dr_path(packages_dir(package_dir), name)) || file_exists(dr_path(dependency_imports_dir(package_dir), name));
 }
 
 // One build of the fixture app. A failure prints the child's own stdout/stderr
@@ -281,7 +276,7 @@ dr_has_shim :: (package_dir: string, shim_name: string) -> bool {
 // (for example git or the filesystem), and the reason is lost with the test's
 // scratch tree. This only adds observation; the returned code is unchanged.
 dr_build_app :: (app: string) -> s32 {
-    result, output, errors := dr_run(app, string.["build"]);
+    result, output, errors := run_otter_child_at(app, string.["build"]);
     if result.exit_code != 0 {
         print("[dr_build_app] build failed in %\n--- stdout ---\n%\n--- stderr ---\n%\n", app, output, errors);
     }
@@ -292,7 +287,7 @@ dr_build_app :: (app: string) -> s32 {
 // child's own output so an intermittent failure names its cause instead of
 // disappearing with the scratch tree.
 dr_update_app :: (app: string) -> (Process_Result, string, string) {
-    result, output, errors := dr_run(app, string.["update"]);
+    result, output, errors := run_otter_child_at(app, string.["update"]);
     if result.exit_code != 0 {
         print("[dr_update_app] update failed in %\n--- stdout ---\n%\n--- stderr ---\n%\n", app, output, errors);
     }
@@ -330,7 +325,7 @@ dependency_resolution_path_source_alias :: () {
     // The provider's export name is not the consumer's import name here: a
     // direct import of the export fails, the alias is the declared door.
     expect(dr_write_file(app, "src/main.jai", "#import \"Basic\";\n#import \"provider\";\n\nmain :: () { print(\"value=%\\n\", Provider_Value); }\n"));
-    alias_result, alias_output, alias_errors := dr_run(app, string.["build"]);
+    alias_result, alias_output, alias_errors := run_otter_child_at(app, string.["build"]);
     expect(alias_result.exit_code != 0);
     expect(contains(alias_output, "Unable to find a module called 'provider'") || contains(alias_errors, "Unable to find a module called 'provider'"));
 } @test
@@ -349,7 +344,7 @@ dependency_resolution_rejects_implicit_name_search :: () {
     expect(dr_write_app(app, "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"prov\", source = .{kind = .PATH, path = \"../not-a-package\"}, modules = .[.{}]},\n    ],\n",
         "#import \"Basic\";\n\nmain :: () { print(\"unused\\n\"); }\n"));
 
-    result, output, errors := dr_run(app, string.["build"]);
+    result, output, errors := run_otter_child_at(app, string.["build"]);
     expect(result.exit_code != 0);
     expect(contains(output, "Dependency provider") || contains(errors, "Dependency provider"));
     expect(!dr_has_shim(app, "provider"));
@@ -371,7 +366,7 @@ dependency_resolution_module_selection_rules :: () {
     app := dr_path(scratch, "app");
     expect(dr_write_app(app, "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"two\", source = .{kind = .PATH, path = \"../two-exports\"}, modules = .[.{}]},\n    ],\n",
         "#import \"Basic\";\n\nmain :: () { print(\"unused\\n\"); }\n"));
-    ambiguous_result, ambiguous_output, ambiguous_errors := dr_run(app, string.["build"]);
+    ambiguous_result, ambiguous_output, ambiguous_errors := run_otter_child_at(app, string.["build"]);
     expect(ambiguous_result.exit_code != 0);
     expect(contains(ambiguous_output, "ambiguous") || contains(ambiguous_errors, "ambiguous"));
 
@@ -383,7 +378,7 @@ dependency_resolution_module_selection_rules :: () {
     // An explicitly empty module list selects nothing; the declaration itself is
     // rejected (capability mismatch), so nothing is resolved or written.
     expect(dr_write_file(app, "package.jai", dr_package_source("app", "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"two\", source = .{kind = .PATH, path = \"../two-exports\"}, modules = .[]},\n    ],\n")));
-    empty_result, empty_output, empty_errors := dr_run(app, string.["build"]);
+    empty_result, empty_output, empty_errors := run_otter_child_at(app, string.["build"]);
     expect(empty_result.exit_code != 0);
     empty_combined := tprint("%\n%", empty_output, empty_errors);
     expect(contains(empty_combined, "modules cannot be empty") || contains(empty_combined, "empty module list"));
@@ -412,19 +407,19 @@ dependency_resolution_module_identity_and_name_conflicts :: () {
         "#import \"Basic\";\n\nmain :: () { print(\"unused\\n\"); }\n"));
     expect(dr_write_file(dr_path(app, "src"), "appmod.jai", "App_Module :: 1;\n"));
 
-    duplicate_result, duplicate_output, duplicate_errors := dr_run(app, string.["build"]);
+    duplicate_result, duplicate_output, duplicate_errors := run_otter_child_at(app, string.["build"]);
     expect(duplicate_result.exit_code != 0);
     expect(contains(duplicate_output, "selected more than once") || contains(duplicate_errors, "selected more than once"));
 
     // A dependency alias that shadows the package's own module.
     expect(dr_write_file(app, "package.jai", dr_package_source("app", "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    modules = .[.{name = \"AppMod\", entry = \"src/appmod.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"one\", source = .{kind = .PATH, path = \"../provider\"}, modules = .[.{alias = \"AppMod\"}]},\n    ],\n")));
-    shadow_result, shadow_output, shadow_errors := dr_run(app, string.["build"]);
+    shadow_result, shadow_output, shadow_errors := run_otter_child_at(app, string.["build"]);
     expect(shadow_result.exit_code != 0);
     expect(contains(shadow_output, "shadows a module of the consuming package") || contains(shadow_errors, "shadows a module of the consuming package"));
 
     // A dependency alias that shadows a standard compiler module.
     expect(dr_write_file(app, "package.jai", dr_package_source("app", "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"one\", source = .{kind = .PATH, path = \"../provider\"}, modules = .[.{alias = \"Basic\"}]},\n    ],\n")));
-    standard_result, standard_output, standard_errors := dr_run(app, string.["build"]);
+    standard_result, standard_output, standard_errors := run_otter_child_at(app, string.["build"]);
     expect(standard_result.exit_code != 0);
     expect(contains(standard_output, "standard compiler module") || contains(standard_errors, "standard compiler module"));
 } @test
@@ -457,7 +452,7 @@ dependency_resolution_transitive_visibility :: () {
 
     // The transitive module is not a direct import of the consumer.
     expect(dr_write_file(app, "src/main.jai", "#import \"Basic\";\n#import \"Cipher\";\n\nmain :: () { print(\"%\\n\", Cipher_Value); }\n"));
-    leak_result, leak_output, leak_errors := dr_run(app, string.["build"]);
+    leak_result, leak_output, leak_errors := run_otter_child_at(app, string.["build"]);
     expect(leak_result.exit_code != 0);
     expect(contains(leak_output, "Unable to find a module called 'Cipher'") || contains(leak_errors, "Unable to find a module called 'Cipher'"));
 } @test
@@ -479,7 +474,7 @@ dependency_resolution_package_cycle_reports_chain :: () {
     expect(dr_write_app(app, "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"alpha\", source = .{kind = .PATH, path = \"../alpha\"}, modules = .[.{}]},\n    ],\n",
         "#import \"Basic\";\n\nmain :: () { print(\"unused\\n\"); }\n"));
 
-    result, output, errors := dr_run(app, string.["build"]);
+    result, output, errors := run_otter_child_at(app, string.["build"]);
     expect(result.exit_code != 0);
     combined := tprint("%\n%", output, errors);
     expect(contains(combined, "cycle"));
@@ -514,7 +509,7 @@ dependency_resolution_workspace_source_membership :: () {
 
     // A directory that is not a workspace member does not qualify.
     expect(dr_write_file(app, "package.jai", dr_package_source("app", "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"member\", source = .{kind = .WORKSPACE}, modules = .[.{path = \"../outside/member\"}]},\n    ],\n")));
-    outside_result, outside_output, outside_errors := dr_run(app, string.["build"]);
+    outside_result, outside_output, outside_errors := run_otter_child_at(app, string.["build"]);
     expect(outside_result.exit_code != 0);
     outside_combined := tprint("%\n%", outside_output, outside_errors);
     expect(contains(outside_combined, "not a workspace member") || contains(outside_combined, "WORKSPACE path escapes"));
@@ -549,7 +544,7 @@ dependency_resolution_own_module_public_import :: () {
     expect(dr_has_shim(app, "calc") && dr_has_shim(app, "more"));
 
     // run compiles through the same import path.
-    run_result, run_output_child, run_errors := dr_run(app, string.["run", "app"]);
+    run_result, run_output_child, run_errors := run_otter_child_at(app, string.["run", "app"]);
     expect(expect_exit("own-module-run", run_result, 0));
     expect(output_matches("own-module-run", tprint("%\n%", run_output_child, run_errors), .["calc=41 more=42"]));
 } @test
@@ -583,7 +578,7 @@ dependency_resolution_own_module_workspace_members :: () {
 
     // Both members declare `helper`; each build resolves its own, so the shared
     // command never maps one import name to two different modules.
-    workspace_result, workspace_output, workspace_errors := dr_run(workspace, string.["build", "--workspace"]);
+    workspace_result, workspace_output, workspace_errors := run_otter_child_at(workspace, string.["build", "--workspace"]);
     workspace_combined := tprint("%\n%", workspace_output, workspace_errors);
     expect(expect_exit("own-module-workspace-build", workspace_result, 0));
     expect(output_matches("own-module-workspace-build", workspace_combined, .["Compiling Target 'one'", "Compiling Target 'two'"]));
@@ -593,10 +588,10 @@ dependency_resolution_own_module_workspace_members :: () {
     expect(dr_has_shim(dr_path(workspace, "members/two"), "helper"));
 
     // Each program read its own member's module.
-    one_result, one_output, one_errors := dr_run(workspace, string.["run", "-p", "one"]);
+    one_result, one_output, one_errors := run_otter_child_at(workspace, string.["run", "-p", "one"]);
     expect(expect_exit("own-module-workspace-run-one", one_result, 0));
     expect(output_matches("own-module-workspace-run-one", tprint("%\n%", one_output, one_errors), .["one helper=5"]));
-    two_result, two_output, two_errors := dr_run(workspace, string.["run", "-p", "two"]);
+    two_result, two_output, two_errors := run_otter_child_at(workspace, string.["run", "-p", "two"]);
     expect(expect_exit("own-module-workspace-run-two", two_result, 0));
     expect(output_matches("own-module-workspace-run-two", tprint("%\n%", two_output, two_errors), .["two helper=500"]));
 
@@ -605,7 +600,7 @@ dependency_resolution_own_module_workspace_members :: () {
     expect(build_seam_write(dr_path(workspace, "members/one/src"), "main.jai", sibling_consumer));
     expect(dr_write_file(dr_path(workspace, "members/two"), "package.jai", "#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"1\",\n    name    = \"two\",\n    modules = .[.{name = \"helper\", entry = \"helper.jai\"}, .{name = \"sibling_only\", entry = \"sibling_only.jai\"}],\n    executables = .[.{name = \"two\", entry = \"src/main.jai\"}],\n};\n"));
     expect(dr_write_file(dr_path(workspace, "members/two"), "sibling_only.jai", "Sibling_Value :: 1;\n"));
-    sibling_result, sibling_output, sibling_errors := dr_run(workspace, string.["build", "-p", "one"]);
+    sibling_result, sibling_output, sibling_errors := run_otter_child_at(workspace, string.["build", "-p", "one"]);
     expect(sibling_result.exit_code != 0);
     sibling_combined := tprint("%\n%", sibling_output, sibling_errors);
     expect(contains(sibling_combined, "Unable to find a module called 'sibling_only'"));
@@ -627,7 +622,7 @@ dependency_resolution_own_module_in_test_source :: () {
     expect(build_seam_write(tested, "modules/subject.jai", "Subject_Value :: 3;\n"));
     expect(build_seam_write(tested, "tests/subject_test.jai", "#import \"Testing\";\n#import \"subject\";\n\nown_module_bound :: () {\n    expect(Subject_Value == 3);\n} @test\n"));
 
-    result, output, errors := dr_run(tested, string.["test"]);
+    result, output, errors := run_otter_child_at(tested, string.["test"]);
     combined := tprint("%\n%", output, errors);
     expect(expect_exit("own-module-test", result, 0));
     expect(output_matches("own-module-test", combined, .["[test] own_module_bound", "1 passed, 0 failed"]));
@@ -644,7 +639,7 @@ dependency_resolution_own_module_in_test_source :: () {
     member_test := "#import \"Testing\";\n#import \"subject\";\n\nmember_own_module_bound :: () {\n    expect(Subject_Value == 7);\n} @test\n";
     expect(build_seam_write(member, "tests/member_own_test.jai", member_test));
 
-    member_result, member_output, member_errors := dr_run(workspace, string.["test", "-p", "member_tested"]);
+    member_result, member_output, member_errors := run_otter_child_at(workspace, string.["test", "-p", "member_tested"]);
     member_combined := tprint("%\n%", member_output, member_errors);
     expect(expect_exit("own-module-member-test", member_result, 0));
     expect(output_matches("own-module-member-test", member_combined, .["[test] member_own_module_bound", "1 passed, 0 failed"]));

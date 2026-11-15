@@ -34,12 +34,10 @@
 // fixture text assembled with it is copied before a path is built from it.
 // ---------------------------------------------------------------------------
 
-// A Git provider package that exports one named constant. The package name is
-// the caller's choice so a case can give two sources the same package name.
-acceptance_write_git_package :: (dir: string, package_name: string, module_source: string) -> bool {
-    if !dr_write_file(dir, "package.jai", dr_package_source(package_name, "")) return false;
-    return dr_write_file(dir, "module.jai", module_source);
-}
+// A Git provider package that exports one named constant is exactly the shared
+// `dr_write_module_provider` shape (the package declaration plus `module.jai`),
+// so the Git cases call that helper directly; the caller still owns the Git
+// initialisation and the commit, which the helper deliberately does not do.
 
 // A consumer whose only dependency is a Git provider selected by `selector`
 // (for example `, branch = "main"` or `, rev = "<40 hex>"`) and imported as
@@ -73,10 +71,10 @@ acceptance_a02_member_does_not_override_git_source :: () {
     dr_isolate(scratch);
     defer dr_restore_env();
 
-    repo := dr_path(scratch, "repo");
-    expect(dr_git_init(repo));
-    expect(acceptance_write_git_package(repo, "gitlib", "Git_Value :: 100;\n"));
-    expect(dr_git_commit_all(repo, "provider").count == 40);
+    repository := dr_path(scratch, "repo");
+    expect(dr_git_init(repository));
+    expect(dr_write_module_provider(repository, "gitlib", "Git_Value :: 100;\n"));
+    expect(dr_git_commit_all(repository, "provider").count == 40);
 
     workspace := dr_path(scratch, "ws");
     expect(dr_write_file(workspace, "package.jai", "#import \"Juice\";\n\nPACKAGE :: Package.{\n    workspace = .{\n        members = string.[\"packages/lib\", \"app\"],\n    },\n};\n"));
@@ -84,7 +82,7 @@ acceptance_a02_member_does_not_override_git_source :: () {
     expect(dr_write_module_provider(dr_path(dr_path(workspace, "packages"), "lib"), "gitlib", "Git_Value :: 999;\n"));
 
     app := dr_path(workspace, "app");
-    expect(acceptance_write_git_consumer(app, repo, ", branch = \"main\""));
+    expect(acceptance_write_git_consumer(app, repository, ", branch = \"main\""));
     expect(dr_build_app(app) == 0);
     exit_code, run_output := dr_run_app(app);
     expect(exit_code == 0 && contains(run_output, "git=100"));
@@ -110,17 +108,17 @@ acceptance_a03_same_name_sources_coexist :: () {
     dr_isolate(scratch);
     defer dr_restore_env();
 
-    first_repo := dr_path(scratch, "first-repo");
-    second_repo := dr_path(scratch, "second-repo");
-    expect(dr_git_init(first_repo));
-    expect(dr_git_init(second_repo));
-    expect(acceptance_write_git_package(first_repo, "dupe", "From_First :: 10;\n"));
-    expect(acceptance_write_git_package(second_repo, "dupe", "From_Second :: 20;\n"));
-    expect(dr_git_commit_all(first_repo, "first source").count == 40);
-    expect(dr_git_commit_all(second_repo, "second source").count == 40);
+    first_repository := dr_path(scratch, "first-repo");
+    second_repository := dr_path(scratch, "second-repo");
+    expect(dr_git_init(first_repository));
+    expect(dr_git_init(second_repository));
+    expect(dr_write_module_provider(first_repository, "dupe", "From_First :: 10;\n"));
+    expect(dr_write_module_provider(second_repository, "dupe", "From_Second :: 20;\n"));
+    expect(dr_git_commit_all(first_repository, "first source").count == 40);
+    expect(dr_git_commit_all(second_repository, "second source").count == 40);
 
     app := dr_path(scratch, "app");
-    body := copy_string(tprint("    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"first\", source = .{kind = .GIT, git = .{url = \"%1\"}}, modules = .[.{alias = \"First\"}]},\n        .{name = \"second\", source = .{kind = .GIT, git = .{url = \"%2\"}}, modules = .[.{alias = \"Second\"}]},\n    ],\n", first_repo, second_repo));
+    body := copy_string(tprint("    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"first\", source = .{kind = .GIT, git = .{url = \"%1\"}}, modules = .[.{alias = \"First\"}]},\n        .{name = \"second\", source = .{kind = .GIT, git = .{url = \"%2\"}}, modules = .[.{alias = \"Second\"}]},\n    ],\n", first_repository, second_repository));
     source := "#import \"Basic\";\n#import \"First\";\n#import \"Second\";\n\nmain :: () {\n    print(\"sum=%\\n\", From_First + From_Second);\n}\n";
     expect(dr_write_app(app, body, source));
 
@@ -138,16 +136,16 @@ acceptance_a03_same_name_revisions_coexist :: () {
     dr_isolate(scratch);
     defer dr_restore_env();
 
-    repo := dr_path(scratch, "repo");
-    expect(dr_git_init(repo));
-    expect(acceptance_write_git_package(repo, "dupe", "Old_Value :: 10;\n"));
-    older := copy_string(dr_git_commit_all(repo, "older"));
+    repository := dr_path(scratch, "repo");
+    expect(dr_git_init(repository));
+    expect(dr_write_module_provider(repository, "dupe", "Old_Value :: 10;\n"));
+    older := copy_string(dr_git_commit_all(repository, "older"));
     expect(older.count == 40);
-    expect(acceptance_write_git_package(repo, "dupe", "New_Value :: 20;\n"));
-    expect(dr_git_commit_all(repo, "newer").count == 40);
+    expect(dr_write_module_provider(repository, "dupe", "New_Value :: 20;\n"));
+    expect(dr_git_commit_all(repository, "newer").count == 40);
 
     app := dr_path(scratch, "app");
-    body := copy_string(tprint("    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"pinned\", source = .{kind = .GIT, git = .{url = \"%1\", rev = \"%2\"}}, modules = .[.{alias = \"Old\"}]},\n        .{name = \"floating\", source = .{kind = .GIT, git = .{url = \"%1\", branch = \"main\"}}, modules = .[.{alias = \"New\"}]},\n    ],\n", repo, older));
+    body := copy_string(tprint("    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"pinned\", source = .{kind = .GIT, git = .{url = \"%1\", rev = \"%2\"}}, modules = .[.{alias = \"Old\"}]},\n        .{name = \"floating\", source = .{kind = .GIT, git = .{url = \"%1\", branch = \"main\"}}, modules = .[.{alias = \"New\"}]},\n    ],\n", repository, older));
     source := "#import \"Basic\";\n#import \"Old\";\n#import \"New\";\n\nmain :: () {\n    print(\"sum=%\\n\", Old_Value + New_Value);\n}\n";
     expect(dr_write_app(app, body, source));
 
@@ -169,22 +167,22 @@ acceptance_a11_moved_root_is_new_context :: () {
     dr_isolate(scratch);
     defer dr_restore_env();
 
-    repo := dr_path(scratch, "repo");
-    expect(dr_git_init(repo));
-    expect(dr_git_provider_value(repo, 100));
-    first_commit := copy_string(dr_git_commit_all(repo, "first"));
+    repository := dr_path(scratch, "repo");
+    expect(dr_git_init(repository));
+    expect(dr_git_provider_value(repository, 100));
+    first_commit := copy_string(dr_git_commit_all(repository, "first"));
     expect(first_commit.count == 40);
 
     original := dr_path(scratch, "original/app");
-    expect(dr_write_git_app(original, repo, "Lib", ", branch = \"main\""));
+    expect(dr_write_git_app(original, repository, "Lib", ", branch = \"main\""));
     expect(dr_build_app(original) == 0);
     moved_exit, moved_output := dr_run_app(original);
     expect(moved_exit == 0 && contains(moved_output, "value=100"));
     expect(contains(dr_state_text(scratch), first_commit));
 
     // The branch moves after the record exists.
-    expect(dr_git_provider_value(repo, 200));
-    second_commit := copy_string(dr_git_commit_all(repo, "second"));
+    expect(dr_git_provider_value(repository, 200));
+    second_commit := copy_string(dr_git_commit_all(repository, "second"));
     expect(second_commit.count == 40 && second_commit != first_commit);
 
     // The project is recreated at a new root from its own declaration and
@@ -212,7 +210,7 @@ acceptance_a11_moved_root_is_new_context :: () {
 
     // A changed cwd inside the same project does not re-resolve: invoking from
     // a source subdirectory keeps the record of the package root found upward.
-    subdirectory_result, subdirectory_output, subdirectory_errors := dr_run(dr_path(original, "src"), string.["build"]);
+    subdirectory_result, subdirectory_output, subdirectory_errors := run_otter_child_at(dr_path(original, "src"), string.["build"]);
     expect(expect_exit("a11-subdirectory-build", subdirectory_result, 0));
     expect(output_matches("a11-subdirectory-build", tprint("%\n%", subdirectory_output, subdirectory_errors), .["Compiling Target 'app'"]));
     subdirectory_exit, subdirectory_run := dr_run_app(original);
@@ -258,7 +256,7 @@ acceptance_a11_xdg_relative_falls_back :: () {
     expect(dr_write_file(app, "package.jai", dr_package_source("app", "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n")));
     expect(build_seam_write(dr_path(app, "src"), "main.jai", "#import \"Basic\";\n\nmain :: () {\n    print(\"fallback\\n\");\n}\n"));
 
-    result, output, errors := dr_run(app, string.["build"]);
+    result, output, errors := run_otter_child_at(app, string.["build"]);
     combined := tprint("%\n%", output, errors);
     expect(expect_exit("a11-xdg-relative", result, 0));
     expect(output_matches("a11-xdg-relative", combined, .[
@@ -289,15 +287,15 @@ acceptance_a12_git_provider_workspace_boundary :: () {
 
     // The provider repository: a workspace with a shared member and a provider
     // member that selects the shared member by a WORKSPACE source.
-    repo := dr_path(scratch, "repo");
-    expect(dr_git_init(repo));
-    expect(dr_write_file(repo, "package.jai", "#import \"Juice\";\n\nPACKAGE :: Package.{\n    workspace = .{\n        members = string.[\"packages/shared\", \"packages/provider\"],\n    },\n};\n"));
-    expect(dr_write_file(dr_path(dr_path(repo, "packages"), "shared"), "package.jai", dr_package_source("shared", "")));
-    expect(dr_write_file(dr_path(dr_path(repo, "packages"), "shared"), "module.jai", "Shared_Value :: 5;\n"));
-    provider := dr_path(dr_path(repo, "packages"), "provider");
+    repository := dr_path(scratch, "repo");
+    expect(dr_git_init(repository));
+    expect(dr_write_file(repository, "package.jai", "#import \"Juice\";\n\nPACKAGE :: Package.{\n    workspace = .{\n        members = string.[\"packages/shared\", \"packages/provider\"],\n    },\n};\n"));
+    expect(dr_write_file(dr_path(dr_path(repository, "packages"), "shared"), "package.jai", dr_package_source("shared", "")));
+    expect(dr_write_file(dr_path(dr_path(repository, "packages"), "shared"), "module.jai", "Shared_Value :: 5;\n"));
+    provider := dr_path(dr_path(repository, "packages"), "provider");
     expect(dr_write_file(provider, "package.jai", dr_package_source("provider", "    dependencies = Dependency.[\n        .{name = \"shared\", source = .{kind = .WORKSPACE}, modules = .[.{path = \"packages/shared\", alias = \"Shared\"}]},\n    ],\n")));
     expect(dr_write_file(provider, "module.jai", "#import \"Shared\";\n\nProvider_Value :: Shared_Value * 2;\n"));
-    expect(dr_git_commit_all(repo, "provider workspace").count == 40);
+    expect(dr_git_commit_all(repository, "provider workspace").count == 40);
 
     // The consumer workspace has a member with the SAME name and a different
     // value, so borrowing the consumer's members would be observable.
@@ -306,7 +304,7 @@ acceptance_a12_git_provider_workspace_boundary :: () {
     expect(dr_write_module_provider(dr_path(dr_path(workspace, "members"), "shared"), "shared", "Shared_Value :: 500;\n"));
 
     app := dr_path(workspace, "app");
-    body := copy_string(tprint("    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"provider\", source = .{kind = .GIT, git = .{url = \"%1\"}}, modules = .[.{path = \"packages/provider\", alias = \"Prov\"}]},\n    ],\n", repo));
+    body := copy_string(tprint("    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"provider\", source = .{kind = .GIT, git = .{url = \"%1\"}}, modules = .[.{path = \"packages/provider\", alias = \"Prov\"}]},\n    ],\n", repository));
     provider_source := "#import \"Basic\";\n#import \"Prov\";\n\nmain :: () {\n    print(\"value=%\\n\", Provider_Value);\n}\n";
     expect(dr_write_app(app, body, provider_source));
     expect(dr_build_app(app) == 0);
@@ -316,10 +314,10 @@ acceptance_a12_git_provider_workspace_boundary :: () {
     // A WORKSPACE selection that names a consumer-only member is not a member of
     // the provider's own checkout, so it fails instead of reaching outwards.
     expect(dr_write_file(provider, "package.jai", dr_package_source("provider", "    dependencies = Dependency.[\n        .{name = \"shared\", source = .{kind = .WORKSPACE}, modules = .[.{path = \"members/shared\", alias = \"Shared\"}]},\n    ],\n")));
-    expect(dr_git_commit_all(repo, "consumer member reference").count == 40);
+    expect(dr_git_commit_all(repository, "consumer member reference").count == 40);
     escaping := dr_path(scratch, "escaping-app");
     expect(dr_write_app(escaping, body, provider_source));
-    escape_result, escape_output, escape_errors := dr_run(escaping, string.["build"]);
+    escape_result, escape_output, escape_errors := run_otter_child_at(escaping, string.["build"]);
     escape_combined := tprint("%\n%", escape_output, escape_errors);
     expect(escape_result.exit_code != 0);
     expect(contains(escape_combined, "not a workspace member") || contains(escape_combined, "WORKSPACE path escapes") || contains(escape_combined, "workspace"));
@@ -350,7 +348,7 @@ acceptance_a13_unselected_invalid_member_blocks :: () {
 
     // Selecting only the healthy package still fails: the member set is
     // validated as a whole before the selection runs.
-    result, output, errors := dr_run(workspace, string.["build", "-p", "good"]);
+    result, output, errors := run_otter_child_at(workspace, string.["build", "-p", "good"]);
     combined := tprint("%\n%", output, errors);
     expect(result.exit_code != 0);
     expect(contains(combined, "'type' is not a member of Package"));
@@ -358,10 +356,10 @@ acceptance_a13_unselected_invalid_member_blocks :: () {
     expect(!file_exists(target_artifact_path(package_target_dir(good), "good")));
 
     // The same is true for run and test: no partial command work happens.
-    run_result, run_output, run_errors := dr_run(workspace, string.["run", "-p", "good"]);
+    run_result, run_output, run_errors := run_otter_child_at(workspace, string.["run", "-p", "good"]);
     expect(run_result.exit_code != 0);
     expect(contains(tprint("%\n%", run_output, run_errors), "'type' is not a member of Package"));
-    test_result, test_output, test_errors := dr_run(workspace, string.["test", "-p", "good"]);
+    test_result, test_output, test_errors := run_otter_child_at(workspace, string.["test", "-p", "good"]);
     expect(test_result.exit_code != 0);
     expect(contains(tprint("%\n%", test_output, test_errors), "'type' is not a member of Package"));
 } @test
@@ -377,29 +375,29 @@ acceptance_a15_entry_through_link_is_rejected :: () {
     dr_isolate(scratch);
     defer dr_restore_env();
 
-    package_dir := dr_path(scratch, "linked");
-    expect(dr_write_file(package_dir, "package.jai", dr_package_source("linked", "    executables = .[.{name = \"linked\", entry = \"via_link/main.jai\"}],\n")));
-    expect(build_seam_write(dr_path(package_dir, "real"), "main.jai", "#import \"Basic\";\n\nmain :: () {\n    print(\"linked\\n\");\n}\n"));
+    package_directory := dr_path(scratch, "linked");
+    expect(dr_write_file(package_directory, "package.jai", dr_package_source("linked", "    executables = .[.{name = \"linked\", entry = \"via_link/main.jai\"}],\n")));
+    expect(build_seam_write(dr_path(package_directory, "real"), "main.jai", "#import \"Basic\";\n\nmain :: () {\n    print(\"linked\\n\");\n}\n"));
 
     #if OS == .WINDOWS {
-        link_ok := make_test_link(tprint("%1/via_link", package_dir), tprint("%1/real", package_dir), true, true);
+        link_ok := make_test_link(tprint("%1/via_link", package_directory), tprint("%1/real", package_directory), true, true);
         if !link_ok {
             print("SKIP: directory junction creation unavailable on this machine\n");
             return;
         }
     } else {
-        link_ok := run_command("ln", "-s", tprint("%1/real", package_dir), tprint("%1/via_link", package_dir)).exit_code == 0;
+        link_ok := run_command("ln", "-s", tprint("%1/real", package_directory), tprint("%1/via_link", package_directory)).exit_code == 0;
         if !link_ok {
             print("SKIP: symbolic link creation unavailable\n");
             return;
         }
     }
 
-    result, output, errors := dr_run(package_dir, string.["build"]);
+    result, output, errors := run_otter_child_at(package_directory, string.["build"]);
     combined := tprint("%\n%", output, errors);
     expect(result.exit_code != 0);
     expect(contains(combined, "Product entry is not a regular link-free file: via_link/main.jai"));
-    expect(!file_exists(target_artifact_path(package_target_dir(package_dir), "linked")));
+    expect(!file_exists(target_artifact_path(package_target_dir(package_directory), "linked")));
 } @test
 
 // Windows aliases the same file through another case spelling; the physical
@@ -414,18 +412,18 @@ acceptance_a15_case_identity_and_cross_category_names :: () {
 
     // One package declaring a module and an executable with the SAME name: the
     // two name spaces are separate (decision 6, story 14).
-    package_dir := dr_path(scratch, "cased");
-    expect(dr_write_file(package_dir, "package.jai", dr_package_source("cased", "    modules = .[.{name = \"tool\", entry = \"tool.jai\"}],\n    executables = .[.{name = \"tool\", entry = \"SRC/main.jai\"}],\n")));
-    expect(dr_write_file(package_dir, "tool.jai", "Tool_Value :: 3;\n"));
-    expect(build_seam_write(dr_path(package_dir, "src"), "main.jai", "#import \"Basic\";\n#import \"tool\";\n\nmain :: () {\n    print(\"tool=%\\n\", Tool_Value);\n}\n"));
+    package_directory := dr_path(scratch, "cased");
+    expect(dr_write_file(package_directory, "package.jai", dr_package_source("cased", "    modules = .[.{name = \"tool\", entry = \"tool.jai\"}],\n    executables = .[.{name = \"tool\", entry = \"SRC/main.jai\"}],\n")));
+    expect(dr_write_file(package_directory, "tool.jai", "Tool_Value :: 3;\n"));
+    expect(build_seam_write(dr_path(package_directory, "src"), "main.jai", "#import \"Basic\";\n#import \"tool\";\n\nmain :: () {\n    print(\"tool=%\\n\", Tool_Value);\n}\n"));
 
-    result, output, errors := dr_run(package_dir, string.["build"]);
+    result, output, errors := run_otter_child_at(package_directory, string.["build"]);
     combined := tprint("%\n%", output, errors);
     #if OS == .WINDOWS {
         expect(expect_exit("a15-case-identity", result, 0));
         expect(output_matches("a15-case-identity", combined, .["Compiling Target 'tool'"]));
-        expect(file_exists(target_artifact_path(package_target_dir(package_dir), "tool")));
-        artifact_result, artifact_output, _, _ := run_command(target_artifact_path(package_target_dir(package_dir), "tool"), capture_and_return_output = true);
+        expect(file_exists(target_artifact_path(package_target_dir(package_directory), "tool")));
+        artifact_result, artifact_output, _, _ := run_command(target_artifact_path(package_target_dir(package_directory), "tool"), capture_and_return_output = true);
         expect(expect_exit("a15-case-identity-artifact", artifact_result, 0));
         expect(contains(artifact_output, "tool=3"));
     } else {

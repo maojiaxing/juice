@@ -105,7 +105,7 @@ test "Windows environment paths retain Unicode across size changes" {
         wide_name := utf8_to_wide(name,, temp);
         expect(get_env(name) == "");
         defer SetEnvironmentVariableW(wide_name, null);
-        for value: string.["C:/缓存/状态/😀", "C:/短", "C:/更长的缓存路径/状态目录/🧪/juice"] {
+        for value: string.["C:/缓存/状态/𐐀", "C:/短", "C:/更长的缓存路径/状态目录/𐐨/juice"] {
             expect(SetEnvironmentVariableW(wide_name, utf8_to_wide(value,, temp)) != 0);
             expect(get_env(name) == value);
         }
@@ -125,7 +125,7 @@ test "Windows environment paths retain Unicode across size changes" {
             return 0;
         }
         short_value := "C:/短";
-        long_value := "C:/更长的缓存路径/状态目录/🧪/juice";
+        long_value := "C:/更长的缓存路径/状态目录/𐐨/juice";
         worker: Environment_Worker;
         worker.name = wide_name;
         worker.short_value = utf8_to_wide(short_value,, temp);
@@ -165,14 +165,14 @@ test "Concurrent write probes are independent and never reuse a fixed name" {
         return 0;
     }
     workers: [8] Probe_Worker;
-    for i: 0..workers.count-1 {
-        workers[i].root = scratch;
-        expect(thread_init(*workers[i].thread, probe_worker));
-        thread_start(*workers[i].thread);
+    for worker_index: 0..workers.count-1 {
+        workers[worker_index].root = scratch;
+        expect(thread_init(*workers[worker_index].thread, probe_worker));
+        thread_start(*workers[worker_index].thread);
     }
-    for i: 0..workers.count-1 {
-        thread_is_done(*workers[i].thread, -1);
-        thread_deinit(*workers[i].thread);
+    for worker_index: 0..workers.count-1 {
+        thread_is_done(*workers[worker_index].thread, -1);
+        thread_deinit(*workers[worker_index].thread);
     }
     for worker: workers expect(worker.success);
     files := file_list(scratch);

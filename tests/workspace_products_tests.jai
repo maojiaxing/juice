@@ -9,16 +9,18 @@ workspace_products_overlap_cli :: () {
     expect(build_seam_write(root, "package.jai", #string END
 #import "Juice";
 PACKAGE :: Package.{name = "root", version = "1", modules = .[], executables = .[],
-    workspace = .{members = .[".", "members/*", "members/a/../a"], exclude = .["."]}};
+    workspace = .{members = .[".", "members/*", "members/a/../a"], exclude = .["members/excluded"]}};
 END
     ));
     expect(build_seam_write(root, "members/a/package.jai", "#import \"Juice\";\nPACKAGE :: Package.{name = \"member\", version = \"1\", modules = .[], executables = .[]};\n"));
+    expect(build_seam_write(root, "members/excluded/package.jai", "excluded declaration must not be evaluated\n"));
     result, output, errors := run_otter_child_at(root, .["clean"]);
     expect(expect_exit("workspace-overlap", result, 0));
     expect(output_matches("workspace-overlap", tprint("%\n%", output, errors), .["Workspace cleaned."]));
     discovery, discovered := discover_workspace(root, otter_scratch("workspace-products-cache"), plugin_face_modules_dir());
-    expect(discovered && discovery.member_packages.count == 1);
+    expect(discovered && discovery.member_packages.count == 2);
     expect(discovery.member_packages[0].name == "root");
+    expect(discovery.member_packages[1].name == "member");
 } @test
 
 workspace_products_nested_boundary :: () {

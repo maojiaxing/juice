@@ -50,8 +50,12 @@ RESOLUTION_STANDARD_MODULE_NAMES :: string.[
 ];
 
 // The directories a provider source view never copies: build outputs, Git
-// internals and locally generated import shims.
-RESOLUTION_VIEW_EXCLUDED_DIRECTORIES :: string.["target", ".git", ".build", "modules"];
+// internals and locally generated import shims. `modules` is NOT excluded: a
+// declared product entry may live under `modules/` (an S01 review fixture and the
+// S16b workspace-root provider both do), and the view must contain every file the
+// exported entry's shim will load. Skipping it copied the provider without its
+// entry and the compile failed with "Unable to open file ... modules/root.jai".
+RESOLUTION_VIEW_EXCLUDED_DIRECTORIES :: string.["target", ".git", ".build"];
 
 Resolved_Node :: struct {
     name:           string;
@@ -99,11 +103,12 @@ Resolved_Private_Module :: struct {
 }
 
 Workspace_Membership :: struct {
-    boundary_root:  string;
-    workspace_root: string;
-    packages:       [] Normalized_Package;
-    valid:          bool;
-    error:          string;
+    boundary_root:    string;
+    workspace_root:   string;
+    packages:         [] Normalized_Package;
+    has_root_package: bool;
+    valid:            bool;
+    error:            string;
 }
 
 // One import shim: the file name the compiler resolves and the entry it loads.
@@ -121,6 +126,12 @@ Resolution_Graph :: struct {
     success:          bool;
     error:            string;
     consumer_root:    string;
+    // The initiating consumer package inside the context. Two members of one
+    // workspace are two consumers of a shared provider, so their selections are
+    // recorded apart even though one state file holds both.
+    consumer_key:     string;
+    // The consuming package's private dependency import directory.
+    consumer_shim_directory: string;
     consumer_index:   int;
     mode:             Resolution_Mode;
     state:            Resolution_State;
@@ -232,15 +243,18 @@ resolution_membership_for :: (graph: *Resolution_Graph, request: Dependency_Prep
                 }
                 membership.workspace_root = candidate;
                 membership.packages = discovery.member_packages;
+                membership.has_root_package = discovery.has_package;
                 membership.valid = true;
                 array_add(*graph.memberships, membership);
                 return membership;
             }
         }
-        if paths_equal(candidate, ceiling_root) || !path_is_within(ceiling_root, candidate) break;
+        if ceiling_root != "" {
+            if paths_equal(candidate, ceiling_root) || !path_is_within(ceiling_root, candidate) break;
+        }
         candidate = workspace_parent_directory(candidate);
     }
-    membership.error = tprint("WORKSPACE source requires a workspace member; none is declared within %", ceiling_root);
+    membership.error = tprint("WORKSPACE source requires a workspace member; none is declared within %", ifx ceiling_root == "" then start_dir else ceiling_root);
     array_add(*graph.memberships, membership);
     return membership;
 }
@@ -309,12 +323,10 @@ resolution_add_provider :: (graph: *Resolution_Graph, request: Dependency_Prepar
     node.package = declaration;
     node.exports = exports.targets;
     if source_kind == .GIT {
-        node.declaring_key = resolution_declaring_key_git(source_url, commit, provider_dir);
-    } else if owner_index >= 0 {
-        // A local provider resolves its own dependencies as that provider.
-        node.declaring_key = resolution_declaring_key_local(graph.consumer_root, provider_dir);
+        node.declaring_key = resolution_scoped_declaring_key(graph, resolution_declaring_key_git(source_url, commit, provider_dir));
     } else {
-        node.declaring_key = resolution_declaring_key_local(graph.consumer_root, provider_dir);
+        // A local provider resolves its own dependencies as that provider.
+        node.declaring_key = resolution_scoped_declaring_key(graph, resolution_declaring_key_local(graph.consumer_root, provider_dir));
     }
     node.visiting = true;
     array_add(*graph.nodes, node);
@@ -328,8 +340,19 @@ resolution_module_name_taken :: (graph: *Resolution_Graph, import_name: string) 
     return false;
 }
 
-// One consumer-visible selection: duplicate actual modules and final-name
-// collisions fail before anything is written (decision 11).
+// The initiating consumer package's identity inside the resolution context, a
+// prefix of every declaring key so two members sharing one provider keep
+// independent transitive selections (decision 14: the record distinguishes the
+// initiating consumer, the declaring package and the selector).
+resolution_consumer_key :: (consumer_root: string, consumer_package: Normalized_Package) -> string {
+    return resolution_declaring_key_local(consumer_root, consumer_package.dir);
+}
+
+resolution_scoped_declaring_key :: (graph: *Resolution_Graph, base_key: string) -> string {
+    if graph.consumer_key == "" return base_key;
+    return tprint("consumer:%1|%2", graph.consumer_key, base_key);
+}
+
 resolution_add_consumer_module :: (graph: *Resolution_Graph, package_index: int, export_name: string, import_name: string, entry_path: string, reference_name: string) -> bool {
     for module: graph.modules {
         if !module.consumer_visible continue;
@@ -356,7 +379,7 @@ resolution_add_consumer_module :: (graph: *Resolution_Graph, package_index: int,
         graph.error = tprint("Dependency import name is not a valid module name: %", import_name);
         return false;
     }
-    array_add(*graph.modules, Resolved_Module.{
+    array_add(*graph.modules, .{
         owner_index      = graph.consumer_index,
         package_index    = package_index,
         export_name      = export_name,
@@ -370,14 +393,35 @@ resolution_add_consumer_module :: (graph: *Resolution_Graph, package_index: int,
 }
 
 // One provider-internal selection: the provider's own import name is rewritten
-// to a mangled private name so the outermost consumer cannot import it.
+// to a mangled private name so the outermost consumer cannot import it. The
+// same identity and final-name rules a consumer obeys apply here (decision 11):
+// one actual module per owner, one local name per owner, and no local name that
+// shadows one of the provider's own exports.
 resolution_add_provider_module :: (graph: *Resolution_Graph, owner_index: int, package_index: int, export_name: string, local_name: string, entry_path: string, reference_name: string) -> bool {
+    owner := graph.nodes[owner_index];
     for module: graph.modules {
         if module.owner_index != owner_index continue;
-        if module.package_index == package_index && ascii_names_equal(module.export_name, export_name) return true;
+        if module.package_index == package_index && ascii_names_equal(module.export_name, export_name) {
+            graph.error = tprint("Dependency module '%' is selected more than once by package '%' (reference '%').", export_name, owner.name, reference_name);
+            return false;
+        }
+        if ascii_names_equal(module.local_name, local_name) {
+            graph.error = tprint("Dependency import name '%' is declared twice by package '%' (reference '%').", local_name, owner.name, reference_name);
+            return false;
+        }
+    }
+    for export: owner.exports {
+        if ascii_names_equal(export.name, local_name) {
+            graph.error = tprint("Dependency import name '%' shadows a module of package '%' (reference '%').", local_name, owner.name, reference_name);
+            return false;
+        }
+    }
+    if !declaration_identifier_is_valid(local_name) {
+        graph.error = tprint("Dependency import name is not a valid module name: %", local_name);
+        return false;
     }
     private_name := resolution_private_module_name(*graph.nodes[package_index], export_name);
-    array_add(*graph.modules, Resolved_Module.{
+    array_add(*graph.modules, .{
         owner_index      = owner_index,
         package_index    = package_index,
         export_name      = export_name,
@@ -402,39 +446,41 @@ resolution_select_export :: (exports: [] Effective_Target, selection: Module_Ref
     return .{}, tprint("Provider does not export module '%'.", selection.name);
 }
 
+// The status of a source-location attempt whose failure the CALLER phrases:
+// the empty-value and normalization rules are shared, the diagnostics are not
+// (a dependency names itself, a plugin declaration does not).
+Source_Path_Status :: enum {
+    OK;
+    EMPTY;
+    NOT_NORMALIZED;
+}
+
+// The physical root a PATH source names (spec 0087 decision 9): an absolute path
+// is taken as given and a relative one is anchored at the declaring package. The
+// result is the real path, so a link cannot move the provider silently.
+source_path_root :: (raw: string, declaring_dir: string) -> (string, Source_Path_Status) {
+    if raw == "" return "", .EMPTY;
+    candidate := raw;
+    if !path_is_absolute_portable(candidate) candidate = tprint("%1/%2", declaring_dir, raw);
+    normalized, normalized_ok := normalize_existing_path(candidate);
+    if !normalized_ok return "", .NOT_NORMALIZED;
+    return normalized, .OK;
+}
+
 // Resolve one Git source to a commit plus its content directory, honoring the
-// recorded selection unless the mode demands (or forbids) a new resolution.
+// recorded selection unless the mode demands (or forbids) a new resolution. The
+// selection itself is the shared Git step; this caller owns the record it writes
+// and the wording of the dependency diagnostic.
 resolution_resolve_git :: (graph: *Resolution_Graph, request: Dependency_Preparation_Request, declaring_key: string, source: Source_Reference) -> (string, string, string) {
     selector_identity := git_selector_identity(source.branch, source.tag, source.rev);
-    recorded := -1;
-    if request.environment.mode != .UPDATE {
-        recorded = find_resolved_selection(graph.state, declaring_key, source.url, source.branch, source.tag, source.rev);
+    resolved := git_resolve_source(graph.state, request.environment, declaring_key, source, .REQUIRE_CACHED_CONTENT);
+    if resolved.error == .OFFLINE_UNRECORDED {
+        return "", "", tprint("Offline resolution has no recorded selection for % (%).", source.url, selector_identity);
     }
-
-    commit := "";
-    if recorded >= 0 {
-        commit = graph.state.selections[recorded].commit;
-    } else if request.environment.mode == .OFFLINE {
-        // The only record a full commit id may establish without a record: its
-        // content is already in the cache. Floating and short selectors are
-        // rejected rather than guessed.
-        if source.rev != "" && is_full_commit_id(source.rev) {
-            checkout := git_content_checkout_directory(request.environment, source.url, source.rev);
-            current, current_ok := git_checkout_commit(checkout);
-            if current_ok && current == source.rev commit = source.rev;
-        }
-        if commit == "" {
-            return "", "", tprint("Offline resolution has no recorded selection for % (%).", source.url, selector_identity);
-        }
-    } else {
-        resolved, resolution_error := git_resolve_selector(request.environment, source.url, source.branch, source.tag, source.rev);
-        if resolution_error != "" return "", "", resolution_error;
-        commit = resolved;
-    }
-
-    content_dir, content_error := git_ensure_content(request.environment, source.url, commit);
-    if content_error != "" return "", "", content_error;
-    array_add(*graph.selections, Resolved_Selection.{
+    if resolved.error != .NONE return "", "", resolved.message;
+    commit := resolved.commit;
+    content_dir := resolved.content_dir;
+    array_add(*graph.selections, .{
         declaring_key = declaring_key,
         url           = source.url,
         branch        = source.branch,
@@ -461,23 +507,24 @@ resolution_resolve_node :: (graph: *Resolution_Graph, request: Dependency_Prepar
 
         if source_kind == .PATH {
             raw := dependency.source.path;
-            if raw == "" return resolution_fail(graph, tprint("Dependency '%' has an empty path source.", dependency.name));
-            candidate := raw;
-            if !path_is_absolute_portable(candidate) candidate = tprint("%1/%2", node.dir, raw);
-            normalized, normalized_ok := normalize_existing_path(candidate);
-            if !normalized_ok return resolution_fail(graph, tprint("Dependency '%' path source could not be normalized: %", dependency.name, raw));
+            normalized, path_status := source_path_root(raw, node.dir);
+            if path_status == .EMPTY return resolution_fail(graph, tprint("Dependency '%' has an empty path source.", dependency.name));
+            if path_status == .NOT_NORMALIZED return resolution_fail(graph, tprint("Dependency '%' path source could not be normalized: %", dependency.name, raw));
             if node.source_kind == .GIT {
+                // Inside a Git checkout the edge stays inside that checkout and
+                // keeps the repository/commit provenance of the declaring node.
                 if !resolution_path_within(node.boundary_root, normalized) {
                     return resolution_fail(graph, tprint("Dependency '%' path source escapes its Git checkout: %", dependency.name, raw));
                 }
+                source_kind = .GIT;
+                source_url = node.source_url;
+                commit = node.commit;
             } else {
-                sibling_boundary := resolution_sibling_boundary(graph.consumer_root);
-                if !resolution_path_within(sibling_boundary, normalized) {
-                    return resolution_fail(graph, tprint("Dependency '%' path source is outside the sibling directory range: %", dependency.name, raw));
-                }
+                // A local PATH is anchored at the declaring package only; there
+                // is no consumer-parent ceiling (decision 8).
+                boundary_root = graph.consumer_root;
             }
             source_root = normalized;
-            if node.source_kind != .GIT boundary_root = graph.consumer_root;
         } else if source_kind == .GIT {
             if dependency.source.url == "" return resolution_fail(graph, tprint("Dependency '%' has an empty Git URL.", dependency.name));
             resolved_commit, content_dir, git_error := resolution_resolve_git(graph, request, node.declaring_key, dependency.source);
@@ -487,16 +534,19 @@ resolution_resolve_node :: (graph: *Resolution_Graph, request: Dependency_Prepar
             source_url = dependency.source.url;
             boundary_root = content_dir;
         } else if source_kind == .WORKSPACE {
-            if dependency.modules_omitted || dependency.modules.count == 0 {
-                return resolution_fail(graph, tprint("Dependency '%' WORKSPACE source must select a member module.", dependency.name));
-            }
             start := node.dir;
             // A local declaring package may find an ancestor workspace of its own
-            // project (the sibling boundary is that project's parent); a provider
-            // inside a Git checkout can only see a workspace inside the checkout.
-            membership_ceiling := ifx node.source_kind == .GIT then node.boundary_root else resolution_sibling_boundary(graph.consumer_root);
+            // project; a provider inside a Git checkout can only see a workspace
+            // inside that checkout.
+            membership_ceiling := ifx node.source_kind == .GIT then node.boundary_root else "";
             membership = resolution_membership_for(graph, request, membership_ceiling, start);
             if !membership.valid return resolution_fail(graph, membership.error);
+            // WORKSPACE uses the same flat module selection as every other
+            // source: an omitted list accepts the root package's sole export,
+            // while a pure workspace (no root package) must name a member.
+            if dependency.modules_omitted && !membership.has_root_package {
+                return resolution_fail(graph, tprint("Dependency '%' WORKSPACE source root has no package; select a member module explicitly.", dependency.name));
+            }
             for selection: dependency.modules {
                 logical := normalize_package_relative_path(selection.path);
                 if !logical.success return resolution_fail(graph, tprint("Dependency '%' WORKSPACE path escapes the workspace: %", dependency.name, selection.path));
@@ -517,7 +567,7 @@ resolution_resolve_node :: (graph: *Resolution_Graph, request: Dependency_Prepar
 
         selections: [..] Module_Reference;
         if dependency.modules_omitted {
-            array_add(*selections, Module_Reference.{path = "."});
+            array_add(*selections, .{path = "."});
         } else {
             if dependency.modules.count == 0 {
                 return resolution_fail(graph, tprint("Dependency '%' declares an empty module list; the provider capability does not match.", dependency.name));
@@ -575,7 +625,7 @@ resolution_register_private_exports :: (graph: *Resolution_Graph) {
                 if existing.package_index == index && ascii_names_equal(existing.export_name, export.name) duplicate = true;
             }
             if duplicate continue;
-            array_add(*graph.private_modules, Resolved_Private_Module.{
+            array_add(*graph.private_modules, .{
                 package_index = index,
                 export_name   = export.name,
                 import_name   = private_name,
@@ -647,18 +697,9 @@ resolution_collect_package_files :: (package_dir: string) -> [..] string, bool {
     }
     visited := visit_files(package_dir, true, *collect, visitor, visit_files = true, visit_directories = true, visit_symlinks = false, follow_directory_symlinks = false);
     if !visited return collect.files, false;
-    // Stable, deterministic file order (insertion sort, matching the shim
-    // enumeration convention).
-    for i: 1..collect.files.count-1 {
-        if i >= collect.files.count break;
-        key := collect.files[i];
-        j := i - 1;
-        while j >= 0 && compare(collect.files[j], key) > 0 {
-            collect.files[j+1] = collect.files[j];
-            j -= 1;
-        }
-        collect.files[j+1] = key;
-    }
+    // Stable, deterministic file order: the same lexicographic sort the shim
+    // enumeration uses.
+    sort_strings_lexicographically(collect.files);
     return collect.files, true;
 }
 
@@ -704,7 +745,13 @@ resolution_create_view :: (graph: *Resolution_Graph, request: Dependency_Prepara
     }
     if !used return "", true;
 
-    view_dir := tprint("%1/deps/%2", package_target_dir(graph.consumer_root), resolution_sanitized_key(node.identity));
+    // Decision 12: the view is the CONSUMER package's private copy, so it lands in
+    // that package's own target/ — the same tree its dependency shims use
+    // (dependency_imports_dir(consumer_package.dir)). Using the discovery root put
+    // a member's view under the workspace root while the shim pointed at the view's
+    // path from the provider's side, so path and content disagreed.
+    consumer_dir := graph.nodes[graph.consumer_index].dir;
+    view_dir := tprint("%1/deps/%2", package_target_dir(consumer_dir), resolution_sanitized_key(node.identity));
     delete_directory_full(view_dir);
     for file: files {
         source, read_ok := read_entire_file(file);
@@ -752,7 +799,7 @@ resolution_add_shim :: (graph: *Resolution_Graph, directory: string, import_name
         graph.error = tprint("Import name '%' resolves to two different modules.", import_name);
         return false;
     }
-    array_add(*graph.shims, Import_Shim.{directory = copy_string(directory), import_name = copy_string(import_name), entry_path = entry_path});
+    array_add(*graph.shims, .{directory = copy_string(directory), import_name = copy_string(import_name), entry_path = entry_path});
     return true;
 }
 
@@ -770,9 +817,10 @@ resolution_plan_own_module_shims :: (graph: *Resolution_Graph) -> bool {
 resolution_plan_shims :: (graph: *Resolution_Graph) -> bool {
     if !resolution_plan_own_module_shims(graph) return false;
     // Consumer-visible selections and provider-internal rewrites live in the
-    // consumer root's shim directory, the one every compile of this command
-    // searches (decision 12).
-    directory := packages_dir(graph.consumer_root);
+    // consuming package's own import directory: its programs, tests, modules
+    // and plugin host search that path and no sibling package does.
+    directory := graph.consumer_shim_directory;
+    if directory == "" return resolution_fail(graph, "The consuming package has no dependency import directory.");
     for module: graph.modules {
         entry := resolution_effective_entry(graph, module.package_index, module.entry_path);
         if !resolution_add_shim(graph, directory, module.import_name, entry) return false;
@@ -815,30 +863,50 @@ resolution_write_shims :: (graph: *Resolution_Graph) -> bool {
 // pass re-resolved are replaced, records of other declaring packages are kept so
 // a member update cannot erase a sibling member's selections.
 resolution_publish_state :: (graph: *Resolution_Graph, request: Dependency_Preparation_Request) -> bool {
-    merged: [..] Resolved_Selection;
-    for previous: graph.state.selections {
-        superseded := false;
-        for current: graph.selections {
-            if previous.declaring_key != current.declaring_key continue;
-            if previous.url != current.url || previous.branch != current.branch || previous.tag != current.tag || previous.rev != current.rev continue;
-            superseded = true;
-        }
-        if !superseded array_add(*merged, previous);
-    }
-    for current: graph.selections array_add(*merged, current);
-    if !publish_resolution_state(request.environment, graph.consumer_root, merged) {
+    if !resolution_publish_selections(request.environment, graph.consumer_root, graph.selections, graph.state) {
         graph.error = tprint("Could not publish the dependency resolution state for %", graph.consumer_root);
         return false;
     }
     return true;
 }
 
-resolution_resolve_consumer :: (request: Dependency_Preparation_Request, consumer_package: Normalized_Package) -> Resolution_Graph {
+// Merge this pass's records over a previous state file and publish the result:
+// records this pass re-resolved are replaced, records of other declaring
+// packages are kept so a member update cannot erase a sibling member's
+// selections. One merge implementation serves the immediate and the deferred
+// publication paths, so a deferred commit cannot quietly drop a sibling's
+// record.
+resolution_publish_selections :: (
+    environment: Resolution_Environment,
+    consumer_root: string,
+    current_selections: [] Resolved_Selection,
+    previous_state: Resolution_State
+) -> bool {
+    merged: [..] Resolved_Selection;
+    for previous: previous_state.selections {
+        superseded := false;
+        for current: current_selections {
+            if previous.declaring_key != current.declaring_key continue;
+            if previous.url != current.url || previous.branch != current.branch || previous.tag != current.tag || previous.rev != current.rev continue;
+            superseded = true;
+        }
+        if !superseded array_add(*merged, previous);
+    }
+    for current: current_selections array_add(*merged, current);
+    return publish_resolution_state(environment, consumer_root, merged);
+}
+
+resolution_resolve_consumer :: (
+    request: Dependency_Preparation_Request,
+    consumer_package: Normalized_Package,
+    defer_publication := false
+) -> Resolution_Graph {
     graph: Resolution_Graph;
     graph.success = true;
     graph.consumer_root = request.discovery.root_dir;
     graph.mode = request.environment.mode;
     graph.consumer_index = 0;
+    graph.consumer_key = resolution_consumer_key(graph.consumer_root, consumer_package);
     graph.state = read_resolution_state(resolution_state_file(request.environment, request.discovery.root_dir));
     if graph.state.corrupt {
         graph.success = false;
@@ -853,18 +921,26 @@ resolution_resolve_consumer :: (request: Dependency_Preparation_Request, consume
         return graph;
     }
     for export: consumer_exports.targets array_add(*graph.consumer_exports, export.name);
-    // The dependency shim directory is always regenerated; the package's own
+    // The dependency import directory is always regenerated; the package's own
     // one only when it declares modules, or when an earlier run left it behind
     // (a declaration that lost its module list must still stop resolving).
-    resolution_add_shim_directory(*graph, packages_dir(graph.consumer_root));
-    own_directory := packages_dir(consumer_package.dir);
-    if consumer_exports.targets.count > 0 || is_directory(own_directory) resolution_add_shim_directory(*graph, own_directory);
+    if request.shim_root_override != "" {
+        // A provider resolved on a consumer's behalf: one private directory holds
+        // this provider's import names, and its own modules stay out of it (the
+        // provider's own module is linked by the plugin shim, not by a name here).
+        graph.consumer_shim_directory = request.shim_root_override;
+    } else {
+        graph.consumer_shim_directory = dependency_imports_dir(consumer_package.dir);
+        own_directory := packages_dir(consumer_package.dir);
+        if consumer_exports.targets.count > 0 || is_directory(own_directory) resolution_add_shim_directory(*graph, own_directory);
+    }
+    resolution_add_shim_directory(*graph, graph.consumer_shim_directory);
 
     node: Resolved_Node;
     node.name = consumer_package.name;
     node.dir = consumer_package.dir;
     node.identity = tprint("path:%", consumer_package.dir);
-    node.declaring_key = resolution_declaring_key_local(graph.consumer_root, consumer_package.dir);
+    node.declaring_key = resolution_scoped_declaring_key(*graph, resolution_declaring_key_local(graph.consumer_root, consumer_package.dir));
     node.parent_index = -1;
     node.depth = 0;
     node.source_kind = .PATH;
@@ -891,7 +967,7 @@ resolution_resolve_consumer :: (request: Dependency_Preparation_Request, consume
         graph.success = false;
         return graph;
     }
-    if !resolution_publish_state(*graph, request) {
+    if !defer_publication && !resolution_publish_state(*graph, request) {
         graph.success = false;
         return graph;
     }
@@ -904,13 +980,24 @@ resolution_resolve_consumer :: (request: Dependency_Preparation_Request, consume
 // graphs validate before any shim or state is published, so a failure leaves the
 // workspace untouched.
 resolve_dependencies_for_workspace :: (request: Dependency_Preparation_Request) -> bool {
+    return resolve_dependencies_into(request, true, null);
+}
+
+// The command-level entry: resolve exactly as production does, but hand the
+// merged selections to the caller instead of publishing them, so the command
+// can commit after its own validations (decision 15).
+resolve_dependencies_deferred :: (request: Dependency_Preparation_Request, pending: *Prepared_Workspace) -> bool {
+    return resolve_dependencies_into(request, false, pending);
+}
+
+resolve_dependencies_into :: (request: Dependency_Preparation_Request, publish: bool, pending: *Prepared_Workspace) -> bool {
     if request.discovery.root_dir == "" {
         print("[juice ERROR] Dependency resolution requires a discovered workspace.\n");
         return false;
     }
     selection := request.selection;
     if !selection.success {
-        selection = select_workspace_packages(request.discovery, request.invocation_dir, Package_Selection_Request.{});
+        selection = select_workspace_packages(request.discovery, request.invocation_dir, .{});
         if !selection.success {
             print("[juice ERROR] %\n", selection.error);
             return false;
@@ -918,7 +1005,7 @@ resolve_dependencies_for_workspace :: (request: Dependency_Preparation_Request) 
     }
     graphs: [..] Resolution_Graph;
     for package: selection.packages {
-        graph := resolution_resolve_consumer(request, package);
+        graph := resolution_resolve_consumer(request, package, defer_publication = !publish || pending != null);
         if !graph.success {
             print("[juice ERROR] %\n", graph.error);
             return false;
@@ -949,16 +1036,28 @@ resolve_dependencies_for_workspace :: (request: Dependency_Preparation_Request) 
         print("[juice ERROR] %\n", combined.error);
         return false;
     }
+    // The caller asked to commit later: hand it the merged selections of every
+    // selected package's graph. The command publishes them as one transaction
+    // after its own validations (decision 15), so a failing new selection never
+    // replaces a working record.
+    if pending != null {
+        pending.pending_publication = true;
+        pending.pending_consumer_root = request.discovery.root_dir;
+        pending.pending_environment = request.environment;
+        for graph: graphs {
+            for selection_record: graph.selections array_add(*pending.pending_selections, selection_record);
+        }
+    }
     return true;
 }
 
 // Import preparation for plugins and later command layers (decision 12): the
-// directories that carry a consumer's private import names. Shared provider
-// sources are never modified; every derived view lives under the consumer's
-// target/.
-resolution_import_directories :: (root_dir: string) -> [..] string {
+// directory that carries one consuming package's private import names. Shared
+// provider sources are never modified; every derived view lives under that
+// package's own target/.
+resolution_import_directories :: (package_root: string) -> [..] string {
     directories: [..] string;
-    directory := packages_dir(root_dir);
+    directory := dependency_imports_dir(package_root);
     if is_directory(directory) array_add(*directories, path_slashes(directory));
     return directories;
 }

@@ -77,6 +77,12 @@ Plugin_Prepare_Result :: struct {
     member_hooks:      bool;
     ok:                bool;
     diagnostics:       [..] Plugin_Scan_Diagnostic;
+    // The Git records this package's plugin sources resolved through, in
+    // declaration order. The command publishes them together with the
+    // package's dependency selections once every applicable validation —
+    // the scan, the role check, the declarations and the plugin values'
+    // ABI/options — has passed (decisions 9/13-15).
+    git_selections:    [..] Resolved_Selection;
 }
 
 // One selected package's plugin preparation (ticket 0092, spec 0087 decision
@@ -96,6 +102,10 @@ Prepared_Package_Plugins :: struct {
     hits:              [..] Plugin_Scan_Hit;            // registration order
     diagnostics:       [..] Plugin_Scan_Diagnostic;
     ok:                bool;
+    git_selections:    [..] Resolved_Selection;
+    // One private import directory per enablement whose provider declares its own
+    // dependencies. The host compiler needs them on its module search path.
+    provider_import_dirs: [..] string;
     // How many times this package's plugin sources were resolved. The
     // command layer only ever reads a prepared context (prepare_once_for),
     // so a build front, a second program or a re-entered phase never
@@ -118,10 +128,14 @@ Plugin_Preparation :: struct {
     diagnostics: [..] Plugin_Scan_Diagnostic;
 }
 
-// Prepare one package's plugins. Resolving a package that already has a
-// context is a no-op that returns the SAME context (the single-prepare
-// guarantee); a new package appends a context with prepare_count = 1.
-prepare_plugins_once :: (preparation: *Plugin_Preparation, prepared: *Prepared_Workspace, package: Normalized_Package) -> *Prepared_Package_Plugins {
+// The single-prepare interface of the command layer: prepare one package's
+// plugins. Resolving a package that already has a context is a no-op that
+// returns the SAME context (the single-prepare guarantee); a new package
+// appends a context with prepare_count = 1. A build front that runs once per
+// package, a second program of the same package and an idempotent prerequisite
+// phase all come through here, so plugins are prepared once and the view is
+// consumed once.
+plugin_prepare_once_for :: (preparation: *Plugin_Preparation, prepared: *Prepared_Workspace, package: Normalized_Package) -> *Prepared_Package_Plugins {
     package_root := path_slashes(package.dir);
     for prepared_package, index: preparation.packages {
         if prepared_package.package_dir != package_root continue;
@@ -141,8 +155,31 @@ prepare_plugins_once :: (preparation: *Plugin_Preparation, prepared: *Prepared_W
     request.environment = ifx preparation.environment.state_root != "" || preparation.environment.content_cache_root != "" then preparation.environment else prepared.environment;
     resolved := resolve_plugin_sources(request);
     entry.sources = resolved.sources;
-    entry.ok = resolved.ok;
+    // The source diagnostics come first: they name the declaration that failed
+    // (a duplicate enablement, a module with no plugin entry, an escaping module
+    // path), and the provider pass must never replace them with a summary.
     for diagnostic: resolved.diagnostics array_add(*entry.diagnostics, diagnostic);
+
+    // Resolve every enablement's PROVIDER graph in this same transaction: a
+    // plugin module may import a module its own provider declares, and the
+    // consumer never repeats that declaration (decision 21). A failure here is
+    // fatal before any publication and before any hook.
+    if resolved.ok {
+        for source: resolved.sources {
+            provider_graph, provider_ok := resolve_plugin_provider_dependencies(request, source);
+            if !provider_ok {
+                array_add(*entry.diagnostics, .{rel_path = source.id, message = tprint("Plugin '%' provider dependencies: %", source.id, provider_graph.error), fatal = true});
+                resolved.ok = false;
+                break;
+            }
+            if provider_graph.consumer_shim_directory != "" array_add(*entry.provider_import_dirs, provider_graph.consumer_shim_directory);
+            for selection_record: provider_graph.selections array_add(*entry.git_selections, selection_record);
+        }
+    }
+    // A plugin Git record and a provider record are the same kind of thing, so
+    // both land in the one publication the command commits.
+    for selection_record: plugin_resolution_selections(prepared.discovery.root_dir, package, resolved.sources) array_add(*entry.git_selections, selection_record);
+    entry.ok = resolved.ok;
 
     scan := plugin_scan_result_from_sources(prepared.discovery, resolved);
     for diagnostic: scan.diagnostics {
@@ -178,6 +215,7 @@ prepare_plugins_once :: (preparation: *Plugin_Preparation, prepared: *Prepared_W
     for diagnostic: entry.diagnostics if diagnostic.fatal preparation.ok = false;
     return *preparation.packages[preparation.packages.count - 1];
 }
+
 
 // The registration landing point of one package: <target>/plugins/<package>/
 // registration.jai for a package with external plugins, "" when it has none
@@ -216,23 +254,32 @@ write_package_plugin_registration :: (
 // stale derived tree is removed for hygiene only — correctness comes from the
 // registration table, because nothing ever scans the derived directory (a file
 // an earlier run left behind can therefore never be consumed).
-prepare_package_derived_view :: (package_view: *Prepared_Package_Plugins, stage: *Prestep_Stage) -> bool {
+// The default cleanup: the platform directory removal the rest of the tool uses.
+derived_remove_directory :: (path: string) -> bool {
+    return delete_directory_full(path);
+}
+
+// The cleanup seam is an internal injection point, not a lifecycle mount: a real
+// undeletable directory needs a platform-specific lock, so the decision logic is
+// tested through a recording fake — the same discipline as the build front's
+// is_running/handoff seams.
+prepare_package_derived_view :: (
+    package_view: *Prepared_Package_Plugins,
+    stage: *Prestep_Stage,
+    remove_directory: #type (path: string) -> bool = derived_remove_directory
+) -> bool {
     stage.package_root = package_view.package_root;
     stage.derived_root = package_view.derived_root;
     if package_view.derived_root == "" return true;
-    if is_directory(package_view.derived_root) && !delete_directory_full(package_view.derived_root) {
-        print("[juice WARNING] Could not clear the stale private derived area: %\n", package_view.derived_root);
+    // Decision 24: 创建、清理、写入或注册失败中止当前包. A stale area that cannot be
+    // removed is not a hygiene warning: the run would go on to consume files from
+    // a directory the plugin layer can no longer own, so the failure stops the
+    // package here, before any hook fills the stage.
+    if is_directory(package_view.derived_root) && !remove_directory(package_view.derived_root) {
+        print("[juice ERROR] Could not clear the stale private derived area: %\n", package_view.derived_root);
+        return false;
     }
     return true;
-}
-
-// The single-prepare read interface for the command layer: the package's
-// context, prepared on first use and reused afterwards. A build front that
-// runs once per package, a second program of the same package and an
-// idempotent prerequisite phase all come through here, so plugins are
-// prepared once and the view is consumed once.
-plugin_prepare_once_for :: (preparation: *Plugin_Preparation, prepared: *Prepared_Workspace, package: Normalized_Package) -> *Prepared_Package_Plugins {
-    return prepare_plugins_once(preparation, prepared, package);
 }
 
 // Command-level plugin preparation of the ROOT package: the pre-0092 entry
@@ -254,6 +301,7 @@ plugin_prepare_result :: (package_view: *Prepared_Package_Plugins) -> Plugin_Pre
     result.registration_path = package_view.registration_path;
     result.member_hooks = package_view.member_hooks;
     result.hits = package_view.hits;
+    result.git_selections = package_view.git_selections;
     for diagnostic: package_view.diagnostics array_add(*result.diagnostics, diagnostic);
     return result;
 }
@@ -299,6 +347,9 @@ Plugin_Host_Options :: struct {
     package_root:      string;
     derived_root:      string;
     target_root:       string;
+    // One private import directory per enablement whose provider declares its own
+    // dependencies (the provider graph resolved on this package's behalf).
+    provider_import_dirs: [] string;
 }
 
 plugin_host_dir :: (target_dir: string) -> string {
@@ -351,7 +402,7 @@ package_host_options :: (
     options.package_root = path_slashes(package_view.package_root);
     options.derived_root = path_slashes(package_view.derived_root);
     options.target_root = path_slashes(package_target_dir(prepared.discovery.root_dir));
-    options.target_root = path_slashes(package_target_dir(prepared.discovery.root_dir));
+    options.provider_import_dirs = package_view.provider_import_dirs;
     member_dirs: [..] string;
     for dir: stage.member_dirs array_add(*member_dirs, copy_string(dir));
     options.member_dirs = member_dirs;
@@ -526,13 +577,20 @@ generate_plugin_host :: (options: Plugin_Host_Options) -> string {
 // ---------------------------------------------------------------------------
 
 // The host's import directories: the published plugin face (<exe>/modules —
-// juice_core and its closure) and the dependency shim directory
-// (<root>/target/packages — the declared members' import shims). The scan
-// already linked every declared member, so the shim directory exists.
-plugin_host_import_dirs :: (root_dir: string) -> [..] string {
+// juice_core and its closure), the consuming package's own module shims and
+// the plugin-private shim zone (<root>/target/plugins/imports). The plugin
+// zone is deliberately absent from every ordinary compile search path, so an
+// enablement never turns a plugin module into an ordinary import name. The
+// scan already linked every declared member, so the zone exists when a plugin
+// is enabled.
+plugin_host_import_dirs :: (root_dir: string, package_root: string, provider_imports: [] string = .[]) -> [..] string {
     dirs: [..] string;
     array_add(*dirs, path_slashes(juice_modules_dir()));
-    array_add(*dirs, path_slashes(packages_dir(root_dir)));
+    for dir: compiler_import_directories(dependency_imports_dir(ifx package_root != "" then package_root else root_dir), packages_dir(ifx package_root != "" then package_root else root_dir)) array_add(*dirs, dir);
+    array_add(*dirs, path_slashes(plugin_imports_dir(root_dir)));
+    // Each enablement's provider graph names live in their own private
+    // directories (the provider may be a read-only checkout).
+    for dir: provider_imports array_add(*dirs, path_slashes(dir));
     return dirs;
 }
 
@@ -725,7 +783,7 @@ run_plugin_host :: (
         }
     }
 
-    import_dirs := plugin_host_import_dirs(options.root_dir);
+    import_dirs := plugin_host_import_dirs(options.root_dir, options.package_root, options.provider_import_dirs);
     result := spawn(options.host_path, import_dirs);
     if result.exit_code != 0 {
         // The child's stderr was inherited (passthrough); the summary is the

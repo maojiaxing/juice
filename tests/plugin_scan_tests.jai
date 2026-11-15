@@ -46,6 +46,27 @@
     #import "Windows_Utf8";
 }
 
+// Decision 21 (0098): an enabled plugin's import name is PRIVATE — the sanitized
+// declaration id, then "__plugin_", then eight hex digits derived from the id and
+// the resolved module identity. It is never the bare id and never the provider
+// package's directory name, so enabling a plugin can never turn its id into an
+// ordinary import name of the consuming package. The hash half is opaque by
+// design, so the tests pin the shape, the id-derived prefix, the exclusion, and
+// the shim/registration that must carry this exact value.
+pls_private_plugin_import_name_ok :: (name: string, declaration_id: string) -> bool {
+    if name == declaration_id return false;
+    if name == resolution_sanitized_identifier(declaration_id) return false;
+    prefix := tprint("%1__plugin_", resolution_sanitized_identifier(declaration_id));
+    if find_index_from_left(name, prefix) != 0 return false;
+    if name.count != prefix.count + 8 return false;
+    for i: prefix.count..name.count-1 {
+        byte := name[i];
+        hex := (byte >= #char "0" && byte <= #char "9") || (byte >= #char "a" && byte <= #char "f");
+        if !hex return false;
+    }
+    return true;
+}
+
 // ===========================================================================
 // Anchor matrix helpers
 // ===========================================================================
@@ -259,12 +280,15 @@ test "工作区插件扫描：按 Package.plugins 声明序（优先于目录序
     expect(scan.ok);
     expect(scan.hits.count == 2);
     expect(scan.diagnostics.count == 0);
-    expect(scan.hits[0].module_name == "zeta-plugin");
+    expect(pls_private_plugin_import_name_ok(scan.hits[0].module_name, "zeta-plugin"));
     expect(paths_equal(scan.hits[0].abs_path, tprint("%1/packages/zeta-plugin/module.jai", root)));
-    expect(scan.hits[1].module_name == "alpha-plugin");
+    expect(pls_private_plugin_import_name_ok(scan.hits[1].module_name, "alpha-plugin"));
     expect(paths_equal(scan.hits[1].abs_path, tprint("%1/packages/alpha-plugin/module.jai", root)));
-    expect(file_contains(tprint("%1/zeta-plugin.jai", packages_dir(root)), "import shim for package 'zeta-plugin'"));
-    expect(file_contains(tprint("%1/alpha-plugin.jai", packages_dir(root)), "import shim for package 'alpha-plugin'"));
+    // The shims carry the private import names and live in the plugin-private zone
+    // (decision 21); the ordinary package import directory never gains one.
+    expect(file_contains(tprint("%1/%2.jai", plugin_imports_dir(root), scan.hits[0].module_name), "import shim for package"));
+    expect(file_contains(tprint("%1/%2.jai", plugin_imports_dir(root), scan.hits[1].module_name), "import shim for package"));
+    expect(!file_exists(tprint("%1/zeta-plugin.jai", packages_dir(root))));
     expect(!file_exists(tprint("%1/plain-member.jai", packages_dir(root))));
 }
 
@@ -284,16 +308,18 @@ test "工作区插件扫描：声明 id 即导入名 —— 同名入口文件�
     expect(scan.ok);
     expect(scan.diagnostics.count == 0);
     expect(scan.hits.count == 2);
-    expect(scan.hits[0].module_name == "first-plugin");
+    expect(pls_private_plugin_import_name_ok(scan.hits[0].module_name, "first-plugin"));
     expect(scan.hits[0].rel_path == "extra.jai");
     expect(paths_equal(scan.hits[0].abs_path, tprint("%1/packages/first-plugin/extra.jai", root)));
-    expect(scan.hits[1].module_name == "second-plugin");
+    expect(pls_private_plugin_import_name_ok(scan.hits[1].module_name, "second-plugin"));
+    // The two enablements that share one file name must not share an import name.
+    expect(scan.hits[0].module_name != scan.hits[1].module_name);
     expect(scan.hits[1].rel_path == "extra.jai");
     expect(paths_equal(scan.hits[1].abs_path, tprint("%1/packages/second-plugin/extra.jai", root)));
     // Each id gets its own import shim pointing at its own provider entry: the
     // shared file name never becomes an import name.
-    expect(file_contains(tprint("%1/first-plugin.jai", packages_dir(root)), tprint("#load \"%1/packages/first-plugin/extra.jai\"", root)));
-    expect(file_contains(tprint("%1/second-plugin.jai", packages_dir(root)), tprint("#load \"%1/packages/second-plugin/extra.jai\"", root)));
+    expect(file_contains(tprint("%1/%2.jai", plugin_imports_dir(root), scan.hits[0].module_name), tprint("#load \"%1/packages/first-plugin/extra.jai\"", root)));
+    expect(file_contains(tprint("%1/%2.jai", plugin_imports_dir(root), scan.hits[1].module_name), tprint("#load \"%1/packages/second-plugin/extra.jai\"", root)));
 
     // The rule that REPLACED the stem arbitration: two ids selecting the SAME
     // provider module are one actual plugin enabled twice (fatal, decision 21).
@@ -328,13 +354,15 @@ test "工作区插件扫描：模块选择显式化 —— 文件探测序不再
     expect(scan.ok);
     expect(scan.diagnostics.count == 0);
     expect(scan.hits.count == 3);
-    expect(scan.hits[0].module_name == "alpha-first");
+    expect(pls_private_plugin_import_name_ok(scan.hits[0].module_name, "alpha-first"));
     expect(scan.hits[0].rel_path == "module.jai");
     expect(paths_equal(scan.hits[0].abs_path, tprint("%1/packages/alpha-first/module.jai", root)));
-    expect(scan.hits[1].module_name == "zeta-extra");
+    expect(pls_private_plugin_import_name_ok(scan.hits[1].module_name, "zeta-extra"));
     expect(scan.hits[1].rel_path == "extra.jai");
     expect(paths_equal(scan.hits[1].abs_path, tprint("%1/packages/zeta-extra/extra.jai", root)));
-    expect(scan.hits[2].module_name == "extra");
+    // The third enablement's declaration id is "extra"; its module is still named
+    // privately from that id, never the provider file stem alone.
+    expect(pls_private_plugin_import_name_ok(scan.hits[2].module_name, "extra"));
     expect(scan.hits[2].rel_path == "module.jai");
     expect(paths_equal(scan.hits[2].abs_path, tprint("%1/packages/extra/module.jai", root)));
 
@@ -556,10 +584,10 @@ test "工作区插件扫描：真实仓库根声明面（生产发现 + 扫描�
     expect(scan.ok);
     expect(scan.diagnostics.count == 0);
     expect(scan.hits.count == 2);
-    expect(scan.hits[0].module_name == "juice-plugin-lint");
+    expect(pls_private_plugin_import_name_ok(scan.hits[0].module_name, "juice-plugin-lint"));
     expect(scan.hits[0].rel_path == "module.jai");
     expect(paths_equal(scan.hits[0].abs_path, path_slashes(tprint("%1/packages/juice-plugin-lint/module.jai", otter_root()))));
-    expect(scan.hits[1].module_name == "juice-plugin-jaix");
+    expect(pls_private_plugin_import_name_ok(scan.hits[1].module_name, "juice-plugin-jaix"));
     expect(scan.hits[1].rel_path == "module.jai");
     expect(paths_equal(scan.hits[1].abs_path, path_slashes(tprint("%1/packages/juice-plugin-jaix/module.jai", otter_root()))));
     // The jaix member carries the hooks face: the prepare's conservative

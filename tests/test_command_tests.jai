@@ -700,6 +700,20 @@ plugin_wiring_prepared :: (root: string, member_name := "") -> Prepared_Workspac
     return prepared;
 }
 
+// Decision 22 (0098): every enabled external plugin needs the PRESTEP host — only
+// a compiled child holds a plugin's values, so options/ABI validation cannot depend
+// on what the entry happens to spell. These command-front tests therefore stub the
+// host spawn and give it a record file, exactly like the production host does
+// (run_plugin_host's read/parse path still runs for real).
+TC_HOST_ROOT: string;
+
+tc_fake_host_spawn :: (host_path: string, import_dirs: [] string) -> Process_Result {
+    path := plugin_host_records_path(package_target_dir(TC_HOST_ROOT));
+    make_directory_if_it_does_not_exist(path_strip_filename(path), recursive = true);
+    write_entire_file(path, "OK=1\n");
+    return .{exit_code = 0};
+}
+
 test "Test command: plugin hits register and wire the metaprogram" {
     root := plugin_wiring_root("hit");
     delete_directory_full(root);
@@ -709,7 +723,8 @@ test "Test command: plugin hits register and wire the metaprogram" {
     prepared := plugin_wiring_prepared(root, "scratch-plugin");
 
     reset_test_command_seam();
-    expect(test_prepared_workspace(*prepared, "", Hook_Registration.[], collect_test_files, test_spawn_test_compiler));
+    TC_HOST_ROOT = root;
+    expect(test_prepared_workspace(*prepared, "", Hook_Registration.[], collect_test_files, test_spawn_test_compiler, tc_fake_host_spawn));
     expect(test_test_spawn_calls == 1);
     expect(test_test_spawn_path == path_slashes(tprint("%1/test_runner.jai", transpile_tree_dir(root))));
 
@@ -717,7 +732,7 @@ test "Test command: plugin hits register and wire the metaprogram" {
     // member's module import (the scan order = the declaration order).
     registration := workspace_plugin_registration_path(package_target_dir(root));
     expect(file_exists(registration));
-    expect(file_contains(registration, "JUICE_PLUGIN_0 :: #import \"scratch-plugin\";"));
+    expect(file_contains(registration, "JUICE_PLUGIN_0 :: #import \"scratch_plugin__plugin_"));
 
     // Both metaprogram options reached the generated text: the registration
     // #load (the absolute path), the package-root anchor (ticket 042

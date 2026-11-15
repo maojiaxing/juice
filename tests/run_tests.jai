@@ -41,10 +41,14 @@ run_selection_explicit_name :: () {
     plan, chosen = select_run_plan(selected, string.["alpha"]);
     expect(chosen && plan.target.name == "alpha");
 
-    // Declaration uniqueness is case-insensitive; the command-line spelling is
-    // exact, so a different case names no program.
-    _, upper_ok := select_run_plan(selected, string.["Alpha"]);
-    expect(!upper_ok);
+    // Spec section 2 rule 8: every name comparison key is ASCII case-insensitive
+    // and keeps the declared spelling for reporting, so a different case names the
+    // same program. (This case asserted the opposite until 0098 S18: it failed on
+    // both trees because the selector already followed the uniform rule — the A14
+    // row in docs/implementation/package-declaration-acceptance.md repeated the
+    // stale claim.)
+    plan_upper, upper_ok := select_run_plan(selected, string.["Alpha"]);
+    expect(upper_ok && plan_upper.target.name == "alpha");
     _, missing_ok := select_run_plan(selected, string.["missing"]);
     expect(!missing_ok);
 } @test

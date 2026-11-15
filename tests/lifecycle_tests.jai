@@ -551,11 +551,15 @@ test "Lifecycle: a false-returning PRESTEP hook fails the stage and stops the di
     expect(diags.count == 0);
 }
 
-test "Lifecycle: a conflicting substitution fails the stage through its ERROR diagnostic" {
-    // The stage-level table rule (spec §6.2): a duplicate original with a
-    // different replacement records an ERROR diagnostic. Even a hook that
-    // returns true cannot smuggle the conflicting table past the dispatch —
-    // the dispatch's ordinary ERROR check fails the stage.
+test "Lifecycle: a repeated substitution fails the stage through its ERROR diagnostic" {
+    // The stage-level table rule (spec §6.2, decision 24): a second substitution
+    // for one logical input records an ERROR diagnostic — even when the two rows
+    // agree, because the second registration cannot know what the first already
+    // wrote. (Before 0098 S11 an agreeing duplicate was absorbed; the review made
+    // identical duplicates a hard error, so the assertion below checks the new
+    // message AND that the agreeing row is rejected too.) Even a hook that returns
+    // true cannot smuggle the conflicting table past the dispatch — the dispatch's
+    // ordinary ERROR check fails the stage.
     ps_reset();
     stage: Prestep_Stage;
     array_add(*stage.substitutions, .{original = "src/a.jai", replacement = "C:/mirror/a.jai"});
@@ -572,28 +576,33 @@ test "Lifecycle: a conflicting substitution fails the stage through its ERROR di
     expect(PS_TRACE.count == 1 && PS_TRACE[0] == "conflict-rejected");
     expect(diags.count == 1);
     expect(diags[0].level == .ERROR);
-    expect(diags[0].message == "conflicting source substitution: src/a.jai");
+    expect(diags[0].message == "duplicate source substitution: src/a.jai");
     // The rejected row never entered the table.
     expect(stage.substitutions.count == 1);
 }
 
-test "Lifecycle: the prestep table rules absorb duplicates and reject both cross-conflicts" {
+test "Lifecycle: the prestep table rules reject repeated substitutions and both cross-conflicts" {
     stage: Prestep_Stage;
     diags: [..] Lifecycle_Diagnostic;
     ctx := rec_ctx(.PRESTEP, *diags);
     ctx.prestep = *stage;
 
-    // The same original with the same replacement: a no-op (stacked hooks
-    // re-adding an identical row never fail, the row is not duplicated).
+    // Decision 24: a repeated substitution for the same logical input fails even
+    // when both rows name the same replacement. The second registration cannot
+    // know what the first one already wrote, so agreeing is not the same as
+    // being safe.
     expect(prestep_add_substitution(*ctx, "src/a.jai", "C:/mirror/a.jai"));
-    expect(prestep_add_substitution(*ctx, "src/a.jai", "C:/mirror/a.jai"));
-    expect(stage.substitutions.count == 1 && diags.count == 0);
+    expect(!prestep_add_substitution(*ctx, "src/a.jai", "C:/mirror/a.jai"));
+    expect(stage.substitutions.count == 1);
+    expect(diags.count == 1 && diags[0].level == .ERROR);
+    expect(diags[0].message == "duplicate source substitution: src/a.jai");
 
-    // The same original with a different replacement: stage failure.
+    // The same original with a different replacement: the same failure.
+    array_reset(*diags);
     expect(!prestep_add_substitution(*ctx, "src/a.jai", "C:/other/a.jai"));
     expect(stage.substitutions.count == 1);
     expect(diags.count == 1 && diags[0].level == .ERROR);
-    expect(diags[0].message == "conflicting source substitution: src/a.jai");
+    expect(diags[0].message == "duplicate source substitution: src/a.jai");
 
     // A drop of a substituted key: stage failure (one direction).
     array_reset(*diags);

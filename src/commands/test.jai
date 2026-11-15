@@ -67,7 +67,7 @@ test_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     }
     // Every selected package needs its dependency shims even when it declares
     // no product at all (decision 19: test never requires a public product).
-    selection, selected := select_command_packages(ctx, flags, resolution_mode_for(flags), force_dependencies = true);
+    selection, selected := select_command_packages(ctx, flags, resolution_mode_for(flags));
     if !selected return false;
     pattern := ifx flags.positionals.count == 1 then flags.positionals[0] else "";
 
@@ -75,7 +75,8 @@ test_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     batch.operation = "test";
     batch.total = selection.packages.count;
     for selected_package, index: selection.packages {
-        if !test_package(selection.prepared, selected_package.package, pattern) {
+        prepared, prepared_ok := prepare_command_package(ctx, selected_package);
+        if !prepared_ok || !test_package(*prepared, selected_package.package, pattern) {
             package_batch_fail(*batch, *selection, index);
             package_batch_report_failure(*batch);
             return false;
@@ -124,9 +125,9 @@ collect_test_files :: (prepared: *Prepared_Workspace, package_root: string) -> [
     collect.root = package_root;
     // Member boundaries come from the workspace discovery snapshot (root
     // package first); the scan consumes it without merging into discovery.
-    for pkg: prepared.discovery.member_packages {
-        if paths_equal(pkg.dir, package_root) continue;   // the package being tested
-        array_add(*collect.member_dirs, copy_string(pkg.dir));
+    for member_package: prepared.discovery.member_packages {
+        if paths_equal(member_package.dir, package_root) continue;   // the package being tested
+        array_add(*collect.member_dirs, copy_string(member_package.dir));
     }
     files, ok := collect_scan_files(collect.root, *collect, collect_directory_is_excluded, collect_file_is_excluded);
     if !ok {
@@ -524,7 +525,7 @@ test_transpile_front :: (stage: *Test_Transpile_Stage) -> bool {
     // 027). Dependency tests are neither discovered nor executed — the
     // discovery scan never enters dependency packages — this step only
     // makes them compilable.
-    return prepare_dependency_strip_views(root_dir);
+    return prepare_dependency_strip_views(root_dir, dependency_imports_dir(stage.package_root));
 }
 
 // The test orchestration over a prepared workspace. The PRESTEP, TRANSPILE
@@ -652,9 +653,9 @@ test_package :: (
     // consumes this round's registrations only, and every auxiliary output
     // lands inside this package's own derived area.
     if !prepare_package_derived_view(plugin_view, *pstage) return false;
-    for pkg: prepared.discovery.member_packages {
-        if paths_equal(pkg.dir, package.dir) continue;   // the package being tested
-        array_add(*pstage.member_dirs, copy_string(pkg.dir));
+    for member_package: prepared.discovery.member_packages {
+        if paths_equal(member_package.dir, package.dir) continue;   // the package being tested
+        array_add(*pstage.member_dirs, copy_string(member_package.dir));
     }
     lctx.prestep = *pstage;
 
@@ -669,6 +670,11 @@ test_package :: (
         if !host_ok return false;
         if !apply_plugin_host_effects(*pstage, host_records, lctx.diagnostics) return false;
     }
+
+    // Commit the deferred resolution after this package's declarations, plugin
+    // role/identity scan and (where a host ran) the plugin values' ABI/options
+    // passed — one transaction, before any hook (decision 15).
+    if !commit_prepared_resolution(prepared, plugin_prepare.git_selections) return false;
 
     if !run_mounted_hooks(dispatch_table, .PRESTEP, .before, *lctx) return false;
     if !run_mounted_hooks(dispatch_table, .PRESTEP, .after, *lctx) return false;
@@ -695,6 +701,7 @@ test_package :: (
     // COMPILE stage (t12): before -> at | built-in front -> after.
     cstage: Test_Compile_Stage;
     cstage.prepared = prepared;
+    cstage.package = package;
     cstage.package_root = tstage.package_root;
     cstage.files = tstage.files;
     cstage.view_paths = tstage.view_paths;

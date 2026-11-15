@@ -272,10 +272,22 @@ test "E2E: jaix pre-step build compiles the mirror through the member and host" 
     expect(child_output_contains("jaix-member artifact", run_output, "double(20): NONE 40"));
     expect(child_output_contains("jaix-member artifact", run_output, "double(-6): NEGATIVE 0"));
 
-    // The entry compiles the mirror path directly (no closure probe, no
-    // transpile view): the generated build metaprogram quotes it.
+    // Spec 0087 decision 24: a substitution replaces the entry's CONTENT and keeps
+    // its logical path, so the build compiles the entry materialized at its own
+    // coordinate inside the package's private derived root — never the plugin's
+    // mirror path, which is only where juice reads the new text from.
     metaprogram := target_session_driver_path(target_build_dir(package_target_dir(root)), tprint("build-jaix_demo.jai"));
-    expect(file_contains(metaprogram, path_slashes(tprint("%1/target/jaix/src/main.jai", root))));
+    mirror_path := path_slashes(tprint("%1/target/jaix/src/main.jai", root));
+    derived_entry := path_slashes(tprint("%1/src/main.jai", package_derived_view_root(package_target_dir(root), "jaix-demo")));
+    expect(file_contains(metaprogram, derived_entry));
+    expect(!file_contains(metaprogram, mirror_path));
+    // The materialized input carries the substituted text, and no transpile view
+    // was needed (this fixture's closure is test-free).
+    materialized, materialized_ok := read_entire_file(derived_entry);
+    expect(materialized_ok);
+    original_mirror, mirror_ok := read_entire_file(mirror_path);
+    expect(mirror_ok && materialized == original_mirror);
+    expect(!file_exists(transpile_tree_dir(root)));
 
     // The mirror: untouched files are byte-identical to the originals (the
     // round-trip identity), the try file is lowered, the test block file and

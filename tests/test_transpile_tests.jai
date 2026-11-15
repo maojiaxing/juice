@@ -535,7 +535,7 @@ test "Test front: the dependency strip front rewrites test-bearing shims" {
     dep := tprint("%1/dep", root);
     expect(build_seam_write(dep, "module.jai", "#load \"extra.jai\";\ndep_value :: () -> s32 { return extra_value(); }\n"));
     expect(build_seam_write(dep, "extra.jai", "extra_value :: () -> s32 { return 42; }\n\ntest \"dep self test\" {\n    fail(\"must never run\");\n}\n"));
-    expect(build_seam_write(root, "target/packages/depx.jai", dependency_shim_content("depx", tprint("%1/module.jai", dep))));
+    expect(build_seam_write(root, "target/imports/depx.jai", dependency_shim_content("depx", tprint("%1/module.jai", dep))));
     expect(build_seam_write(root, "src/a.jai", "#import \"Basic\";\n\ntest \"root test\" {\n    expect(true);\n}\n"));
     files := Scan_File.[tt_file(root, "src/a.jai")];
     expect(tt_run(root, files));
@@ -544,7 +544,7 @@ test "Test front: the dependency strip front rewrites test-bearing shims" {
     // The shim now #loads the entry's strip view under the dependency
     // subtree; the closure's test block is stripped — no @test (the
     // dependency-tests-neither-discovered-nor-executed face).
-    shim, ok := read_entire_file(tprint("%1/depx.jai", packages_dir(root)));
+    shim, ok := read_entire_file(tprint("%1/depx.jai", dependency_imports_dir(root)));
     expect(ok);
     entry_view, parsed := shim_load_target(shim);
     expect(parsed && find_index_from_left(entry_view, "/deps/depx/") >= 0);
@@ -1090,7 +1090,11 @@ test "E2E: dependency tests are neither discovered nor executed" {
 
     // The shim was rewritten to the entry strip view; the closure's test
     // block is stripped (no @test).
-    shim, ok := read_entire_file(tprint("%1/test_dep.jai", packages_dir(fixture_root)));
+    // The production dependency shim directory is the package's private
+    // target/imports (graph.consumer_shim_directory), not target/packages; until
+    // 0098 this read looked in the wrong directory, so every assertion below it
+    // was vacuous.
+    shim, ok := read_entire_file(tprint("%1/test_dep.jai", dependency_imports_dir(fixture_root)));
     expect(ok);
     entry_view, parsed := shim_load_target(shim);
     expect(parsed && find_index_from_left(entry_view, "/deps/test_dep/") >= 0);

@@ -468,12 +468,10 @@ Install_Check :: struct {
     reason: string;
 }
 
-install_manifest_relative_path :: () -> string {
-    return tprint("%1/%2", JUICE_INTERNAL_DIR, INSTALL_MANIFEST_FILE_NAME);
-}
-
+// The marker file's modules-relative coordinate and its absolute path: one call
+// site each, so the literal expression lives at the path builder below.
 install_manifest_path :: (modules_dir: string) -> string {
-    return front_slashes(tprint("%1/%2", modules_dir, install_manifest_relative_path()));
+    return front_slashes(tprint("%1/%2/%3", modules_dir, JUICE_INTERNAL_DIR, INSTALL_MANIFEST_FILE_NAME));
 }
 
 // The complete published set of one installation, in publication order: the
@@ -515,19 +513,6 @@ install_relative_path_is_valid :: (relative_path: string) -> bool {
     if find_index_from_left(relative_path, "\\") >= 0 return false;
     if find_index_from_left(relative_path, ":") >= 0 return false;
     return true;
-}
-
-// FNV-1a 64 over the artifact text, rendered as 16 lowercase hex characters
-// (the same digest primitive the view cache uses; it is an integrity check
-// against mixing releases, not a cryptographic signature).
-install_artifact_digest :: (text: string) -> string {
-    hash := fnv1a_hash(text.data, text.count);
-    out: [16] u8;
-    for i: 0..15 {
-        nibble := cast(s64) ((hash >> cast(u64) (4 * (15 - i))) & 0xf);
-        out[i] = cast(u8) ifx nibble < 10 then #char "0" + nibble else #char "a" + (nibble - 10);
-    }
-    return copy_string(to_string(out.data, 16));
 }
 
 // The integer value of a constant declaration line (`NAME :: VALUE;`, the
@@ -606,7 +591,7 @@ publish_install_manifest :: (modules_dir: string, plugin_abi_line: string, texts
     print_to_builder(*builder, "artifacts %1\n", paths.count);
     for path, index: paths {
         if !install_relative_path_is_valid(path.relative_path) return "", false;
-        print_to_builder(*builder, "%1 %2\n", path.relative_path, install_artifact_digest(texts[index]));
+        print_to_builder(*builder, "%1 %2\n", path.relative_path, hash_hex(texts[index]));
     }
     return builder_to_string(*builder), true;
 }
@@ -636,14 +621,14 @@ parse_install_manifest :: (text: string) -> (Install_Manifest, bool) {
     result.manifest_version = manifest_version;
     result.compatibility = compatibility;
     result.plugin_abi = plugin_abi;
-    for i: 4..line_count - 1 {
-        line := lines[i];
+    for line_index: 4..line_count - 1 {
+        line := lines[line_index];
         space := find_index_from_left(line, " ");
-        if space <= 0 return Install_Manifest.{}, false;
+        if space <= 0 return .{}, false;
         relative_path := slice(line, 0, space);
         digest := slice(line, space + 1, line.count - space - 1);
-        if !install_relative_path_is_valid(relative_path) return Install_Manifest.{}, false;
-        if !marker_string_is_digest(digest) return Install_Manifest.{}, false;
+        if !install_relative_path_is_valid(relative_path) return .{}, false;
+        if !marker_string_is_digest(digest) return .{}, false;
         array_add(*result.artifacts, .{ relative_path = copy_string(relative_path), digest = copy_string(digest) });
     }
     return result, true;
@@ -701,7 +686,7 @@ verify_install :: (modules_dir: string, expected_plugin_abi: s64) -> Install_Che
             check.reason = tprint("the installed artifact %1 is missing", path.relative_path);
             return check;
         }
-        if install_artifact_digest(content) != manifest.artifacts[index].digest {
+        if hash_hex(content) != manifest.artifacts[index].digest {
             check.reason = tprint("the installed artifact %1 does not match the published release (content digest mismatch)", path.relative_path);
             return check;
         }

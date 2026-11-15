@@ -5,6 +5,12 @@
 #import "Process";
 #import "String";
 
+// POSIX is only a real module on Unix targets; the install copies it guards are
+// compiled out on Windows, so the import goes out with them.
+#if OS != .WINDOWS {
+    #import "POSIX";
+}
+
 // ---------------------------------------------------------------------------
 // Installation-unit compatibility (spec 0087 decision 28 and Testing decision
 // 7, acceptance group A16; ticket 0094).
@@ -61,9 +67,9 @@ ic_external_scratch :: (name: string) -> string {
 
 // Write one fixture file. The content is copied before the path is built
 // (tprint allocates in the temporary allocator).
-ic_write :: (dir: string, relative_path: string, content: string) -> bool {
+ic_write :: (directory: string, relative_path: string, content: string) -> bool {
     content_copy := copy_string(content);
-    path := copy_string(tprint("%1/%2", dir, relative_path));
+    path := copy_string(tprint("%1/%2", directory, relative_path));
     if !make_directory_if_it_does_not_exist(path_strip_filename(path), recursive = true) return false;
     return write_entire_file(path, content_copy);
 }
@@ -116,12 +122,12 @@ ic_plugin_abi_line :: () -> (string, bool) {
 
 // Publish the real installation set into an arbitrary modules directory
 // through the production writer.
-ic_publish_real_set :: (modules_dir: string) -> bool {
+ic_publish_real_set :: (modules_directory: string) -> bool {
     texts, texts_ok := ic_real_published_texts();
     if !texts_ok return false;
     abi_line, abi_ok := ic_plugin_abi_line();
     if !abi_ok return false;
-    failure, published := publish_install_set(modules_dir, abi_line, texts);
+    failure, published := publish_install_set(modules_directory, abi_line, texts);
     if !published {
         print("[install-compat] publishing the installation set failed: %\n", failure);
         return false;
@@ -134,17 +140,17 @@ ic_publish_real_set :: (modules_dir: string) -> bool {
 // ===========================================================================
 
 publication_install_digest_vectors :: () {
-    // Independent known-good FNV-1a 64 vectors: the artifact digest is that
-    // function rendered as 16 lowercase hex characters.
-    expect(install_artifact_digest("") == "cbf29ce484222325");
-    expect(install_artifact_digest("a") == "af63dc4c8601ec8c");
-    expect(install_artifact_digest("abc") == "e71fa2190541574b");
-    expect(install_artifact_digest("foobar") == "85944171f73967e8");
+    // Independent known-good FNV-1a 64 vectors for the shared hash_hex
+    // primitive that both the artifact digest and the view cache use.
+    expect(hash_hex("") == "cbf29ce484222325");
+    expect(hash_hex("a") == "af63dc4c8601ec8c");
+    expect(hash_hex("abc") == "e71fa2190541574b");
+    expect(hash_hex("foobar") == "85944171f73967e8");
 } @test
 
 publication_install_artifact_paths :: () {
-    modules_dir := "X:/install/modules";
-    paths := install_artifact_paths(modules_dir);
+    modules_directory := "X:/install/modules";
+    paths := install_artifact_paths(modules_directory);
     expected_relative := string.[
         "Juice/module.jai",
         "Testing.jai",
@@ -161,14 +167,14 @@ publication_install_artifact_paths :: () {
         expect(path.relative_path == expected_relative[index], "artifact %: %", index, path.relative_path);
         expect(path.absolute_path == tprint("X:/install/modules/%1", expected_relative[index]));
     }
-    expect(install_manifest_path(modules_dir) == "X:/install/modules/juice_internal/install_manifest.txt");
+    expect(install_manifest_path(modules_directory) == "X:/install/modules/juice_internal/install_manifest.txt");
 } @test
 
 publication_install_manifest_layout :: () {
-    modules_dir := "X:/install/modules";
+    modules_directory := "X:/install/modules";
     abi_line := "JUICE_PLUGIN_ABI_VERSION :: 1;";
     texts := string.["juice", "testing", "core", "discovery", "t", "tp", "lc", "p"];
-    text, ok := publish_install_manifest(modules_dir, abi_line, texts);
+    text, ok := publish_install_manifest(modules_directory, abi_line, texts);
     expect(ok, "the marker must be generated for a complete set");
     // The marker's exact shape: three contract identifiers, the artifact count,
     // then one module-relative path with its digest per artifact (the digests
@@ -193,25 +199,25 @@ publication_install_manifest_layout :: () {
 } @test
 
 publication_install_manifest_rejects_bad_input :: () {
-    modules_dir := "X:/install/modules";
+    modules_directory := "X:/install/modules";
     good_texts := string.["juice", "testing", "core", "discovery", "t", "tp", "lc", "p"];
     short_texts := string.["juice", "testing", "core", "discovery", "t", "tp", "lc"];
-    text, ok := publish_install_manifest(modules_dir, "JUICE_PLUGIN_ABI_VERSION :: 1;", short_texts);
+    text, ok := publish_install_manifest(modules_directory, "JUICE_PLUGIN_ABI_VERSION :: 1;", short_texts);
     expect(!ok && text == "", "an incomplete artifact set must not produce a marker");
-    text, ok = publish_install_manifest(modules_dir, "JUICE_PLUGIN_ABI_VERSIONX :: 1;", good_texts);
+    text, ok = publish_install_manifest(modules_directory, "JUICE_PLUGIN_ABI_VERSIONX :: 1;", good_texts);
     expect(!ok && text == "", "a wrong constant name must not produce a marker");
-    text, ok = publish_install_manifest(modules_dir, "JUICE_PLUGIN_ABI_VERSION :: ;", good_texts);
+    text, ok = publish_install_manifest(modules_directory, "JUICE_PLUGIN_ABI_VERSION :: ;", good_texts);
     expect(!ok && text == "", "a missing value must not produce a marker");
-    text, ok = publish_install_manifest(modules_dir, "JUICE_PLUGIN_ABI_VERSION :: seven;", good_texts);
+    text, ok = publish_install_manifest(modules_directory, "JUICE_PLUGIN_ABI_VERSION :: seven;", good_texts);
     expect(!ok && text == "", "a non-numeric value must not produce a marker");
-    text, ok = publish_install_manifest(modules_dir, "JUICE_PLUGIN_ABI_VERSION :: 1; trailing", good_texts);
+    text, ok = publish_install_manifest(modules_directory, "JUICE_PLUGIN_ABI_VERSION :: 1; trailing", good_texts);
     expect(!ok && text == "", "trailing text after the declaration must not produce a marker");
 } @test
 
 publication_install_manifest_parse :: () {
-    modules_dir := "X:/install/modules";
+    modules_directory := "X:/install/modules";
     texts := string.["juice", "testing", "core", "discovery", "t", "tp", "lc", "p"];
-    text, ok := publish_install_manifest(modules_dir, "JUICE_PLUGIN_ABI_VERSION :: 3;", texts);
+    text, ok := publish_install_manifest(modules_directory, "JUICE_PLUGIN_ABI_VERSION :: 3;", texts);
     expect(ok);
     manifest, parsed := parse_install_manifest(text);
     expect(parsed, "a generated marker must parse");
@@ -264,39 +270,39 @@ publication_install_manifest_parse :: () {
 // ===========================================================================
 
 publication_install_verify_complete :: () {
-    modules_dir := ic_scratch("verify-complete");
-    defer delete_directory_full(modules_dir);
-    expect(ic_publish_real_set(modules_dir));
+    modules_directory := ic_scratch("verify-complete");
+    defer delete_directory_full(modules_directory);
+    expect(ic_publish_real_set(modules_directory));
 
     abi_line, abi_ok := ic_plugin_abi_line();
     expect(abi_ok);
     abi_value, abi_value_ok := constant_integer_value(abi_line, "JUICE_PLUGIN_ABI_VERSION");
     expect(abi_value_ok);
-    check := verify_install(modules_dir, abi_value);
+    check := verify_install(modules_directory, abi_value);
     expect(check.ok, "a complete installation must verify: %", check.reason);
     expect(check.reason == "");
 
     // The plugin entry contract is part of the unit: an executable whose ABI
     // differs from the marker's rejects the installation.
-    check = verify_install(modules_dir, abi_value + 1);
+    check = verify_install(modules_directory, abi_value + 1);
     expect(!check.ok);
     expect(find_index_from_left(check.reason, "plugin ABI") >= 0, "the reason must name the plugin ABI: %", check.reason);
 } @test
 
 publication_install_verify_missing_marker :: () {
-    modules_dir := ic_scratch("verify-no-marker");
-    defer delete_directory_full(modules_dir);
-    expect(ic_publish_real_set(modules_dir));
-    expect(file_delete(install_manifest_path(modules_dir)));
-    check := verify_install(modules_dir, 1);
+    modules_directory := ic_scratch("verify-no-marker");
+    defer delete_directory_full(modules_directory);
+    expect(ic_publish_real_set(modules_directory));
+    expect(file_delete(install_manifest_path(modules_directory)));
+    check := verify_install(modules_directory, 1);
     expect(!check.ok);
     expect(find_index_from_left(check.reason, "marker") >= 0, "the reason must name the marker: %", check.reason);
 } @test
 
 publication_install_verify_marker_epoch :: () {
-    modules_dir := ic_scratch("verify-epoch");
-    defer delete_directory_full(modules_dir);
-    expect(ic_publish_real_set(modules_dir));
+    modules_directory := ic_scratch("verify-epoch");
+    defer delete_directory_full(modules_directory);
+    expect(ic_publish_real_set(modules_directory));
     abi_line, abi_ok := ic_plugin_abi_line();
     expect(abi_ok);
     texts, texts_ok := ic_real_published_texts();
@@ -305,7 +311,7 @@ publication_install_verify_marker_epoch :: () {
     // A marker from another release: the same artifact set and content, a
     // different compatibility epoch. Built from the generated text so the
     // fixture proves the verifier reads the marker, not the file contents.
-    marker, marker_ok := publish_install_manifest(modules_dir, abi_line, texts);
+    marker, marker_ok := publish_install_manifest(modules_directory, abi_line, texts);
     expect(marker_ok);
     epoch_line := tprint("compatibility %1\n", INSTALL_COMPATIBILITY_VERSION);
     epoch_at := find_index_from_left(marker, epoch_line);
@@ -314,36 +320,36 @@ publication_install_verify_marker_epoch :: () {
                     slice(marker, 0, epoch_at),
                     INSTALL_COMPATIBILITY_VERSION + 1,
                     slice(marker, epoch_at + epoch_line.count, marker.count - epoch_at - epoch_line.count));
-    expect(ic_write(modules_dir, "juice_internal/install_manifest.txt", stale));
-    check := verify_install(modules_dir, 1);
+    expect(ic_write(modules_directory, "juice_internal/install_manifest.txt", stale));
+    check := verify_install(modules_directory, 1);
     expect(!check.ok);
     expect(find_index_from_left(check.reason, "compatibility") >= 0, "the reason must name compatibility: %", check.reason);
 } @test
 
 publication_install_verify_missing_and_mixed :: () {
-    modules_dir := ic_scratch("verify-missing-mixed");
-    defer delete_directory_full(modules_dir);
-    expect(ic_publish_real_set(modules_dir));
+    modules_directory := ic_scratch("verify-missing-mixed");
+    defer delete_directory_full(modules_directory);
+    expect(ic_publish_real_set(modules_directory));
 
     // A missing published artifact — the plugin support source case.
-    support_path := copy_string(tprint("%1/juice_internal/plugin_face/lifecycle.jai", modules_dir));
+    support_path := copy_string(tprint("%1/juice_internal/plugin_face/lifecycle.jai", modules_directory));
     original, original_ok := read_entire_file(support_path);
     expect(original_ok);
     expect(file_delete(support_path));
-    check := verify_install(modules_dir, 1);
+    check := verify_install(modules_directory, 1);
     expect(!check.ok);
     expect(find_index_from_left(check.reason, "lifecycle.jai") >= 0, "the reason must name the missing artifact: %", check.reason);
 
     // Mixed installation: one artifact replaced by other content while the
     // marker still describes the published set.
     expect(write_entire_file(support_path, "// a different release's source\n"));
-    check = verify_install(modules_dir, 1);
+    check = verify_install(modules_directory, 1);
     expect(!check.ok);
     expect(find_index_from_left(check.reason, "lifecycle.jai") >= 0, "the reason must name the mismatched artifact: %", check.reason);
     expect(find_index_from_left(check.reason, "content") >= 0, "the reason must say the content differs: %", check.reason);
 
     expect(write_entire_file(support_path, original));
-    check = verify_install(modules_dir, 1);
+    check = verify_install(modules_directory, 1);
     expect(check.ok, "restoring the published content must verify again: %", check.reason);
 
     // An artifact set the marker does not describe at all (a different
@@ -352,8 +358,8 @@ publication_install_verify_missing_and_mixed :: () {
         "juice-install-manifest 1", "compatibility 1", "plugin_abi 1", "artifacts 4",
         "Juice/module.jai e4715c31ef07c9c8", "Testing.jai 6b10b015c063138e",
         "juice_core.jai 8c954fb8fa3717c8", "juice_internal/test_discovery.jai 4c95109422d44753"]);
-    expect(ic_write(modules_dir, "juice_internal/install_manifest.txt", short_marker));
-    check = verify_install(modules_dir, 1);
+    expect(ic_write(modules_directory, "juice_internal/install_manifest.txt", short_marker));
+    check = verify_install(modules_directory, 1);
     expect(!check.ok);
     expect(find_index_from_left(check.reason, "artifacts") >= 0, "the reason must name the artifact count: %", check.reason);
 } @test
@@ -369,37 +375,54 @@ IC_GATE_NO_FALLBACK :: "juice does not fall back to another installation or to d
 // A delivered installation: the real executable plus its adjacent modules
 // directory, and nothing else.
 Ic_Install :: struct {
-    bin_dir:     string;
-    modules_dir: string;
-    exe:         string;
+    bin_dir:           string;
+    modules_directory: string;
+    exe:               string;
 }
 
 ic_install_paths :: (layout: string) -> Ic_Install {
     install: Ic_Install;
     install.bin_dir = copy_string(tprint("%1/bin", layout));
-    install.modules_dir = copy_string(tprint("%1/bin/modules", layout));
+    install.modules_directory = copy_string(tprint("%1/bin/modules", layout));
     install.exe = copy_string(target_artifact_path(install.bin_dir, "juice"));
     return install;
+}
+
+// Jai's copy_file creates the destination with the host's default file mode, so on
+// Unix a copied executable arrives as 0644 and cannot be launched — the whole point
+// of an install unit. Re-apply the SOURCE's own permission bits after the copy: the
+// destination is the one file this fixture just created inside its own layout, and
+// no mode is hard-coded because the build's umask is not the contract.
+ic_preserve_exec_mode :: (source: string, destination: string) -> bool {
+    #if OS == .WINDOWS {
+        // Windows carries executability in the extension, not in a mode word.
+        return true;
+    } else {
+        info: POSIX.stat_t;
+        if POSIX.stat(temp_c_string(source), *info) != 0 return false;
+        return POSIX.chmod(temp_c_string(destination), info.st_mode) == 0;
+    }
 }
 
 ic_create_install :: (layout: string) -> Ic_Install {
     install := ic_install_paths(layout);
     if !make_directory_if_it_does_not_exist(install.bin_dir, recursive = true) return install;
     if !copy_file(otter_exe(), install.exe) return install;
-    if !ic_publish_real_set(install.modules_dir) return install;
+    if !ic_preserve_exec_mode(otter_exe(), install.exe) return install;
+    if !ic_publish_real_set(install.modules_directory) return install;
     return install;
 }
 
 ic_install_is_complete :: (install: Ic_Install) -> bool {
     if !file_exists(install.exe) return false;
-    return file_exists(install_manifest_path(install.modules_dir));
+    return file_exists(install_manifest_path(install.modules_directory));
 }
 
-ic_run_install :: (install: Ic_Install, working_dir: string, arguments: [] string) -> (Process_Result, string, string) {
-    args: [..] string;
-    array_add(*args, install.exe);
-    for argument: arguments array_add(*args, argument);
-    result, output, errors, _ := run_command(..args, working_directory = working_dir, capture_and_return_output = true);
+ic_run_install :: (install: Ic_Install, working_directory: string, arguments: [] string) -> (Process_Result, string, string) {
+    command: [..] string;
+    array_add(*command, install.exe);
+    for argument: arguments array_add(*command, argument);
+    result, output, errors, _ := run_command(..command, working_directory = working_directory, capture_and_return_output = true);
     return result, output, errors;
 }
 
@@ -424,8 +447,8 @@ ic_app_artifact :: (app: string) -> string {
 
 // Rewrite one marker line (the marker is plain text by design, so an older or
 // edited marker is exactly what an operator with a mixed install has on disk).
-ic_rewrite_marker :: (modules_dir: string, needle: string, replacement: string) -> bool {
-    path := install_manifest_path(modules_dir);
+ic_rewrite_marker :: (modules_directory: string, needle: string, replacement: string) -> bool {
+    path := install_manifest_path(modules_directory);
     text, read_ok := read_entire_file(path);
     if !read_ok return false;
     at := find_index_from_left(text, needle);
@@ -467,7 +490,7 @@ publication_install_cli_missing_artifact :: () {
 
     // A published artifact is gone: every command fails before it touches the
     // project, and nothing is compiled.
-    testing_path := copy_string(tprint("%1/Testing.jai", install.modules_dir));
+    testing_path := copy_string(tprint("%1/Testing.jai", install.modules_directory));
     expect(file_delete(testing_path));
     result, output, errors := ic_run_install(install, app, string.["build"]);
     expect(expect_exit("install-missing build", result, 1, "installation"));
@@ -493,7 +516,7 @@ publication_install_cli_mixed_set :: () {
 
     // One artifact from another release, everything else untouched: the marker
     // still describes the published content, so the digest is what catches it.
-    core_path := copy_string(tprint("%1/juice_core.jai", install.modules_dir));
+    core_path := copy_string(tprint("%1/juice_core.jai", install.modules_directory));
     expect(write_entire_file(core_path, "// juice_core from another release\n"));
     result, output, errors := ic_run_install(install, app, string.["build"]);
     expect(expect_exit("install-mixed build", result, 1, "installation"));
@@ -513,7 +536,7 @@ publication_install_cli_marker_mismatch :: () {
     expect(ic_write_minimal_app(app));
 
     // A marker from another release's contract: compatibility epoch first.
-    expect(ic_rewrite_marker(install.modules_dir, "compatibility 1", "compatibility 7"));
+    expect(ic_rewrite_marker(install.modules_directory, "compatibility 1", "compatibility 7"));
     result, output, errors := ic_run_install(install, app, string.["build"]);
     expect(expect_exit("install-epoch build", result, 1, "installation"));
     combined := tprint("%\n%", output, errors);
@@ -521,8 +544,8 @@ publication_install_cli_marker_mismatch :: () {
     expect(child_output_contains("install-epoch build", combined, "compatibility 7"));
 
     // Then the plugin entry ABI, which is checked independently of the epoch.
-    expect(ic_rewrite_marker(install.modules_dir, "compatibility 7", "compatibility 1"));
-    expect(ic_rewrite_marker(install.modules_dir, "plugin_abi 1", "plugin_abi 4"));
+    expect(ic_rewrite_marker(install.modules_directory, "compatibility 7", "compatibility 1"));
+    expect(ic_rewrite_marker(install.modules_directory, "plugin_abi 1", "plugin_abi 4"));
     result, output, errors = ic_run_install(install, app, string.["build"]);
     expect(expect_exit("install-abi build", result, 1, "installation"));
     combined = tprint("%\n%", output, errors);
@@ -530,7 +553,7 @@ publication_install_cli_marker_mismatch :: () {
 
     // A missing marker at all is an incomplete installation, not a licence to
     // discover one elsewhere.
-    expect(file_delete(install_manifest_path(install.modules_dir)));
+    expect(file_delete(install_manifest_path(install.modules_directory)));
     result, output, errors = ic_run_install(install, app, string.["build"]);
     expect(expect_exit("install-no-marker build", result, 1, "installation"));
     combined = tprint("%\n%", output, errors);
@@ -550,14 +573,14 @@ publication_install_cli_no_fallback :: () {
     //   <layout>/modules      — the retired <exe>/../modules global layout;
     //   <layout>/src          — sibling development sources.
     global_modules := copy_string(tprint("%1/modules", layout));
-    global_src := copy_string(tprint("%1/src", layout));
+    global_source := copy_string(tprint("%1/src", layout));
     expect(make_directory_if_it_does_not_exist(global_modules, recursive = true));
-    copy_directory(install.modules_dir, global_modules);
-    expect(make_directory_if_it_does_not_exist(global_src, recursive = true));
-    copy_directory(copy_string(tprint("%1/src", otter_root())), global_src);
+    copy_directory(install.modules_directory, global_modules);
+    expect(make_directory_if_it_does_not_exist(global_source, recursive = true));
+    copy_directory(copy_string(tprint("%1/src", otter_root())), global_source);
 
     // Break the adjacent unit only: the alternatives must stay unused.
-    testing_path := copy_string(tprint("%1/Testing.jai", install.modules_dir));
+    testing_path := copy_string(tprint("%1/Testing.jai", install.modules_directory));
     expect(file_delete(testing_path));
     result, output, errors := ic_run_install(install, app, string.["build"]);
     expect(expect_exit("install-no-fallback build", result, 1, "installation"));
@@ -570,7 +593,7 @@ publication_install_cli_no_fallback :: () {
     // Positive control in the same layout: repair exactly the adjacent unit and
     // the very same invocation works, so the failure above was the installation
     // and not the project.
-    expect(ic_publish_real_set(install.modules_dir));
+    expect(ic_publish_real_set(install.modules_directory));
     result, output, errors = ic_run_install(install, app, string.["build"]);
     expect(expect_exit("install-repaired build", result, 0, "installation"));
     expect(file_exists(ic_app_artifact(app)));

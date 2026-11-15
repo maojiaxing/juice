@@ -516,6 +516,22 @@ Resolved_Plugins :: struct {
 // - the product is still filled when diagnostics exist (the reference
 //   shape — only ok=false blocks the caller); an ambiguous or ABI-mismatched
 //   plugin contributes no faces.
+// Declaration keys compare with ASCII-only folding. This face is published
+// standalone (it compiles inside the plugin registration and host programs), so
+// it carries its own two-line fold rather than importing a tool-internal module:
+// the contract is the comparison, not where the helper lives.
+plugin_key_matches :: (declared: string, requested: string) -> bool {
+    if declared.count != requested.count return false;
+    for index: 0..declared.count-1 {
+        left := declared[index];
+        right := requested[index];
+        if left >= #char "A" && left <= #char "Z" left += 32;
+        if right >= #char "A" && right <= #char "Z" right += 32;
+        if left != right return false;
+    }
+    return true;
+}
+
 resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config, plugins_omitted: bool = true) -> Resolved_Plugins {
     out: Resolved_Plugins;
     diags: [..] Transpile_Diagnostic;
@@ -543,7 +559,7 @@ resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config
         matches := 0;
         plugin: *Juice_Plugin = null;
         for p: registry {
-            if p.id != config.id continue;
+            if !plugin_key_matches(p.id, config.id) continue;
             matches += 1;
             if plugin == null plugin = p;
         }
@@ -567,7 +583,7 @@ resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config
         for row: config.options {
             row_duplicate := false;
             for key: seen_option_keys {
-                if key == row.key row_duplicate = true;
+                if plugin_key_matches(key, row.key) row_duplicate = true;
             }
             if row_duplicate {
                 merge_diag(*diags, tprint("duplicate plugin option key: % (%)", config.id, row.key));
@@ -577,7 +593,7 @@ resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config
 
             schema_found := false;
             for option: plugin.options_schema {
-                if option.name != row.key continue;
+                if !plugin_key_matches(option.name, row.key) continue;
                 schema_found = true;
                 message := "";
                 if option.apply != null message = option.apply(plugin.options, row.key, row.value);

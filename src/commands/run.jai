@@ -41,10 +41,10 @@ run_command_handler :: (ctx: *Command_Context, arguments: [] string) -> bool {
         print_command_usage(RUN_COMMAND);
         return false;
     }
-    selection, selected := select_command_packages(ctx, flags, resolution_mode_for(flags), force_dependencies = true);
+    selection, selected := select_command_packages(ctx, flags, resolution_mode_for(flags));
     if !selected return false;
 
-    // The one-package cardinality gate runs before any compilation.
+    // Cardinality and program selection precede acquisition or state writes.
     if selection.packages.count != 1 {
         selected_paths: [..] string;
         for selected_package: selection.packages array_add(*selected_paths, selected_package.relative_path);
@@ -59,7 +59,8 @@ run_command_handler :: (ctx: *Command_Context, arguments: [] string) -> bool {
     // Only the selected program is compiled (decision 73).
     plans: [..] Artifact_Plan;
     array_add(*plans, plan);
-    if !build_package(selection.prepared, selected_package.package, plans) return false;
+    prepared, prepared_ok := prepare_command_package(ctx, selected_package);
+    if !prepared_ok || !build_package(*prepared, selected_package.package, plans) return false;
 
     return launch_selected_plan(plan, selected_package.package.dir, flags.separator_arguments);
 }
@@ -78,7 +79,9 @@ select_run_plan :: (selected: Selected_Package, positionals: [] string) -> (Arti
     requested := ifx positionals.count == 1 then positionals[0] else "";
     if requested != "" {
         for plan: selected.plans {
-            if plan.target.name == requested return plan, true;
+            // Program names compare with the same ASCII-insensitive key as every
+            // other declaration name; the declared spelling is what is reported.
+            if ascii_names_equal(plan.target.name, requested) return plan, true;
         }
         print("[juice ERROR] Package '%' has no program named '%'.\n", selected.package.name, requested);
         return .{}, false;

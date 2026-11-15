@@ -114,13 +114,11 @@ workspace_path_already_seen :: (paths: [] string, candidate: string) -> bool {
     return false;
 }
 
-// Nearest-declaration lookup (spec 0087 decision 17): from the starting
-// directory upward, the first directory holding a package.jai is the root a
-// command operates on. The found declaration stays authoritative even when
-// its contents are invalid - callers must report that failure instead of
-// continuing to an outer package, so this returns the directory only, never
-// a validity verdict. Returns "" when no ancestor declares a package, which
-// leaves the caller on its original root (the manifest-less clean case).
+// Nearest-declaration lookup (spec 0087 decision 17): the closest declaration
+// identifies the current package, not necessarily its workspace. It remains
+// authoritative even when invalid; callers must fail rather than fall through
+// to an outer declaration. Membership is determined only after it is valid.
+// Returns "" for the manifest-less clean case.
 locate_declaration_root :: (start_dir: string) -> string {
     if start_dir == "" return "";
     current, ok := normalize_existing_path(start_dir);
@@ -184,7 +182,12 @@ discover_workspace :: (root_dir: string, cache_dir: string, modules_dir: string 
             print("[juice ERROR] Invalid workspace exclude path: %\n", rule);
             return discovery, false;
         }
-        array_add(*excluded_rules, normalize_package_relative_path(rule).path);
+        normalized := normalize_package_relative_path(rule).path;
+        if root_package.has_package && workspace_rule_excludes(normalized, ".") {
+            print("[juice ERROR] workspace.exclude cannot exclude the root package: %\n", rule);
+            return discovery, false;
+        }
+        array_add(*excluded_rules, normalized);
     }
     candidates: [..] string;
     for rule: root_package.workspace.members {
@@ -246,6 +249,18 @@ discover_workspace :: (root_dir: string, cache_dir: string, modules_dir: string 
     discovery.has_package = root_package.has_package;
     discovery.root_package = root_package;
     discovery.member_packages = packages;
+    // Defaults are part of the declaration, even when the command supplies an
+    // explicit selection. An explicit empty list is valid; only using it as a
+    // command's final selection is an error.
+    if discovery.has_workspace && !root_package.workspace.default_members_omitted && root_package.workspace.default_members.count > 0 {
+        default_packages: [..] Normalized_Package;
+        default_paths: [..] string;
+        defaults := select_root_defaults(discovery, *default_packages, *default_paths);
+        if !defaults.success {
+            print("[juice ERROR] %\n", defaults.error);
+            return discovery, false;
+        }
+    }
     return discovery, true;
 }
 
@@ -286,6 +301,45 @@ ensure_workspace_discovered :: (
     if !ok || (!discovery.has_package && !discovery.has_workspace) {
         if ok print("[juice ERROR] No package.jai found in current directory.\n");
         return false;
+    }
+    if !discovery.has_workspace {
+        ancestor := workspace_parent_directory(discovery.root_dir);
+        while ancestor != "" {
+            if inspect_path_entry(tprint("%/package.jai", ancestor)).exists {
+                ancestor_package, ancestor_ok := load_package_manifest(cache_dir, ancestor);
+                if !ancestor_ok return false;
+                if ancestor_package.has_workspace {
+                    // The nearest workspace is the only possible owner. An
+                    // excluded or unlisted package remains independent, even
+                    // when an outer workspace would otherwise include it.
+                    relative := workspace_relative_directory(ancestor, discovery.root_dir);
+                    included := false;
+                    for rule: ancestor_package.workspace.members {
+                        normalized := normalize_package_relative_path(rule);
+                        if !normalized.success || !workspace_relative_path_is_valid(rule) continue;
+                        pattern_parts := split(normalized.path, "/");
+                        relative_parts := split(relative, "/");
+                        if pattern_parts.count != relative_parts.count continue;
+                        matches := true;
+                        for part, index: pattern_parts {
+                            if !workspace_component_matches(part, relative_parts[index]) matches = false;
+                        }
+                        if matches included = true;
+                    }
+                    for rule: ancestor_package.workspace.exclude {
+                        normalized := normalize_package_relative_path(rule);
+                        if normalized.success && workspace_rule_excludes(normalized.path, relative) included = false;
+                    }
+                    if included {
+                        containing, containing_ok := discover(ancestor, cache_dir, "");
+                        if !containing_ok return false;
+                        discovery = containing;
+                    }
+                    break;
+                }
+            }
+            ancestor = workspace_parent_directory(ancestor);
+        }
     }
     state.discovery = discovery;
     state.phase = .DISCOVERED;
@@ -415,10 +469,10 @@ find_selected_package :: (packages: [] Normalized_Package, directory: string) ->
 // Deepest member containing the working directory, or null when the directory
 // is the workspace root itself or lies outside every member (a root-owned
 // scratch directory keeps the root rules).
-nearest_member_for_directory :: (discovery: Workspace_Discovery, cwd: string) -> *Normalized_Package {
+nearest_member_for_directory :: (discovery: Workspace_Discovery, working_directory: string) -> *Normalized_Package {
     deepest: *Normalized_Package = null;
     for *package: discovery.member_packages {
-        if !path_is_within(package.dir, cwd) continue;
+        if !path_is_within(package.dir, working_directory) continue;
         if deepest == null || package.dir.count > deepest.dir.count deepest = package;
     }
     return deepest;
@@ -431,18 +485,18 @@ append_selected_package :: (packages: *[..] Normalized_Package, paths: *[..] str
 }
 
 sort_selection_by_path :: (selection: *Package_Selection) {
-    for i: 1..selection.packages.count-1 {
-        if i >= selection.packages.count break;
-        package_key := selection.packages[i];
-        path_key := selection.paths[i];
-        j := i - 1;
-        while j >= 0 && compare(selection.paths[j], path_key) > 0 {
-            selection.packages[j+1] = selection.packages[j];
-            selection.paths[j+1] = selection.paths[j];
-            j -= 1;
+    for package_index: 1..selection.packages.count-1 {
+        if package_index >= selection.packages.count break;
+        package_key := selection.packages[package_index];
+        path_key := selection.paths[package_index];
+        insertion_index := package_index - 1;
+        while insertion_index >= 0 && compare(selection.paths[insertion_index], path_key) > 0 {
+            selection.packages[insertion_index+1] = selection.packages[insertion_index];
+            selection.paths[insertion_index+1] = selection.paths[insertion_index];
+            insertion_index -= 1;
         }
-        selection.packages[j+1] = package_key;
-        selection.paths[j+1] = path_key;
+        selection.packages[insertion_index+1] = package_key;
+        selection.paths[insertion_index+1] = path_key;
     }
 }
 
@@ -483,7 +537,7 @@ select_root_defaults :: (discovery: Workspace_Discovery, packages: *[..] Normali
     return .{success = true};
 }
 
-select_workspace_packages :: (discovery: Workspace_Discovery, cwd: string, request: Package_Selection_Request) -> Package_Selection {
+select_workspace_packages :: (discovery: Workspace_Discovery, working_directory: string, request: Package_Selection_Request) -> Package_Selection {
     if request.all_members && (request.names.count > 0 || request.paths.count > 0) {
         return selection_failure("--workspace cannot be combined with --package or --package-path.");
     }
@@ -524,7 +578,7 @@ select_workspace_packages :: (discovery: Workspace_Discovery, cwd: string, reque
     } else {
         // Location defaults: inside a member only that member, at the root the
         // workspace's default members.
-        nearest := nearest_member_for_directory(discovery, cwd);
+        nearest := nearest_member_for_directory(discovery, working_directory);
         if nearest != null && !paths_equal(nearest.dir, discovery.root_dir) {
             append_selected_package(*packages, *paths, nearest, discovery.root_dir);
         } else {
