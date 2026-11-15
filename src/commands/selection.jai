@@ -190,9 +190,47 @@ prepare_command_package :: (command_context: *Command_Context, selected: Selecte
     request.cache_dir = command_context.cache_dir;
     request.environment = prepared.environment;
     request.selection = .{success = true, packages = .[selected.package], paths = .[selected.relative_path]};
-    if !resolve_dependencies_for_workspace(request) return prepared, false;
+    // The resolution is computed now but not committed: the command publishes
+    // it through commit_prepared_resolution after its own validations, so a
+    // package whose plugin role/identity/ABI/options checks fail never
+    // replaces the working resolution records (decision 15).
+    if !resolve_dependencies_deferred(request, *prepared) return prepared, false;
     prepared.dependencies_prepared = true;
     return prepared, true;
+}
+
+// Commit the deferred resolution of one prepared package, plus any plugin Git
+// records the command's plugin preparation produced, as ONE state write.
+// Called after the package's declarations, plugin role checks and plugin
+// value validation have passed — never before (decision 15: 整体发布, and a
+// later hook/derive/compile failure does not roll back). Publications are
+// idempotent: a command that reaches the commit twice writes the same file.
+commit_prepared_resolution :: (prepared: *Prepared_Workspace, plugin_selections: [] Resolved_Selection = .[]) -> bool {
+    selections: [..] Resolved_Selection;
+    for pending: prepared.pending_selections array_add(*selections, pending);
+    for extra: plugin_selections array_add(*selections, extra);
+    if selections.count == 0 return true;
+    consumer_root := prepared.pending_consumer_root;
+    environment := prepared.pending_environment;
+    if !prepared.pending_publication {
+        // Nothing was deferred (no dependency resolution this run): a plugin
+        // Git record still has to land on its own.
+        consumer_root = prepared.discovery.root_dir;
+        environment = prepared.environment;
+    }
+    // Re-read the file and merge, because a sibling member's records live in the
+    // same file and must survive this package's publication.
+    previous := read_resolution_state(resolution_state_file(environment, consumer_root));
+    if previous.corrupt {
+        print("[juice ERROR] %\n", previous.error);
+        return false;
+    }
+    if !resolution_publish_selections(environment, consumer_root, selections, previous) {
+        print("[juice ERROR] Could not publish the dependency resolution state for %\n", consumer_root);
+        return false;
+    }
+    prepared.pending_publication = false;
+    return true;
 }
 
 // ---------------------------------------------------------------------------
