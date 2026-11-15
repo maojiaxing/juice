@@ -5,6 +5,12 @@
 #import "Process";
 #import "String";
 
+// POSIX is only a real module on Unix targets; the install copies it guards are
+// compiled out on Windows, so the import goes out with them.
+#if OS != .WINDOWS {
+    #import "POSIX";
+}
+
 // ---------------------------------------------------------------------------
 // Installation-unit compatibility (spec 0087 decision 28 and Testing decision
 // 7, acceptance group A16; ticket 0094).
@@ -382,10 +388,27 @@ ic_install_paths :: (layout: string) -> Ic_Install {
     return install;
 }
 
+// Jai's copy_file creates the destination with the host's default file mode, so on
+// Unix a copied executable arrives as 0644 and cannot be launched — the whole point
+// of an install unit. Re-apply the SOURCE's own permission bits after the copy: the
+// destination is the one file this fixture just created inside its own layout, and
+// no mode is hard-coded because the build's umask is not the contract.
+ic_preserve_exec_mode :: (source: string, destination: string) -> bool {
+    #if OS == .WINDOWS {
+        // Windows carries executability in the extension, not in a mode word.
+        return true;
+    } else {
+        info: POSIX.stat_t;
+        if POSIX.stat(temp_c_string(source), *info) != 0 return false;
+        return POSIX.chmod(temp_c_string(destination), info.st_mode) == 0;
+    }
+}
+
 ic_create_install :: (layout: string) -> Ic_Install {
     install := ic_install_paths(layout);
     if !make_directory_if_it_does_not_exist(install.bin_dir, recursive = true) return install;
     if !copy_file(otter_exe(), install.exe) return install;
+    if !ic_preserve_exec_mode(otter_exe(), install.exe) return install;
     if !ic_publish_real_set(install.modules_dir) return install;
     return install;
 }

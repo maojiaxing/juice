@@ -726,8 +726,14 @@ prestep_materialize_closure :: (
     // materialization failed; the caller reports it through its own stage sink, so
     // this procedure stays usable from the command front and from the host.
     if stage == null return "", "", true;
-    if stage.derived_root.count == 0 return "", "", true;
     if !prestep_closure_is_derived(stage, closure_paths) return "", "", true;
+    // A derived input with no private root to land in is a contradiction, not a
+    // reason to compile the original source: the pre-step said this input's
+    // content is replaced, and silently ignoring that would ship the wrong build
+    // (the 0098 review's "substitution must reach the whole closure" rule).
+    if stage.derived_root.count == 0 {
+        return "", "the pre-step registered a derived input but no private derived root exists", false;
+    }
     for path: closure_paths {
         text, read_ok := read_text(read_state, path);
         if !read_ok return "", tprint("could not read the closure input: %", path), false;

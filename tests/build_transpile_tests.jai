@@ -309,11 +309,15 @@ test "Dependency strip: a test-free dependency keeps its shim untouched" {
     dep := tprint("%1/dep", root);
     expect(build_seam_write(dep, "src/module.jai", "#load \"extra.jai\";\nmain_decl :: () -> s32 { return 1; }\n"));
     expect(build_seam_write(dep, "src/extra.jai", "extra_decl :: () -> s32 { return 2; }\n"));
-    expect(build_seam_write(root, "target/packages/depx.jai", dependency_shim_content("depx", tprint("%1/src/module.jai", dep))));
+    expect(build_seam_write(dependency_imports_dir(root), "depx.jai", dependency_shim_content("depx", tprint("%1/src/module.jai", dep))));
 
     expect(prepare_dependency_strip_views(root, dependency_imports_dir(root)));
     // The shim stays byte-identical (no strip, no rewrite) and no transpile
-    // tree was created.
+    // tree was created. The fixture writes it into the package's private
+    // dependency import directory (target/imports) — the directory the
+    // production resolver hands this front (graph.consumer_shim_directory).
+    // Until 0098 these cases wrote target/packages, so the front never saw
+    // the shim and every assertion below was vacuous.
     shim, ok := read_entire_file(tprint("%1/depx.jai", dependency_imports_dir(root)));
     expect(ok && shim == dependency_shim_content("depx", tprint("%1/src/module.jai", dep)));
     expect(!file_exists(transpile_tree_dir(root)));
@@ -325,7 +329,7 @@ test "Dependency strip: a test-bearing dependency is viewed and its shim rewritt
     dep := tprint("%1/dep", root);
     expect(build_seam_write(dep, "src/module.jai", "#load \"extra.jai\";\nmain_decl :: () -> s32 { return extra_decl(); }\n"));
     expect(build_seam_write(dep, "src/extra.jai", "extra_decl :: () -> s32 { return 2; }\n\ntest \"dep test\" {\n    assert(extra_decl() == 2);\n}\n"));
-    expect(build_seam_write(root, "target/packages/depx.jai", dependency_shim_content("depx", tprint("%1/src/module.jai", dep))));
+    expect(build_seam_write(dependency_imports_dir(root), "depx.jai", dependency_shim_content("depx", tprint("%1/src/module.jai", dep))));
 
     expect(prepare_dependency_strip_views(root, dependency_imports_dir(root)));
 
@@ -351,7 +355,7 @@ test "Dependency strip: a test-bearing dependency is viewed and its shim rewritt
 test "Dependency strip: a hand-written shim is left to the compiler" {
     root := bt_scratch("dep-handwritten");
     defer delete_directory_full(root);
-    expect(build_seam_write(root, "target/packages/depx.jai", "// hand-written\nsome_decl :: 1;\n"));
+    expect(build_seam_write(dependency_imports_dir(root), "depx.jai", "// hand-written\nsome_decl :: 1;\n"));
 
     expect(prepare_dependency_strip_views(root, dependency_imports_dir(root)));
     shim, ok := read_entire_file(tprint("%1/depx.jai", dependency_imports_dir(root)));
@@ -362,7 +366,7 @@ test "Dependency strip: a hand-written shim is left to the compiler" {
 test "Dependency strip: a missing entry is skipped" {
     root := bt_scratch("dep-missing");
     defer delete_directory_full(root);
-    expect(build_seam_write(root, "target/packages/depx.jai", dependency_shim_content("depx", tprint("%1/no-such/src/module.jai", root))));
+    expect(build_seam_write(dependency_imports_dir(root), "depx.jai", dependency_shim_content("depx", tprint("%1/no-such/src/module.jai", root))));
 
     expect(prepare_dependency_strip_views(root, dependency_imports_dir(root)));
     shim, ok := read_entire_file(tprint("%1/depx.jai", dependency_imports_dir(root)));
@@ -462,8 +466,8 @@ test "Build entry: the declared pipeline changes the view keys" {
 // ===========================================================================
 // b7 + PRESTEP (ticket 057): the entry selection's substitution/drop
 // consumption — the pre-step tables travel into build_plan_entry; a
-// substituted entry compiles the replacement directly (no probe, no strip),
-// a dropped entry fails.
+// substituted entry compiles the replacement's text at the entry's logical path
+// inside the private derived root (no strip front), a dropped entry fails.
 // ===========================================================================
 
 test "Build entry: a substituted entry compiles the replacement and skips the probe" {
@@ -480,11 +484,23 @@ test "Build entry: a substituted entry compiles the replacement and skips the pr
     plan := build_seam_plan(root, "src/main.jai");
     prepared := build_seam_prepared(root, plan);
     pstage: Prestep_Stage;
+    pstage.derived_root = package_derived_view_root(package_target_dir(root), "demo");
     array_add(*pstage.substitutions, .{original = "src/main.jai", replacement = replacement});
 
     entry, ok := build_plan_entry(*prepared, prepared.discovery.root_dir, plan, bt_pipeline(*prepared), *pstage);
-    expect(ok && entry == replacement);
-    // Zero probe, zero strip: nothing landed under the transpile tree.
+    // Spec 0087 decision 24: a substitution replaces an input's CONTENT and keeps
+    // its LOGICAL path; the physical path is only what juice reads. So the compile
+    // input is `src/main.jai` inside the package's private derived root — never the
+    // replacement's own physical path, which the plugin could have pointed anywhere.
+    derived_entry := tprint("%1/src/main.jai", pstage.derived_root);
+    expect(ok && entry == path_slashes(derived_entry));
+    expect(path_exists_as_regular_file(entry));
+    landed, landed_ok := read_entire_file(entry);
+    replacement_text, replacement_ok := read_entire_file(replacement);
+    expect(landed_ok && replacement_ok && landed == replacement_text);
+    expect(find_index_from_left(landed, "mirror") >= 0);
+    // Zero strip front: a test-free closure is materialized verbatim, so nothing
+    // landed under the transpile tree.
     expect(!file_exists(transpile_tree_dir(root)));
 }
 
@@ -535,20 +551,24 @@ test "Compile: a substituted entry reaches the compiler as the replacement path"
     plan := build_seam_plan(root, "src/main.jai");
     prepared := build_seam_prepared(root, plan);
     pstage: Prestep_Stage;
+    pstage.derived_root = package_derived_view_root(package_target_dir(root), "demo");
     array_add(*pstage.substitutions, .{original = "src/main.jai", replacement = replacement});
     entry, ok := build_plan_entry(*prepared, prepared.discovery.root_dir, plan, bt_pipeline(*prepared), *pstage);
-    expect(ok && entry == replacement);
+    derived_entry := path_slashes(tprint("%1/src/main.jai", pstage.derived_root));
+    expect(ok && entry == derived_entry);
 
-    // The compile metaprogram names the replacement, never the original
-    // source: the compiler input is the pre-step's file.
+    // The compile metaprogram names the derived logical input, never the original
+    // package source and never the replacement's physical path: the compiler reads
+    // substituted CONTENT at the input's own coordinate.
     reset_compile_seam();
     test_spawn_artifact = plan.artifact_path;
     expect(compile_artifact_plan(root, plan, entry, test_spawn_build_compiler));
     expect(test_spawn_calls == 1);
     content, read_ok := read_entire_file(test_spawn_metaprogram_path);
     expect(read_ok);
-    expect(find_index_from_left(content, tprint("add_build_file(\"%1\", workspace);", replacement)) >= 0);
+    expect(find_index_from_left(content, tprint("add_build_file(\"%1\", workspace);", derived_entry)) >= 0);
     expect(find_index_from_left(content, tprint("add_build_file(\"%1\", workspace);", path_slashes(plan.target.source_path))) < 0);
+    expect(find_index_from_left(content, tprint("add_build_file(\"%1\", workspace);", replacement)) < 0);
 }
 
 // ===========================================================================
@@ -759,8 +779,8 @@ test "Build dispatch: the host fills plugin_state slots null" {
 
 test "Build dispatch: the pre-step tables travel into the entry selection" {
     // The fake pre-step plugin fills the substitution through the same hook
-    // face; the built-in b7 front consumes it — the compile stage receives
-    // the replacement path, with no closure probe and no strip view.
+    // face; the built-in b7 front consumes it. Without a private derived root the
+    // row is fatal (never a silent original compile), which is this case's pin.
     root := bt_scratch("dispatch-prestep");
     defer delete_directory_full(root);
     expect(build_seam_write(root, "src/main.jai", "#load \"math.jai\";\n\nmain :: () { print(\"orig\\n\"); }\n\ntest \"orig\" {\n}\n"));
@@ -789,16 +809,23 @@ test "Build dispatch: the pre-step tables travel into the entry selection" {
         bt_hook(.PRESTEP, .after,  bt_hook_p_after),
         bt_hook(.COMPILE, .at,     bt_hook_c_at_record),
     ]);
-    expect(build_prepared_workspace(*prepared, table, test_artifact_is_running, test_artifact_handoff));
-    // PRESTEP (before -> after) fires between b4/LNK1104 and TRANSPILE; the
-    // stage saw the root and member directories.
-    expect(BT_TRACE.count == 3);
-    expect(BT_TRACE[0] == "p-before" && BT_TRACE[1] == "p-after" && BT_TRACE[2] == "c-at");
+    // This fixture declares no plugin, so the command builds a PRESTEP stage with
+    // no private derived view. The injected substitution row is a registered
+    // derived input with nowhere private to land, and decision 24 (as the 0098
+    // review tightened it) makes that a stage failure rather than a silent compile
+    // of the original source. The PRESTEP mounts still run and still see the root
+    // and member directories; COMPILE never runs.
+    expect(!build_prepared_workspace(*prepared, table, test_artifact_is_running, test_artifact_handoff));
+    expect(BT_TRACE.count == 2);
+    expect(BT_TRACE[0] == "p-before" && BT_TRACE[1] == "p-after");
     expect(BT_PRESTEP_ROOT == root);
     expect(BT_PRESTEP_MEMBERS.count == 1 && BT_PRESTEP_MEMBERS[0] == member_dir);
-    // The substituted entry reached the compile stage directly; the probe
-    // and the whole strip-view front were skipped.
-    expect(BT_CAPTURED_ENTRIES.count == 1 && BT_CAPTURED_ENTRIES[0] == replacement);
+    // No compile input was captured and no strip view was written.
+    // Decision 24 as the review tightened it: a registered derived input with
+    // nowhere private to land is a stage failure, never a silent compile of the
+    // original source. (Before 0098 the entry selection quietly used the
+    // pre-step's raw physical path in this shape.)
+    expect(BT_CAPTURED_ENTRIES.count == 0);
     expect(!file_exists(transpile_tree_dir(root)));
 }
 

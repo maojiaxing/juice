@@ -317,15 +317,27 @@ test "Plugin host effects: rows merge through the stage-level rules" {
     expect(stage.drops.count == 1 && stage.drops[0] == "src/dropped_tests.jai");
     expect(diags.count == 0);
 
-    // A conflicting substitution (same original, different replacement) is a
-    // stage failure with the rule's ERROR diagnostic.
+    // A repeated substitution for one logical input is a stage failure with the
+    // rule's ERROR diagnostic — decision 24 as the review tightened it: even two
+    // rows that agree are rejected, because the second registration cannot know
+    // what the first already wrote.
     conflicting: Plugin_Host_Records;
     conflicting.ok = true;
     array_add(*conflicting.substitutions, .{original = "src/main.jai", replacement = "C:/other/main.jai"});
     expect(!apply_plugin_host_effects(*stage, conflicting, *diags));
     expect(diags.count == 1);
     expect(diags[0].level == .ERROR);
-    expect(contains(diags[0].message, "conflicting source substitution: src/main.jai"));
+    expect(contains(diags[0].message, "duplicate source substitution: src/main.jai"));
+
+    // The agreeing duplicate is rejected on the same rule.
+    array_reset(*diags);
+    agreeing: Plugin_Host_Records;
+    agreeing.ok = true;
+    array_add(*agreeing.substitutions, .{original = "src/dup.jai", replacement = "C:/other/dup.jai"});
+    array_add(*agreeing.substitutions, .{original = "src/dup.jai", replacement = "C:/other/dup.jai"});
+    expect(!apply_plugin_host_effects(*stage, agreeing, *diags));
+    expect(diags.count == 1 && diags[0].level == .ERROR);
+    expect(contains(diags[0].message, "duplicate source substitution: src/dup.jai"));
 
     // A substitution and a drop on the same original conflict in either
     // order (the host rows go through the same stage API).
