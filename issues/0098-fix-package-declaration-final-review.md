@@ -87,3 +87,20 @@ J1/J2/J3 为维护性判断而非硬错误：普通依赖与插件重复来源�
 - 完整套件需真实终止和连续两轮最终0失败，确认新增测试按名称执行。合入最新integration后再验证；merger核对diff、独立复核后关闭本票与0096。
 - 挂起Windows测试及关联Git进程的终止/maintenance对照仍等待用户许可；本票不授权停用防护、改全局Git或擅自终止这些进程。不得用主检出的挂起测试目录运行并发构建。
 - 产出每个S/H/J/L编号的修复、反证或未解决映射；未解决的强制合同阻止0087关闭。
+- **本轮门禁实测（2026-11-15，分支 `implement/final-review-fixes`，HEAD `610e761` 合入 integration `3de8bd9` 后）**
+
+| 门禁项 | Windows | Linux |
+| --- | --- | --- |
+| debug 自举 `jai.exe build.jai` | 已验证 exit 0（`GATE-build-debug.log`） | 未验证（本轮范围外） |
+| release 自举 `jai.exe build.jai - release` | 已验证 exit 0，`target/juice.exe` 1056256 B（`GATE-build-release.log`） | 未验证（本轮范围外） |
+| `publication_install` 过滤 | 已验证 15/0 exit 0（`GATE-publication_install.log`） | 未验证（本轮范围外） |
+| S01 单实例（ASCII + Unicode 夹具） | 已验证 1/0 exit 0，两个子进程均 exit 0（`GATE-final_review_module_owned_tests_run_once.log`） | 未验证（本轮范围外） |
+| 完整套件第 1 轮 | 已验证 380 passed / 0 failed，exit 0（`GATE-round1.log`） | 未验证 |
+| 完整套件第 2 轮 | 已验证 380 passed / 0 failed，exit 0（`GATE-round2.log`） | 未验证 |
+| 合入 integration 后完整套件 | 已验证 380 passed / 0 failed，exit 0（`GATE-postmerge.log`） | 未验证 |
+| H1 后完整套件 | 已验证 380 passed / 0 failed，exit 0（`GATE-h1.log`） | 未验证 |
+| L01 `ic_create_install` 模式复刻 | Windows 分支立即返回 true，POSIX 分支未被触及 → Windows 不构成该分支的证据 | **未验证**：POSIX 分支（`POSIX.stat`/`chmod`）在任何平台都未执行过 |
+
+Linux 历史记录（仅对 `e1743fb` 及其修复前状态有效，不得读作当前通过）：debug/release 自举 exit 0；S01 红；
+安装复制把 0755 降为 0644。
+
