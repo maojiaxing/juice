@@ -521,14 +521,20 @@ get_juice_plugin :: () -> *S09_Plugin {
 } @juice_plugin
 S09_END
 
-// One S09 workspace: a provider package, a root that declares the plugin with
-// marker "root", and one member that declares it with marker "member".
-s09_write_workspace :: (scratch: string) -> (string, string) {
+// One S09 workspace: a provider package, a root that optionally declares the
+// plugin with a marker, and one member that declares it with marker "member".
+// An empty root marker leaves the root with no plugin declaration at all, so a
+// case can isolate "the member's lint never ran" from "the wrong configs were
+// resolved".
+s09_write_workspace :: (scratch: string, root_marker := "root") -> (string, string) {
     provider := dr_path(scratch, "provider");
     if !fr_write_package(provider, "s09_provider", "    modules = .[.{name = \"plugin\", entry = \"plugin.jai\"}],\n") return "", "";
     if !dr_write_file(provider, "plugin.jai", S09_PLUGIN_SOURCE) return "", "";
     root := dr_path(scratch, "workspace");
-    root_plugins := copy_string(tprint("    plugins = Plugin_Declaration.[.{id = \"s09_lint\", source = .{kind = .PATH, path = %1}, module = .{name = \"plugin\"}, options = Plugin_Option.[.{key = \"marker\", value = \"root\"}]}],\n", quote_jai_string(provider)));
+    root_plugins := "";
+    if root_marker != "" {
+        root_plugins = copy_string(tprint("    plugins = Plugin_Declaration.[.{id = \"s09_lint\", source = .{kind = .PATH, path = %1}, module = .{name = \"plugin\"}, options = Plugin_Option.[.{key = \"marker\", value = %2}]}],\n", quote_jai_string(provider), quote_jai_string(root_marker)));
+    }
     if !fr_write_package(root, "s09_root", tprint("    workspace = .{members = .[\"members/*\"]},\n%1", root_plugins)) return "", "";
     return root, provider;
 }
@@ -561,13 +567,15 @@ final_review_member_test_uses_member_config :: () {
 } @test
 
 // The member's lint rule actually runs, and it reports against the MEMBER's own
-// coordinate: `tests/alpha_tests.jai`, not the workspace-relative
-// `members/alpha/tests/alpha_tests.jai`.
+// coordinate: `tests/beta_tests.jai`, not the workspace-relative
+// `members/beta/tests/beta_tests.jai`. The root declares no plugin at all, so
+// the case cannot be satisfied by resolving the root's declarations: only the
+// member's own enablement can put this rule on the run.
 final_review_member_lint_runs_with_member_paths :: () {
     scratch := dr_scratch("fr-member-lint");
     dr_isolate(scratch);
     defer dr_restore_env();
-    root, provider := s09_write_workspace(scratch);
+    root, provider := s09_write_workspace(scratch, "");
     expect(root != "");
     member := dr_path(root, "members/beta");
     expect(fr_write_package(member, "beta", s09_member_plugins(provider)));

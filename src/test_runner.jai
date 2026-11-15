@@ -414,7 +414,10 @@ generate_test_metaprogram :: (options: Test_Metaprogram_Options) -> string {
 Test_Compile_Stage :: struct {
     prepared:            *Prepared_Workspace;
     // The package being tested: its own declared modules are import names of
-    // that package, so their shim directory joins this compile's import path.
+    // that package, so their shim directory joins this compile's import path,
+    // and its declaration configs, compile-time cwd and diagnostic anchor are
+    // the ones the generated test program uses (never the workspace root's).
+    package:             Normalized_Package;
     package_root:        string;
     files:               [] Scan_File;
     view_paths:          [] string;
@@ -487,6 +490,11 @@ discovery_face_source :: () -> string {
 test_compile_front :: (stage: *Test_Compile_Stage, spawn: #type (runner_path: string, import_dirs: [] string) -> Process_Result = spawn_test_compiler) -> bool {
     prepared := stage.prepared;
     root_dir := prepared.discovery.root_dir;
+    // Everything the generated test program anchors belongs to the package
+    // being tested, not to the workspace root (decision 23): its compile-time
+    // working directory, its relative `#load` base, its lint diagnostic
+    // coordinate and the declaration configs it resolves.
+    tested_root := ifx stage.package.dir != "" then stage.package.dir else root_dir;
 
     // Plugin registration consumption (tickets 045/056; command-level prepare
     // since ticket 060): the registration path comes from the command's
@@ -515,7 +523,7 @@ test_compile_front :: (stage: *Test_Compile_Stage, spawn: #type (runner_path: st
     // order. It travels as an add_build_string argument in the runner entry —
     // no driver file lands on disk.
     driver_options: Test_Driver_Options;
-    driver_options.package_root = root_dir;
+    driver_options.package_root = tested_root;
     driver_options.source_files = stage.view_paths;
     driver_source := generate_test_driver(driver_options);
 
@@ -583,8 +591,8 @@ test_compile_front :: (stage: *Test_Compile_Stage, spawn: #type (runner_path: st
         // version checks and the declared lint order all run where the
         // member plugin values exist.
         metaprogram_options.plugin_registration = plugin_registration;
-        metaprogram_options.package_root        = root_dir;
-        metaprogram_options.plugin_configs      = plugin_configs_from_declarations(prepared.discovery.root_package.plugins, prepared.discovery.member_packages);
+        metaprogram_options.package_root        = tested_root;
+        metaprogram_options.plugin_configs      = plugin_configs_from_declarations(stage.package.plugins, prepared.discovery.member_packages);
     }
     if !write_entire_file(runner_path, generate_test_metaprogram(metaprogram_options)) {
         print("[juice ERROR] Could not write test runner.\n");
