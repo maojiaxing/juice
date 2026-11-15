@@ -487,6 +487,73 @@ discovery_face_source :: () -> string {
 // at hook replaces this whole front). The runner is regenerated and written
 // on every run, never cached — it lives at the transpile tree root next to
 // the hash directories.
+// The module-instance view of one test run.
+Test_Module_Instances :: struct {
+    driver_files:    [..] string;   // view paths the driver #loads
+    shimmed_entries: [..] string;   // module entries whose shim now names the view
+}
+
+// One instance per declared module (spec 0087 decision 24: 归属测试 stay with the
+// module, and the module is still ONE actual module).
+//
+// The driver `#load`s every collected file's expanded view, module entries included,
+// so a module that nobody imports still compiles and its own `@test` procedures run.
+// An importing file reaches the module through `#import "<name>"`, which resolves
+// through a shim; when that shim names the RAW entry file while the driver loads the
+// expanded view, the program compiles the same declarations twice — `Value
+// redeclaration` on one platform, "Procedure call matches 2 possible overloads" on
+// another, with the summary still reporting a pass. For an imported module the shim
+// is repointed at the very view the driver would load and the driver stops loading
+// it: one path, one instance, and the module's tests still run because the importer
+// compiles that view.
+prepare_module_instance_shims :: (stage: *Test_Compile_Stage, shim_dirs: [] string) -> Test_Module_Instances {
+    instances: Test_Module_Instances;
+    for view: stage.view_paths array_add(*instances.driver_files, view);
+    if stage.package_root == "" return instances;
+    for declared_module: stage.package.modules {
+        entry_rel := path_slashes(declared_module.entry);
+        view := "";
+        for file, index: stage.files {
+            if !paths_equal(path_slashes(file.rel_path), entry_rel) continue;
+            view = stage.view_paths[index];
+        }
+        if view == "" continue;
+        if !module_is_imported_by_another_file(stage, entry_rel, declared_module.name) continue;
+        // Every directory the compile searches for that import name gets the same
+        // answer: the name must not be able to see the raw entry file.
+        wrote := false;
+        for shim_dir: shim_dirs {
+            if shim_dir == "" continue;
+            shim_path := tprint("%1/%2.jai", shim_dir, declared_module.name);
+            if write_entire_file(shim_path, dependency_shim_content(declared_module.name, view)) wrote = true;
+        }
+        if !wrote continue;
+        array_add(*instances.shimmed_entries, entry_rel);
+        filtered: [..] string;
+        for existing: instances.driver_files {
+            if paths_equal(existing, view) continue;
+            array_add(*filtered, existing);
+        }
+        instances.driver_files = filtered;
+    }
+    return instances;
+}
+
+// True when a collected file other than the module entry itself imports the module
+// by name. The scan is textual on the raw source: a file that does not name the
+// import never reaches the module, so it is the driver (the only other way in) that
+// has to compile it.
+module_is_imported_by_another_file :: (stage: *Test_Compile_Stage, entry_rel: string, module_name: string) -> bool {
+    needle := tprint("#import \"%1\"", module_name);
+    for file: stage.files {
+        if paths_equal(path_slashes(file.rel_path), entry_rel) continue;
+        text, ok := read_entire_file(file.abs_path);
+        if !ok continue;
+        if contains(text, needle) return true;
+    }
+    return false;
+}
+
 test_compile_front :: (stage: *Test_Compile_Stage, spawn: #type (runner_path: string, import_dirs: [] string) -> Process_Result = spawn_test_compiler) -> bool {
     prepared := stage.prepared;
     root_dir := prepared.discovery.root_dir;
@@ -522,9 +589,24 @@ test_compile_front :: (stage: *Test_Compile_Stage, spawn: #type (runner_path: st
     // published Testing face and #loads every discovered file's view in scan
     // order. It travels as an add_build_string argument in the runner entry —
     // no driver file lands on disk.
+    // One instance per declared module (spec 0087 decision 24: 归属测试 stay with
+    // the module, and the module is still ONE actual module). The test scan
+    // collects the module's own file like any other package source, so its `@test`
+    // procedures are numbered and attributed; the program then reaches it through
+    // its IMPORT NAME — whose shim is pointed at this round's expanded view — and
+    // the driver does not `#load` the file a second time. Two `#load`s of the same
+    // declarations is what the review saw as `Value redeclaration` while the count
+    // still said one test passed.
+    module_shim_dirs: [..] string;
+    if stage.package_root != "" {
+        array_add(*module_shim_dirs, packages_dir(stage.package_root));
+        array_add(*module_shim_dirs, dependency_imports_dir(stage.package_root));
+    }
+    module_instances := prepare_module_instance_shims(stage, module_shim_dirs);
+
     driver_options: Test_Driver_Options;
     driver_options.package_root = tested_root;
-    driver_options.source_files = stage.view_paths;
+    driver_options.source_files = module_instances.driver_files;
     driver_source := generate_test_driver(driver_options);
 
     // The test runner entry: the note-enumeration message loop with the

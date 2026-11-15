@@ -1228,3 +1228,78 @@ final_review_nested_substitution_reaches_the_compile :: () {
     expect(contains(run_output, "S10_VALUE=43"));
     expect(!contains(run_output, "S10_VALUE=2"));
 } @test
+
+// ---------------------------------------------------------------------------
+// S01: a declared module is ONE instance. Its own `@test` procedures must run
+// (decision 24: 归属测试), and a test file that imports the module must see the
+// same instance — neither a dropped test nor a second copy of the module's
+// declarations (the review saw `Value redeclaration` with "1 passed" printed).
+// ---------------------------------------------------------------------------
+
+// One package whose declared module lives outside both the test scan's default
+// directories and any layout convention juice could impose: the module entry sits
+// in `src/`, next to the test file, which is where a user actually puts it.
+s01_write_package :: (root: string, package_name: string, module_name: string, module_entry: string, module_body: string, test_source: string) -> bool {
+    if !dr_write_file(root, "package.jai", dr_package_source(package_name, tprint("    modules = .[.{name = \"%1\", entry = \"%2\"}],\n", module_name, module_entry))) return false;
+    entry_path := dr_path(root, module_entry);
+    if !make_directory_if_it_does_not_exist(path_strip_filename(entry_path), recursive = true) return false;
+    if !write_entire_file(entry_path, module_body) return false;
+    return dr_write_file(dr_path(root, "tests"), "suite.jai", test_source);
+}
+
+s01_case :: (scratch_name: string, package_dir: string, package_name: string, module_name: string, module_entry: string = "src/own.jai") -> (bool, string, string, Process_Result) {
+    scratch := dr_scratch(scratch_name);
+    dr_isolate(scratch);
+    root := dr_path(scratch, "pkg");
+    // A module that owns tests imports the Testing face itself: it is compiled as its
+    // own instance, so nothing else can prepend the face on its behalf.
+    module_source := copy_string(tprint("#import \"Testing\";\n\nOwn_Value :: () -> s64 {\n    return 5;\n}\n\nown_module_bound :: () {\n    expect(Own_Value() == 5);\n} @test\n"));
+    test_source := copy_string(tprint("#import \"Testing\";\n#import \"%1\";\n\nconsumer_bound :: () {\n    expect(Own_Value() == 5);\n} @test\n", module_name));
+    if !s01_write_package(root, package_name, module_name, module_entry, module_source, test_source) return false, "", "", .{};
+    result, output, errors := dr_run(root, string.["test"]);
+    return true, output, errors, result;
+}
+
+// The module's own test runs, the consumer's test runs, and there is exactly one
+// instance of the module's declaration (no redeclaration error, exit 0).
+final_review_module_owned_tests_run_once :: () {
+    ok, output, errors, result := s01_case("fr-own-module", "pkg", "s01_pkg", "own");
+    defer dr_restore_env();
+    expect(ok);
+    combined := tprint("%\n%", output, errors);
+    print("[fr] own-module child (exit %):\n%\n", result.exit_code, combined);
+    expect(expect_exit("own-module", result, 0));
+    expect(contains(combined, "own_module_bound"));
+    expect(contains(combined, "consumer_bound"));
+    expect(contains(combined, "2 passed, 0 failed"));
+    expect(!contains(combined, "redeclaration"));
+
+    dr_restore_env();
+
+    // The same contract in a non-ASCII spelling. Package names and product names
+    // are Jai identifiers by spec (the declaration validator rejects anything else;
+    // the rejection itself is asserted below), so the non-ASCII parts are the
+    // package DIRECTORY and the module's entry FILE NAME: those travel as UTF-8
+    // bytes through the scan, the shim and the expanded view.
+    unicode_ok, unicode_output, unicode_errors, unicode_result := s01_case("fr-own-module-unicode", "包", "s01_pkg", "own", "src/条目.jai");
+    defer dr_restore_env();
+    expect(unicode_ok);
+    unicode_combined := tprint("%\n%", unicode_output, unicode_errors);
+    print("[fr] own-module unicode child (exit %):\n%\n", unicode_result.exit_code, unicode_combined);
+    expect(expect_exit("own-module-unicode", unicode_result, 0));
+    expect(contains(unicode_combined, "own_module_bound"));
+    expect(contains(unicode_combined, "consumer_bound"));
+    expect(contains(unicode_combined, "2 passed, 0 failed"));
+    expect(!contains(unicode_combined, "redeclaration"));
+
+    dr_restore_env();
+
+    // The name rule that pushes the Unicode coverage into paths and file names is
+    // itself a contract: a non-identifier product name is rejected, not mangled.
+    rejected_ok, rejected_output, rejected_errors, rejected_result := s01_case("fr-own-module-name", "pkg", "s01_pkg", "计算", "src/own.jai");
+    defer dr_restore_env();
+    rejected_combined := tprint("%\n%", rejected_output, rejected_errors);
+    expect(rejected_ok);
+    expect(rejected_result.exit_code != 0);
+    expect(contains(rejected_combined, "Product name must be a Jai identifier"));
+} @test
