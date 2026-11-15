@@ -122,6 +122,27 @@ ph_parse_error :: (text: string) -> string {
     return parse_plugin_host_records(text).error;
 }
 
+// Decision 21 (0098): an enabled plugin's import name is PRIVATE — the sanitized
+// declaration id, then "__plugin_", then eight hex digits derived from the id and
+// the resolved module identity. It is never the bare id and never the provider
+// package's directory name, so enabling a plugin can never turn its id into an
+// ordinary import name of the consuming package. The hash half is opaque by
+// design, so the tests pin the shape, the id-derived prefix, the exclusion, and
+// the shim/registration that must carry this exact value.
+ph_private_plugin_import_name_ok :: (name: string, declaration_id: string) -> bool {
+    if name == declaration_id return false;
+    if name == resolution_sanitized_identifier(declaration_id) return false;
+    prefix := tprint("%1__plugin_", resolution_sanitized_identifier(declaration_id));
+    if find_index_from_left(name, prefix) != 0 return false;
+    if name.count != prefix.count + 8 return false;
+    for i: prefix.count..name.count-1 {
+        byte := name[i];
+        hex := (byte >= #char "0" && byte <= #char "9") || (byte >= #char "a" && byte <= #char "f");
+        if !hex return false;
+    }
+    return true;
+}
+
 // ===========================================================================
 // Prepare: the single scan / registration landing point
 // ===========================================================================
@@ -144,15 +165,24 @@ test "Plugin prepare: declaration order drives the scan, shims and registration"
     expect(prepare.ok);
     expect(prepare.diagnostics.count == 0);
     expect(prepare.hits.count == 2);
-    expect(prepare.hits[0].module_name == "zeta-plugin");
-    expect(prepare.hits[1].module_name == "alpha-plugin");
-    expect(!prepare.member_hooks);
+    expect(ph_private_plugin_import_name_ok(prepare.hits[0].module_name, "zeta-plugin"));
+    expect(ph_private_plugin_import_name_ok(prepare.hits[1].module_name, "alpha-plugin"));
+    expect(prepare.hits[0].module_name != prepare.hits[1].module_name);
+    // Decision 22 (0098): the host need follows the declaration, not the source
+    // spelling. Only the compiled child holds a plugin's values, so every enabled
+    // external plugin runs the PRESTEP host even when its entry never mentions the
+    // hooks face (before 0098 this fixture reported no host need).
+    expect(prepare.member_hooks);
     expect(prepare.registration_path == workspace_plugin_registration_path(package_target_dir(root)));
-    expect(file_contains(prepare.registration_path, "JUICE_PLUGIN_0 :: #import \"zeta-plugin\";"));
-    expect(file_contains(prepare.registration_path, "JUICE_PLUGIN_1 :: #import \"alpha-plugin\";"));
-    // The member import shims are the scan's ordinary member link.
-    expect(file_exists(tprint("%1/zeta-plugin.jai", packages_dir(root))));
-    expect(file_exists(tprint("%1/alpha-plugin.jai", packages_dir(root))));
+    // The registration imports the PRIVATE names, in declaration order, and each
+    // name resolves through a shim in the plugin-private import zone — never
+    // through the ordinary package import directory (decision 21).
+    expect(file_contains(prepare.registration_path, tprint("JUICE_PLUGIN_0 :: #import \"%1\";", prepare.hits[0].module_name)));
+    expect(file_contains(prepare.registration_path, tprint("JUICE_PLUGIN_1 :: #import \"%1\";", prepare.hits[1].module_name)));
+    expect(file_exists(tprint("%1/%2.jai", plugin_imports_dir(root), prepare.hits[0].module_name)));
+    expect(file_exists(tprint("%1/%2.jai", plugin_imports_dir(root), prepare.hits[1].module_name)));
+    expect(!file_exists(tprint("%1/zeta-plugin.jai", packages_dir(root))));
+    expect(!file_exists(tprint("%1/alpha-plugin.jai", packages_dir(root))));
 }
 
 test "Plugin prepare: zero member plugins write no registration and need no host" {
@@ -182,7 +212,11 @@ test "Plugin prepare: the hooks face probe decides the host need" {
     expect(plain.hits.count == 1);
     expect(plain.registration_path != "");
     expect(file_exists(plain.registration_path));
-    expect(!plain.member_hooks);
+    // Decision 22: the host need does not depend on whether the entry spells the
+    // hooks face. The child is the only place a plugin's values (and therefore its
+    // ABI and options) exist, so every enabled external plugin needs the host.
+    // Before 0098 this probe was the trigger and a lint-style member avoided it.
+    expect(plain.member_hooks);
 
     hooks_root := ph_scratch("prepare-hooks");
     defer delete_directory_full(hooks_root);
@@ -426,6 +460,10 @@ test "Test command: the prepare registration drives the metaprogram without a se
 
     stage: Test_Compile_Stage;
     stage.prepared = *prepared;
+    // The COMPILE front reads the declarations from the package being tested (the
+    // batch rule: a member's own plugins drive its program), so this hand-built
+    // stage names that package exactly as the command does.
+    stage.package = prepared.discovery.root_package;
     stage.transpile_dir = path_slashes(transpile_tree_dir(root));
     expect(make_directory_if_it_does_not_exist(stage.transpile_dir, recursive = true));
     stage.registration_path = "C:/sentinel/registration.jai";

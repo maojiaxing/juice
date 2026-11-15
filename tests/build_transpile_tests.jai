@@ -778,9 +778,9 @@ test "Build dispatch: the host fills plugin_state slots null" {
 }
 
 test "Build dispatch: the pre-step tables travel into the entry selection" {
-    // The fake pre-step plugin fills the substitution through the same hook
-    // face; the built-in b7 front consumes it. Without a private derived root the
-    // row is fatal (never a silent original compile), which is this case's pin.
+    // The fake pre-step plugin fills the substitution through the same hook face;
+    // the built-up front consumes it: the closure probe reads the derived file, so
+    // the view that reaches the compiler is built from the substituted text.
     root := bt_scratch("dispatch-prestep");
     defer delete_directory_full(root);
     expect(build_seam_write(root, "src/main.jai", "#load \"math.jai\";\n\nmain :: () { print(\"orig\\n\"); }\n\ntest \"orig\" {\n}\n"));
@@ -809,24 +809,31 @@ test "Build dispatch: the pre-step tables travel into the entry selection" {
         bt_hook(.PRESTEP, .after,  bt_hook_p_after),
         bt_hook(.COMPILE, .at,     bt_hook_c_at_record),
     ]);
-    // This fixture declares no plugin, so the command builds a PRESTEP stage with
-    // no private derived view. The injected substitution row is a registered
-    // derived input with nowhere private to land, and decision 24 (as the 0098
-    // review tightened it) makes that a stage failure rather than a silent compile
-    // of the original source. The PRESTEP mounts still run and still see the root
-    // and member directories; COMPILE never runs.
-    expect(!build_prepared_workspace(*prepared, table, test_artifact_is_running, test_artifact_handoff));
-    expect(BT_TRACE.count == 2);
-    expect(BT_TRACE[0] == "p-before" && BT_TRACE[1] == "p-after");
+    // The PRESTEP mounts run, see the root and member directories, and record the
+    // injected substitution row.
+    expect(build_prepared_workspace(*prepared, table, test_artifact_is_running, test_artifact_handoff));
+    // This entry carries a test block, so the build takes the all-or-nothing VIEW
+    // path rather than the verbatim materialization path: the PRESTEP mounts fire,
+    // then COMPILE runs on the entry's strip view. The substitution is still
+    // honored on the way in — the closure probe reads `src/main.jai` from the
+    // pre-step's derived file, so the view is built from the substituted text.
+    expect(BT_TRACE.count == 3);
+    expect(BT_TRACE[0] == "p-before" && BT_TRACE[1] == "p-after" && BT_TRACE[2] == "c-at");
     expect(BT_PRESTEP_ROOT == root);
     expect(BT_PRESTEP_MEMBERS.count == 1 && BT_PRESTEP_MEMBERS[0] == member_dir);
-    // No compile input was captured and no strip view was written.
-    // Decision 24 as the review tightened it: a registered derived input with
-    // nowhere private to land is a stage failure, never a silent compile of the
-    // original source. (Before 0098 the entry selection quietly used the
-    // pre-step's raw physical path in this shape.)
-    expect(BT_CAPTURED_ENTRIES.count == 0);
-    expect(!file_exists(transpile_tree_dir(root)));
+    // The replacement has no test block, so the probed closure is test-free and the
+    // build MATERIALIZES it verbatim at the entry's own logical path inside the
+    // package's private derived root (decision 24) — no strip view is written, and
+    // the plugin's raw physical path is never the compile input.
+    expect(BT_CAPTURED_ENTRIES.count == 1);
+    captured := BT_CAPTURED_ENTRIES[0];
+    // This fixture declares no package name, so the private derived view takes the
+    // "package" fallback name.
+    derived_entry := path_slashes(tprint("%1/src/main.jai", package_derived_view_root(package_target_dir(root), "package")));
+    expect(captured == derived_entry);
+    expect(captured != path_slashes(replacement));
+    captured_text, captured_ok := read_entire_file(captured);
+    expect(captured_ok && find_index_from_left(captured_text, "mirror") >= 0);
 }
 
 test "Build dispatch: a dropped entry fails the build" {

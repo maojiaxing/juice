@@ -1090,7 +1090,11 @@ test "E2E: dependency tests are neither discovered nor executed" {
 
     // The shim was rewritten to the entry strip view; the closure's test
     // block is stripped (no @test).
-    shim, ok := read_entire_file(tprint("%1/test_dep.jai", packages_dir(fixture_root)));
+    // The production dependency shim directory is the package's private
+    // target/imports (graph.consumer_shim_directory), not target/packages; until
+    // 0098 this read looked in the wrong directory, so every assertion below it
+    // was vacuous.
+    shim, ok := read_entire_file(tprint("%1/test_dep.jai", dependency_imports_dir(fixture_root)));
     expect(ok);
     entry_view, parsed := shim_load_target(shim);
     expect(parsed && find_index_from_left(entry_view, "/deps/test_dep/") >= 0);
