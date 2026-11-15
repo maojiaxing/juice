@@ -246,6 +246,70 @@ command_selection_run_cardinality_cli :: () {
     expect(output_matches("run-one-package", combined, .["Compiling Target 'alpha'"], want = false));
 } @test
 
+// A real local Git provider proves preflight is not merely before compilation:
+// invalid cardinality must not acquire content or publish any selection.
+command_selection_run_preflight_no_fetch_cli :: () {
+    scratch := dr_scratch("selection-preflight");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    provider := dr_path(scratch, "provider");
+    expect(dr_git_init(provider));
+    expect(dr_write_module_provider(provider, "provider", "Provider_Value :: 7;\n"));
+    commit := dr_git_commit_all(provider, "preflight provider");
+    expect(commit != "");
+    root := dr_path(scratch, "workspace");
+    expect(build_seam_write(root, "package.jai", "#import \"Juice\";\nPACKAGE :: Package.{workspace = .{members = .[\"members/*\"]}};\n"));
+    expect(cs_write_program_member(root, "members/alpha", "alpha"));
+    expect(cs_write_program_member(root, "members/beta", "beta"));
+    declaration := tprint("#import \"Juice\";\nPACKAGE :: Package.{name = \"beta\", version = \"1\", dependencies = .[.{name = \"provider\", source = .{kind = .GIT, git = .{url = %1, branch = \"main\"}}}]};\n", quote_jai_string(provider));
+    expect(build_seam_write(cs_package(root, "members/beta"), "package.jai", declaration));
+
+    result, output, errors := run_otter_child_at(root, .["run", "--workspace"]);
+    expect(expect_exit("run-cardinality-preflight", result, 1));
+    expect(output_matches("run-cardinality-preflight", tprint("%\n%", output, errors), .["run requires exactly one selected package"]));
+    expect(!dr_content_has_commit(scratch, commit));
+    expect(dr_state_text(scratch) == "");
+    expect(!cs_artifact_exists(root, "members/alpha", "alpha"));
+} @test
+
+command_selection_first_failure_no_later_fetch_cli :: () {
+    scratch := dr_scratch("selection-first-failure");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    provider := dr_path(scratch, "provider");
+    expect(dr_git_init(provider));
+    expect(dr_write_module_provider(provider, "provider", "Provider_Value :: 7;\n"));
+    previous_commit := copy_string(dr_git_commit_all(provider, "earlier provider"));
+    expect(previous_commit != "");
+    expect(dr_write_module_provider(provider, "provider", "Provider_Value :: 9;\n"));
+    commit := copy_string(dr_git_commit_all(provider, "later provider"));
+    expect(commit != "" && commit != previous_commit);
+    root := dr_path(scratch, "workspace");
+    expect(build_seam_write(root, "package.jai", "#import \"Juice\";\nPACKAGE :: Package.{workspace = .{members = .[\"members/*\"]}};\n"));
+    expect(cs_write_program_member(root, "members/alpha", "alpha"));
+    expect(cs_write_program_member(root, "members/beta", "beta"));
+    expect(cs_write_program_member(root, "members/gamma", "gamma"));
+    for member_name: string.["alpha", "beta"] {
+        earlier_declaration := tprint("#import \"Juice\";\nPACKAGE :: Package.{name = \"%1\", version = \"1\", dependencies = .[.{name = \"provider\", source = .{kind = .GIT, git = .{url = %2, rev = %3}}}]};\n", member_name, quote_jai_string(provider), quote_jai_string(previous_commit));
+        expect(build_seam_write(cs_package(root, tprint("members/%", member_name)), "package.jai", earlier_declaration));
+    }
+    expect(build_seam_write(cs_package(root, "members/beta"), "src/main.jai", "main :: () { this does not compile }\n"));
+    declaration := tprint("#import \"Juice\";\nPACKAGE :: Package.{name = \"gamma\", version = \"1\", dependencies = .[.{name = \"provider\", source = .{kind = .GIT, git = .{url = %1, branch = \"main\"}}}]};\n", quote_jai_string(provider));
+    expect(build_seam_write(cs_package(root, "members/gamma"), "package.jai", declaration));
+
+    result, output, errors := run_otter_child_at(root, .["build", "--workspace"]);
+    expect(expect_exit("batch-no-later-fetch", result, 1));
+    expect(output_matches("batch-no-later-fetch", tprint("%\n%", output, errors), .["build: completed members/alpha", "build: failed members/beta", "build: not executed members/gamma"]));
+    expect(cs_artifact_exists(root, "members/alpha", "alpha"));
+    expect(!dr_content_has_commit(scratch, commit));
+    expect(!contains(dr_state_text(scratch), commit));
+    expect(contains(dr_state_text(scratch), previous_commit));
+    // An earlier valid resolution is kept even though the next compilation
+    // failed; the successful package remains buildable from its offline state.
+    result, output, errors = run_otter_child_at(root, .["build", "-p", "alpha", "--offline"]);
+    expect(expect_exit("completed-package-keeps-resolution", result, 0));
+} @test
+
 // ---------------------------------------------------------------------------
 // test: zero products, zero tests and zero matches all succeed, the pattern is
 // applied per package, and a real compile error is never hidden (decision 19).

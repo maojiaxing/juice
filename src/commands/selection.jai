@@ -6,9 +6,8 @@
 // build, run, test and update share one path: the nearest declaration is
 // located (workspace layer), the requested package set is validated
 // (select_workspace_packages), every selected package's product declarations
-// are resolved, and the dependency resolution runs for exactly that set. Only
-// then does the command do its own work — and a package set is never filtered
-// down to "the packages that happen to have programs" to guess an intent.
+// are resolved before any dependency acquisition. Execution prepares one package
+// at a time in stable order; run first validates package/program cardinality.
 //
 // The flags are also the dispatcher's argument contract, so an invalid flag or
 // a contradictory selection is rejected at plan time, before any handler runs.
@@ -123,25 +122,20 @@ Selected_Package :: struct {
     plans:         [] Artifact_Plan;
 }
 
-// The command's validated selection: the prepared workspace (dependency
-// resolution for exactly these packages) plus one entry per selected package in
-// stable workspace-relative directory order.
+// The command's declaration-only selection, in stable workspace-relative order.
+// It owns no prepared graph: later packages must not be obtained before their
+// execution turn.
 Command_Selection :: struct {
-    prepared: *Prepared_Workspace;
     packages: [] Selected_Package;
 }
 
-// The one selection entry point build/run/test/update consume. `mode` is the
-// resolution mode the command runs under (NORMAL, OFFLINE, or UPDATE for
-// `juice update`); `force_dependencies` prepares the dependency graph even when
-// a selected package has no program (test and update have no artifact to gate
-// on, and build must validate dependencies before reporting "no programs").
+// Validate declarations, selection, and products without fetching dependencies.
+// Commands apply their cardinality rules before calling prepare_command_package.
 select_command_packages :: (
     command_context: *Command_Context,
     flags: Command_Flags,
     mode: Resolution_Mode,
-    force_dependencies: bool = false,
-    resolve: #type (pkg: Normalized_Package) -> Artifact_Plan_Result = resolve_artifact_plans
+    resolve: #type (package: Normalized_Package) -> Artifact_Plan_Result = resolve_artifact_plans
 ) -> (Command_Selection, bool) {
     command_context.workspace.environment.mode = mode;
     // A contradictory selection is rejected here — before discovery, so the
@@ -178,14 +172,27 @@ select_command_packages :: (
         array_add(*selected_entries, entry);
     }
     command_selection.packages = selected_entries;
-
-    // The dependency preparation seam reads the same selection, so only the
-    // selected packages' graphs are fetched (decision 20).
     command_context.workspace.selection = selection;
-    prepared := ensure_workspace_prepared(command_context.root_dir, command_context.cache_dir, *command_context.workspace, force_dependencies = force_dependencies);
-    if prepared == null return .{}, false;
-    command_selection.prepared = prepared;
     return command_selection, true;
+}
+
+// Prepare only the package whose execution turn has begun. The containing
+// workspace snapshot remains available for membership checks, but the resolver
+// receives an explicit singleton rather than the command's entire selection.
+prepare_command_package :: (command_context: *Command_Context, selected: Selected_Package) -> (Prepared_Workspace, bool) {
+    prepared: Prepared_Workspace;
+    prepared.discovery = command_context.workspace.discovery;
+    prepared.environment = command_context.workspace.environment;
+    prepared.artifact_plans = selected.plans;
+    request: Dependency_Preparation_Request;
+    request.discovery = prepared.discovery;
+    request.invocation_dir = command_context.workspace.invocation_dir;
+    request.cache_dir = command_context.cache_dir;
+    request.environment = prepared.environment;
+    request.selection = .{success = true, packages = .[selected.package], paths = .[selected.relative_path]};
+    if !resolve_dependencies_for_workspace(request) return prepared, false;
+    prepared.dependencies_prepared = true;
+    return prepared, true;
 }
 
 // ---------------------------------------------------------------------------

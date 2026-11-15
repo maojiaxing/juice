@@ -67,7 +67,7 @@ test_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     }
     // Every selected package needs its dependency shims even when it declares
     // no product at all (decision 19: test never requires a public product).
-    selection, selected := select_command_packages(ctx, flags, resolution_mode_for(flags), force_dependencies = true);
+    selection, selected := select_command_packages(ctx, flags, resolution_mode_for(flags));
     if !selected return false;
     pattern := ifx flags.positionals.count == 1 then flags.positionals[0] else "";
 
@@ -75,7 +75,8 @@ test_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     batch.operation = "test";
     batch.total = selection.packages.count;
     for selected_package, index: selection.packages {
-        if !test_package(selection.prepared, selected_package.package, pattern) {
+        prepared, prepared_ok := prepare_command_package(ctx, selected_package);
+        if !prepared_ok || !test_package(*prepared, selected_package.package, pattern) {
             package_batch_fail(*batch, *selection, index);
             package_batch_report_failure(*batch);
             return false;

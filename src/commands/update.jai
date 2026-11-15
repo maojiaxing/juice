@@ -26,7 +26,7 @@ update_arguments_are_valid :: (arguments: [] string) -> bool {
     return command_selection_arguments_are_valid(arguments, 0, false);
 }
 
-update_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
+update_command :: (command_context: *Command_Context, arguments: [] string) -> bool {
     flags, flags_ok := parse_command_flags(arguments, 0, false);
     if !flags_ok {
         print_command_usage(UPDATE_COMMAND);
@@ -38,8 +38,20 @@ update_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     }
     // The update resolves every selected package's graph, whether or not the
     // package declares a program.
-    selection, selected := select_command_packages(ctx, flags, .UPDATE, force_dependencies = true);
+    selection, selected := select_command_packages(command_context, flags, .UPDATE);
     if !selected return false;
+    batch: Package_Batch;
+    batch.operation = "update";
+    batch.total = selection.packages.count;
+    for selected_package, index: selection.packages {
+        _, prepared_ok := prepare_command_package(command_context, selected_package);
+        if !prepared_ok {
+            package_batch_fail(*batch, *selection, index);
+            package_batch_report_failure(*batch);
+            return false;
+        }
+        array_add(*batch.completed, selected_package.relative_path);
+    }
     print("[juice] Dependency resolution graph updated.\n");
     return true;
 }

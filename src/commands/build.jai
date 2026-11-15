@@ -70,7 +70,7 @@ build_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
     }
     // Zero programs still validate the declarations and the dependency graph
     // before reporting that there is nothing to compile (decision 19).
-    selection, selected := select_command_packages(ctx, flags, resolution_mode_for(flags), force_dependencies = true);
+    selection, selected := select_command_packages(ctx, flags, resolution_mode_for(flags));
     if !selected return false;
 
     batch: Package_Batch;
@@ -81,7 +81,8 @@ build_command :: (ctx: *Command_Context, arguments: [] string) -> bool {
         // even with zero programs) and, on success, states what an empty program
         // set means: the module sources were not type-checked behind the author's
         // back (decision 19).
-        if !build_package(selection.prepared, selected_package.package, selected_package.plans) {
+        prepared, prepared_ok := prepare_command_package(ctx, selected_package);
+        if !prepared_ok || !build_package(*prepared, selected_package.package, selected_package.plans) {
             package_batch_fail(*batch, *selection, index);
             package_batch_report_failure(*batch);
             return false;
