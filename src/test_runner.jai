@@ -547,6 +547,12 @@ test_compile_front :: (stage: *Test_Compile_Stage, spawn: #type (runner_path: st
     dependency_directory := ifx stage.package_root != "" then dependency_imports_dir(stage.package_root) else packages_dir(root_dir);
     import_dirs: [..] string;
     for dir: compiler_import_directories(dependency_directory, own_packages_dir) array_add(*import_dirs, dir);
+    // The generated test program loads the plugin registration, whose plugin
+    // import names live in the plugin-private zone. That zone is the only
+    // place those names exist, so the plugin id itself never becomes an
+    // ordinary import name (decision 21).
+    plugin_directory := plugin_imports_dir(root_dir);
+    if is_directory(plugin_directory) array_add(*import_dirs, path_slashes(plugin_directory));
     metaprogram_options.import_dirs        = import_dirs;
     metaprogram_options.driver_source      = driver_source;
     metaprogram_options.package_view_paths = stage.view_paths;

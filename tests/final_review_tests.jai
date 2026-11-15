@@ -297,18 +297,24 @@ FR_Plugin :: struct {
 
 get_juice_plugin :: () -> *FR_Plugin {
     plugin := New(FR_Plugin);
-    plugin.id = "fr_plugin";
+    plugin.id = FR_PLUGIN_ID;
     plugin.version = "1.0.0";
 FR_END
 
-// A valid plugin that contributes no hooks at all.
-fr_plugin_no_hooks_source :: () -> string {
-    return tprint("%1    plugin.options = cast(*void) plugin;\n    return plugin;\n} @juice_plugin\n", FR_PLUGIN_HEADER);
+// One plugin module source. The plugin VALUE's id must equal the enabled
+// declaration's id (the host matches them), so the id is a fixture parameter.
+fr_plugin_source :: (plugin_id: string, extra := "") -> string {
+    return tprint("FR_PLUGIN_ID :: %1;\n%2    plugin.options = cast(*void) plugin;\n%3    return plugin;\n} @juice_plugin\n", quote_jai_string(plugin_id), FR_PLUGIN_HEADER, extra);
 }
 
-// Same shape, but compiled value claims a foreign entry ABI.
-fr_plugin_bad_abi_source :: () -> string {
-    return tprint("%1    plugin.options = cast(*void) plugin;\n    plugin.abi_version = 999;\n    return plugin;\n} @juice_plugin\n", FR_PLUGIN_HEADER);
+// A valid plugin that contributes no hooks at all.
+fr_plugin_no_hooks_source :: (plugin_id := "fr_plugin") -> string {
+    return fr_plugin_source(plugin_id);
+}
+
+// Same shape, but the compiled value claims a foreign entry ABI.
+fr_plugin_bad_abi_source :: (plugin_id := "fr_plugin") -> string {
+    return fr_plugin_source(plugin_id, "    plugin.abi_version = 999;\n");
 }
 
 fr_write_plugin_provider :: (provider: string, module_source: string) -> bool {
@@ -374,4 +380,66 @@ final_review_plugin_entry_through_load_closure :: () {
     if result.exit_code != 0 print("[fr] load-closure child:\n%\n%\n", output, errors);
     expect(expect_exit("plugin-entry-through-load", result, 0));
     expect(contains(output, "PLUGIN_APP_OK"));
+} @test
+
+// ---------------------------------------------------------------------------
+// S12: a plugin enablement owns a private import name. The review probes 13-15
+// recorded the pre-fix behavior: an ordinary dependency aliased `Tool` returned
+// 7, enabling a plugin whose id was `Tool` changed the app to 99, and enabling
+// that plugin alone made `#import "Tool"` succeed. A plugin id must never
+// overwrite a business alias, and enabling a plugin must add no ordinary import
+// name.
+// ---------------------------------------------------------------------------
+
+fr_write_value_provider :: (provider: string, name: string, value: s64) -> bool {
+    return dr_write_module_provider(provider, name, tprint("Get_Value :: () -> s64 { return %; }\n", value));
+}
+
+final_review_plugin_id_cannot_overwrite_business_alias :: () {
+    scratch := dr_scratch("fr-plugin-alias");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    business := dr_path(scratch, "business");
+    expect(fr_write_value_provider(business, "business", 7));
+    plugin_provider := dr_path(scratch, "plugin_provider");
+    expect(fr_write_plugin_provider(plugin_provider, fr_plugin_no_hooks_source("Tool")));
+
+    // Control: the ordinary alias resolves to the business provider (7).
+    app_body := tprint("%1    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", fr_path_dependency("business", business, "Tool"));
+    expect(fr_write_program(dr_path(scratch, "app"), "plugin_app", app_body, "#import \"Basic\";\n#import \"Tool\";\n\nmain :: () { print(\"API=%\\n\", Get_Value()); }\n"));
+    app := dr_path(scratch, "app");
+    control, control_output, control_errors := dr_run(app, string.["run"]);
+    if control.exit_code != 0 print("[fr] alias control:'+chr(92)+'n%'+chr(92)+'n%'+chr(92)+'n", control_output, control_errors);
+    expect(expect_exit("plugin-alias-control", control, 0));
+    expect(contains(control_output, "API=7"));
+
+    // Enabling a plugin whose DECLARATION ID is `Tool` must not touch it.
+    plugins := copy_string(tprint("    plugins = Plugin_Declaration.[.{id = \"Tool\", source = .{kind = .PATH, path = %1}, module = .{name = \"plugin_module\"}}],\n", quote_jai_string(plugin_provider)));
+    with_plugin := tprint("%1%2    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", fr_path_dependency("business", business, "Tool"), plugins);
+    expect(fr_write_program(app, "plugin_app", with_plugin, "#import \"Basic\";\n#import \"Tool\";\n\nmain :: () { print(\"API=%\\n\", Get_Value()); }\n"));
+    collision, collision_output, collision_errors := dr_run(app, string.["run"]);
+    if collision.exit_code != 0 print("[fr] collision:'+chr(92)+'n%'+chr(92)+'n%'+chr(92)+'n", collision_output, collision_errors);
+    expect(expect_exit("plugin-alias-collision", collision, 0));
+    expect(contains(collision_output, "API=7"));
+    expect(!contains(collision_output, "API=99"));
+} @test
+
+final_review_plugin_alone_exposes_no_ordinary_import :: () {
+    scratch := dr_scratch("fr-plugin-exposure");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    plugin_provider := dr_path(scratch, "plugin_provider");
+    expect(fr_write_plugin_provider(plugin_provider, fr_plugin_no_hooks_source("Tool")));
+    app := dr_path(scratch, "app");
+    // No ordinary dependency at all: only the plugin enablement names `Tool`.
+    plugins := copy_string(tprint("    plugins = Plugin_Declaration.[.{id = \"Tool\", source = .{kind = .PATH, path = %1}, module = .{name = \"plugin_module\"}}],\n", quote_jai_string(plugin_provider)));
+    expect(fr_write_program(app, "plugin_app", tprint("%1    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", plugins), "#import \"Basic\";\n#import \"Tool\";\n\nmain :: () { print(\"API=%\\n\", Get_Value()); }\n"));
+
+    result, output, errors := dr_run(app, string.["build"]);
+    expect(result.exit_code != 0);
+    combined := tprint("%\n%", output, errors);
+    expect(contains(combined, "Tool"));
+    // Nothing was compiled by accident; the enablement itself is valid.
+    expect(!file_exists(tprint("%1/Tool.jai", dependency_imports_dir(app))));
+    expect(!file_exists(tprint("%1/Tool.jai", packages_dir(app))));
 } @test

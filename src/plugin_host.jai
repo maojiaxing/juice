@@ -526,13 +526,17 @@ generate_plugin_host :: (options: Plugin_Host_Options) -> string {
 // ---------------------------------------------------------------------------
 
 // The host's import directories: the published plugin face (<exe>/modules —
-// juice_core and its closure) and the dependency shim directory
-// (<root>/target/packages — the declared members' import shims). The scan
-// already linked every declared member, so the shim directory exists.
-plugin_host_import_dirs :: (root_dir: string) -> [..] string {
+// juice_core and its closure), the consuming package's own module shims and
+// the plugin-private shim zone (<root>/target/plugins/imports). The plugin
+// zone is deliberately absent from every ordinary compile search path, so an
+// enablement never turns a plugin module into an ordinary import name. The
+// scan already linked every declared member, so the zone exists when a plugin
+// is enabled.
+plugin_host_import_dirs :: (root_dir: string, package_root: string) -> [..] string {
     dirs: [..] string;
     array_add(*dirs, path_slashes(juice_modules_dir()));
-    array_add(*dirs, path_slashes(packages_dir(root_dir)));
+    for dir: compiler_import_directories(dependency_imports_dir(ifx package_root != "" then package_root else root_dir), packages_dir(ifx package_root != "" then package_root else root_dir)) array_add(*dirs, dir);
+    array_add(*dirs, path_slashes(plugin_imports_dir(root_dir)));
     return dirs;
 }
 
@@ -725,7 +729,7 @@ run_plugin_host :: (
         }
     }
 
-    import_dirs := plugin_host_import_dirs(options.root_dir);
+    import_dirs := plugin_host_import_dirs(options.root_dir, options.package_root);
     result := spawn(options.host_path, import_dirs);
     if result.exit_code != 0 {
         // The child's stderr was inherited (passthrough); the summary is the

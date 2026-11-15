@@ -587,7 +587,7 @@ resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Reso
         candidate.package_dir = resolved.provider_dir;
         candidate.module_export = resolved.export_name;
         candidate.entry_path = resolved.entry_path;
-        candidate.import_name = declaration.id;
+        candidate.import_name = plugin_import_name(declaration.id, resolved.identity);
         candidate.identity = resolved.identity;
         candidate.anchor_rel_path = scan_rel_path(resolved.entry_path, resolved.provider_dir);
 
@@ -657,7 +657,7 @@ plugin_scan_result_from_sources :: (discovery: Workspace_Discovery, resolved: Pl
         result.has_hooks = true;
 
         if !shim_dir_ready {
-            shim_dir := packages_dir(discovery.root_dir);
+            shim_dir := plugin_imports_dir(discovery.root_dir);
             if !make_directory_if_it_does_not_exist(shim_dir, recursive = true) {
                 array_add(*result.diagnostics, .{rel_path = source.id, message = tprint("Could not create the plugin shim directory: %", shim_dir), fatal = true});
                 result.ok = false;
@@ -665,7 +665,7 @@ plugin_scan_result_from_sources :: (discovery: Workspace_Discovery, resolved: Pl
             }
             shim_dir_ready = true;
         }
-        shim_path := tprint("%1/%2.jai", packages_dir(discovery.root_dir), source.import_name);
+        shim_path := tprint("%1/%2.jai", plugin_imports_dir(discovery.root_dir), source.import_name);
         if !write_entire_file(shim_path, dependency_shim_content(source.import_name, source.entry_path)) {
             array_add(*result.diagnostics, .{rel_path = source.id, message = tprint("Could not link the plugin module: %", source.id), fatal = true});
             result.ok = false;
@@ -780,6 +780,23 @@ plugin_probe_rank :: (rel_path: string) -> s64 {
 // ---------------------------------------------------------------------------
 // Registration codegen
 // ---------------------------------------------------------------------------
+
+// The import name a plugin enablement's shim carries. It is derived from the
+// declaration id and the resolved module identity, never equal to the bare id,
+// so enabling a plugin can neither overwrite a business dependency alias nor
+// make `<id>` an ordinary import name of the consuming package (decision 21:
+// a plugin enablement is not an ordinary module selection).
+plugin_import_name :: (id: string, identity: string) -> string {
+    digest := u64_hex(hash_text_fnv1a(tprint("%1|%2", id, identity)));
+    return tprint("%1__plugin_%2", resolution_sanitized_identifier(id), slice(digest, 0, 8));
+}
+
+// The import directory plugin shims are written to
+// (<target>/plugins/imports): only the generated host driver and the test
+// metaprogram that loads the registration search it.
+plugin_imports_dir :: (root_dir: string) -> string {
+    return target_plugin_imports_dir(package_target_dir(root_dir));
+}
 
 // The registration file's landing path: target/plugins/<package>/
 // registration.jai — under target/, so it is a session artifact

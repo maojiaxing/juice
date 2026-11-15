@@ -97,6 +97,13 @@ target_packages_dir :: (target_dir: string) -> string {
     return target_zone_dir(target_dir, "packages");
 }
 
+// The plugin host's private import zone (target/plugins/imports). Plugin
+// module import names live here and nowhere else, so enabling a plugin never
+// adds an ordinary import name to a package's compile search path.
+target_plugin_imports_dir :: (target_dir: string) -> string {
+    return target_zone_dir(target_plugins_dir(target_dir), "imports");
+}
+
 // The consuming package's private dependency import zone (target/imports).
 // Dependency import names belong to the package that declared them, so two
 // packages of one workspace never share this compiler search path.

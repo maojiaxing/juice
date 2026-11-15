@@ -932,7 +932,11 @@ plugin_derived_builtin_triad_test_cli :: () {
     expect(output_matches("triad-test-external", external_text, .["Could not prepare the workspace's plugin declarations"], want = false));
     registration := workspace_plugin_registration_path(package_target_dir(external_root));
     expect(file_exists(registration));
-    expect(file_contains(registration, "JUICE_PLUGIN_0 :: #import \"noop_plugin\";"));
+    // The registration imports the plugin's PRIVATE name, never the bare
+    // declaration id: enabling a plugin adds no ordinary import name
+    // (decision 21, issue 0098 S12).
+    expect(file_contains(registration, "JUICE_PLUGIN_0 :: #import \"noop_plugin__plugin_"));
+    expect(file_contains(registration, "JUICE_PLUGIN_0 :: #import \"noop_plugin\";") == false);
 } @test
 
 // ===========================================================================
