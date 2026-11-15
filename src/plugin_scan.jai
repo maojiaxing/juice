@@ -539,7 +539,7 @@ plugin_dependency_module_conflict :: (request: Plugin_Source_Request, candidate:
     for dependency: consumer.dependencies {
         selections: [..] Module_Reference;
         if dependency.modules_omitted {
-            array_add(*selections, Module_Reference.{path = "."});
+            array_add(*selections, .{path = "."});
         } else {
             for module: dependency.modules array_add(*selections, module);
         }

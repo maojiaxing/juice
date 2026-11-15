@@ -375,7 +375,7 @@ resolution_add_consumer_module :: (graph: *Resolution_Graph, package_index: int,
         graph.error = tprint("Dependency import name is not a valid module name: %", import_name);
         return false;
     }
-    array_add(*graph.modules, Resolved_Module.{
+    array_add(*graph.modules, .{
         owner_index      = graph.consumer_index,
         package_index    = package_index,
         export_name      = export_name,
@@ -417,7 +417,7 @@ resolution_add_provider_module :: (graph: *Resolution_Graph, owner_index: int, p
         return false;
     }
     private_name := resolution_private_module_name(*graph.nodes[package_index], export_name);
-    array_add(*graph.modules, Resolved_Module.{
+    array_add(*graph.modules, .{
         owner_index      = owner_index,
         package_index    = package_index,
         export_name      = export_name,
@@ -474,7 +474,7 @@ resolution_resolve_git :: (graph: *Resolution_Graph, request: Dependency_Prepara
 
     content_dir, content_error := git_ensure_content(request.environment, source.url, commit);
     if content_error != "" return "", "", content_error;
-    array_add(*graph.selections, Resolved_Selection.{
+    array_add(*graph.selections, .{
         declaring_key = declaring_key,
         url           = source.url,
         branch        = source.branch,
@@ -563,7 +563,7 @@ resolution_resolve_node :: (graph: *Resolution_Graph, request: Dependency_Prepar
 
         selections: [..] Module_Reference;
         if dependency.modules_omitted {
-            array_add(*selections, Module_Reference.{path = "."});
+            array_add(*selections, .{path = "."});
         } else {
             if dependency.modules.count == 0 {
                 return resolution_fail(graph, tprint("Dependency '%' declares an empty module list; the provider capability does not match.", dependency.name));
@@ -621,7 +621,7 @@ resolution_register_private_exports :: (graph: *Resolution_Graph) {
                 if existing.package_index == index && ascii_names_equal(existing.export_name, export.name) duplicate = true;
             }
             if duplicate continue;
-            array_add(*graph.private_modules, Resolved_Private_Module.{
+            array_add(*graph.private_modules, .{
                 package_index = index,
                 export_name   = export.name,
                 import_name   = private_name,
@@ -798,7 +798,7 @@ resolution_add_shim :: (graph: *Resolution_Graph, directory: string, import_name
         graph.error = tprint("Import name '%' resolves to two different modules.", import_name);
         return false;
     }
-    array_add(*graph.shims, Import_Shim.{directory = copy_string(directory), import_name = copy_string(import_name), entry_path = entry_path});
+    array_add(*graph.shims, .{directory = copy_string(directory), import_name = copy_string(import_name), entry_path = entry_path});
     return true;
 }
 
@@ -996,7 +996,7 @@ resolve_dependencies_into :: (request: Dependency_Preparation_Request, publish: 
     }
     selection := request.selection;
     if !selection.success {
-        selection = select_workspace_packages(request.discovery, request.invocation_dir, Package_Selection_Request.{});
+        selection = select_workspace_packages(request.discovery, request.invocation_dir, .{});
         if !selection.success {
             print("[juice ERROR] %\n", selection.error);
             return false;

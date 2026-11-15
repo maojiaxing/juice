@@ -331,7 +331,7 @@ git_run :: (arguments: [] string, working_directory := "") -> (string, Process_R
     array_add(*command, "git");
     for argument: arguments array_add(*command, argument);
     result, output, errors, timed_out := run_command(..command, working_directory = working_directory, capture_and_return_output = true);
-    if timed_out return "", Process_Result.{type = .FAILED_TO_LAUNCH};
+    if timed_out return "", .{type = .FAILED_TO_LAUNCH};
     return output, result;
 }
 

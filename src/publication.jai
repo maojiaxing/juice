@@ -639,11 +639,11 @@ parse_install_manifest :: (text: string) -> (Install_Manifest, bool) {
     for i: 4..line_count - 1 {
         line := lines[i];
         space := find_index_from_left(line, " ");
-        if space <= 0 return Install_Manifest.{}, false;
+        if space <= 0 return .{}, false;
         relative_path := slice(line, 0, space);
         digest := slice(line, space + 1, line.count - space - 1);
-        if !install_relative_path_is_valid(relative_path) return Install_Manifest.{}, false;
-        if !marker_string_is_digest(digest) return Install_Manifest.{}, false;
+        if !install_relative_path_is_valid(relative_path) return .{}, false;
+        if !marker_string_is_digest(digest) return .{}, false;
         array_add(*result.artifacts, .{ relative_path = copy_string(relative_path), digest = copy_string(digest) });
     }
     return result, true;
