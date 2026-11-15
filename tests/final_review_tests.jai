@@ -734,3 +734,57 @@ final_review_plugin_failure_keeps_previous_state :: () {
     expect(contains(state_text, good));
     expect(!contains(state_text, broken));
 } @test
+
+// ---------------------------------------------------------------------------
+// S14: declaration names are validated once, with one grammar, and compared with
+// one ASCII-insensitive key. The review trajectories: a dependency referenced as
+// `"bad name"` built successfully, a plugin id `"../escaped"` was accepted, a
+// program declared `Tool` did not answer `run tool`, and a schema key `config`
+// rejected the declaration row `CONFIG`.
+// ---------------------------------------------------------------------------
+final_review_dependency_name_grammar_is_enforced :: () {
+    scratch := dr_scratch("fr-name-grammar");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    provider := dr_path(scratch, "provider");
+    expect(dr_write_module_provider(provider, "provider", "Provider_Value :: 1;\n"));
+    app := dr_path(scratch, "app");
+    body := tprint("    dependencies = Dependency.[.{name = \"bad name\", source = .{kind = .PATH, path = %1}, modules = .[.{alias = \"Bad\"}]}],\n    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", quote_jai_string(provider));
+    expect(fr_write_program(app, "app", body, "#import \"Basic\";\n\nmain :: () { print(\"NOPE\\n\"); }\n"));
+
+    result, output, errors := dr_run(app, string.["build"]);
+    combined := tprint("%\n%", output, errors);
+    // Probe: pre-fix this build succeeded with the name accepted verbatim.
+    expect(result.exit_code != 0);
+    expect(contains(combined, "Invalid dependency name"));
+
+    // A plugin id outside the identifier grammar is rejected at declaration time.
+    plugin_body := "    plugins = Plugin_Declaration.[.{id = \"../escaped\", source = .{kind = .PATH, path = \"vendor/p\"}, module = .{name = \"p\"}}],\n    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n";
+    expect(fr_write_program(dr_path(scratch, "app2"), "app2", plugin_body, "#import \"Basic\";\n\nmain :: () { print(\"NOPE\\n\"); }\n"));
+    plugin_result, plugin_output, plugin_errors := dr_run(dr_path(scratch, "app2"), string.["build"]);
+    plugin_combined := tprint("%\n%", plugin_output, plugin_errors);
+    expect(plugin_result.exit_code != 0);
+    expect(contains(plugin_combined, "Invalid plugin id"));
+} @test
+
+// A declared program name answers the same request in any ASCII case, while the
+// declaration keeps its own spelling in the artifact and the diagnostics.
+final_review_program_name_match_is_ascii_insensitive :: () {
+    scratch := dr_scratch("fr-program-case");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    app := dr_path(scratch, "app");
+    expect(fr_write_program(app, "app", "    executables = .[.{name = \"Tool\", entry = \"src/main.jai\"}],\n", "#import \"Basic\";\n\nmain :: () { print(\"TOOL_RAN\\n\"); }\n"));
+
+    built, built_output, built_errors := dr_run(app, string.["build"]);
+    if built.exit_code != 0 print("[fr] program-case build:\n%\n", tprint("%\n%", built_output, built_errors));
+    expect(expect_exit("program-case-build", built, 0));
+
+    lower, lower_output, lower_errors := dr_run(app, string.["run", "tool"]);
+    if lower.exit_code != 0 print("[fr] program-case run tool:\n%\n", tprint("%\n%", lower_output, lower_errors));
+    expect(expect_exit("program-case-run-lower", lower, 0));
+    expect(contains(lower_output, "TOOL_RAN"));
+
+    // The declaration spelling still names the artifact.
+    expect(file_exists(target_artifact_path(package_target_dir(app), "Tool")));
+} @test

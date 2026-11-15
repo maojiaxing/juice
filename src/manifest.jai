@@ -228,6 +228,10 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
                 source, ok := manifest_source(parts, 1);
                 if !ok return manifest_parse_failure(line_index+1, "Invalid dependency source: choose PATH, GIT or WORKSPACE with matching payload; Git selectors are mutually exclusive.");
                 if value == "" || manifest_is_omitted(value) return manifest_parse_failure(line_index+1, "Dependency name is required.");
+                // A dependency reference name is a declaration identifier: it is
+                // reported and compared as written, but it must be spellable —
+                // the same grammar the package name and plugin id use.
+                if !package_name_is_valid(value) return manifest_parse_failure(line_index+1, tprint("Invalid dependency name: % (ASCII letters, digits, '.', '_' and '-', starting with a letter or digit).", value));
                 count, count_ok, remainder := string_to_int(parts[7]);
                 if !count_ok || remainder.count != 0 || count < -1 || count == 0 return manifest_parse_failure(line_index+1, "Dependency modules cannot be empty.");
                 for previous: dependencies if equal_nocase(previous.name, value) return manifest_parse_failure(line_index+1, "Duplicate dependency name.");
@@ -244,6 +248,10 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
             case "PLUGIN";
                 if parts.count != 11 return manifest_parse_failure(line_index+1, "PLUGIN requires id, builtin, source and module selection.");
                 if value == "" return manifest_parse_failure(line_index+1, "Plugin id cannot be empty.");
+                // Plugin ids share the package-name grammar (the built-in ids
+                // `load` and `test-block` are legal spellings), and the internal
+                // omitted sentinel is not a user spelling at all.
+                if !manifest_is_omitted(value) && !package_name_is_valid(value) return manifest_parse_failure(line_index+1, tprint("Invalid plugin id: % (ASCII letters, digits, '.', '_' and '-', starting with a letter or digit).", value));
                 plugin: Plugin_Reference;
                 plugin.id = manifest_optional(value);
                 plugin.builtin = !manifest_is_omitted(parts[1]);
@@ -251,7 +259,7 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
                     if parts[1] == "" || parts[2] != "0" return manifest_parse_failure(line_index+1, "Plugin builtin and source are mutually exclusive.");
                     for index: 3..10 if !manifest_is_omitted(parts[index]) return manifest_parse_failure(line_index+1, "Builtin plugin cannot select an external source or module.");
                     if plugin.id == "" plugin.id = copy_string(parts[1]);
-                    if plugin.id != parts[1] return manifest_parse_failure(line_index+1, "Builtin plugin id must match builtin.");
+                    if !ascii_names_equal(plugin.id, parts[1]) return manifest_parse_failure(line_index+1, "Builtin plugin id must match builtin.");
                 } else {
                     source, ok := manifest_source(parts, 2);
                     if !ok return manifest_parse_failure(line_index+1, "External plugin requires an explicit source.");
@@ -265,6 +273,7 @@ parse_manifest_data_strict :: (content: string) -> Manifest_Parse_Result {
                 array_add(*plugins, plugin);
             case "PLUGIN_OPTION";
                 if parts.count != 2 || plugins.count == 0 return manifest_parse_failure(line_index+1, "PLUGIN_OPTION requires a plugin and key|value.");
+                if !declaration_identifier_is_valid(value) return manifest_parse_failure(line_index+1, tprint("Invalid plugin option key: % (ASCII identifier).", value));
                 rows: [..] Juice.Plugin_Option;
                 for row: plugins[plugins.count-1].options {
                     if equal_nocase(row.key, value) return manifest_parse_failure(line_index+1, "Duplicate plugin option key.");

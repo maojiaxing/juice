@@ -79,7 +79,9 @@ select_run_plan :: (selected: Selected_Package, positionals: [] string) -> (Arti
     requested := ifx positionals.count == 1 then positionals[0] else "";
     if requested != "" {
         for plan: selected.plans {
-            if plan.target.name == requested return plan, true;
+            // Program names compare with the same ASCII-insensitive key as every
+            // other declaration name; the declared spelling is what is reported.
+            if ascii_names_equal(plan.target.name, requested) return plan, true;
         }
         print("[juice ERROR] Package '%' has no program named '%'.\n", selected.package.name, requested);
         return .{}, false;
