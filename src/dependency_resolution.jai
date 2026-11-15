@@ -862,25 +862,44 @@ resolution_write_shims :: (graph: *Resolution_Graph) -> bool {
 // pass re-resolved are replaced, records of other declaring packages are kept so
 // a member update cannot erase a sibling member's selections.
 resolution_publish_state :: (graph: *Resolution_Graph, request: Dependency_Preparation_Request) -> bool {
-    merged: [..] Resolved_Selection;
-    for previous: graph.state.selections {
-        superseded := false;
-        for current: graph.selections {
-            if previous.declaring_key != current.declaring_key continue;
-            if previous.url != current.url || previous.branch != current.branch || previous.tag != current.tag || previous.rev != current.rev continue;
-            superseded = true;
-        }
-        if !superseded array_add(*merged, previous);
-    }
-    for current: graph.selections array_add(*merged, current);
-    if !publish_resolution_state(request.environment, graph.consumer_root, merged) {
+    if !resolution_publish_selections(request.environment, graph.consumer_root, graph.selections, graph.state) {
         graph.error = tprint("Could not publish the dependency resolution state for %", graph.consumer_root);
         return false;
     }
     return true;
 }
 
-resolution_resolve_consumer :: (request: Dependency_Preparation_Request, consumer_package: Normalized_Package) -> Resolution_Graph {
+// Merge this pass's records over a previous state file and publish the result:
+// records this pass re-resolved are replaced, records of other declaring
+// packages are kept so a member update cannot erase a sibling member's
+// selections. One merge implementation serves the immediate and the deferred
+// publication paths, so a deferred commit cannot quietly drop a sibling's
+// record.
+resolution_publish_selections :: (
+    environment: Resolution_Environment,
+    consumer_root: string,
+    current_selections: [] Resolved_Selection,
+    previous_state: Resolution_State
+) -> bool {
+    merged: [..] Resolved_Selection;
+    for previous: previous_state.selections {
+        superseded := false;
+        for current: current_selections {
+            if previous.declaring_key != current.declaring_key continue;
+            if previous.url != current.url || previous.branch != current.branch || previous.tag != current.tag || previous.rev != current.rev continue;
+            superseded = true;
+        }
+        if !superseded array_add(*merged, previous);
+    }
+    for current: current_selections array_add(*merged, current);
+    return publish_resolution_state(environment, consumer_root, merged);
+}
+
+resolution_resolve_consumer :: (
+    request: Dependency_Preparation_Request,
+    consumer_package: Normalized_Package,
+    defer_publication := false
+) -> Resolution_Graph {
     graph: Resolution_Graph;
     graph.success = true;
     graph.consumer_root = request.discovery.root_dir;
@@ -940,7 +959,7 @@ resolution_resolve_consumer :: (request: Dependency_Preparation_Request, consume
         graph.success = false;
         return graph;
     }
-    if !resolution_publish_state(*graph, request) {
+    if !defer_publication && !resolution_publish_state(*graph, request) {
         graph.success = false;
         return graph;
     }
@@ -953,6 +972,17 @@ resolution_resolve_consumer :: (request: Dependency_Preparation_Request, consume
 // graphs validate before any shim or state is published, so a failure leaves the
 // workspace untouched.
 resolve_dependencies_for_workspace :: (request: Dependency_Preparation_Request) -> bool {
+    return resolve_dependencies_into(request, true, null);
+}
+
+// The command-level entry: resolve exactly as production does, but hand the
+// merged selections to the caller instead of publishing them, so the command
+// can commit after its own validations (decision 15).
+resolve_dependencies_deferred :: (request: Dependency_Preparation_Request, pending: *Prepared_Workspace) -> bool {
+    return resolve_dependencies_into(request, false, pending);
+}
+
+resolve_dependencies_into :: (request: Dependency_Preparation_Request, publish: bool, pending: *Prepared_Workspace) -> bool {
     if request.discovery.root_dir == "" {
         print("[juice ERROR] Dependency resolution requires a discovered workspace.\n");
         return false;
@@ -967,7 +997,7 @@ resolve_dependencies_for_workspace :: (request: Dependency_Preparation_Request) 
     }
     graphs: [..] Resolution_Graph;
     for package: selection.packages {
-        graph := resolution_resolve_consumer(request, package);
+        graph := resolution_resolve_consumer(request, package, defer_publication = !publish || pending != null);
         if !graph.success {
             print("[juice ERROR] %\n", graph.error);
             return false;
@@ -997,6 +1027,18 @@ resolve_dependencies_for_workspace :: (request: Dependency_Preparation_Request) 
     if !resolution_write_shims(*combined) {
         print("[juice ERROR] %\n", combined.error);
         return false;
+    }
+    // The caller asked to commit later: hand it the merged selections of every
+    // selected package's graph. The command publishes them as one transaction
+    // after its own validations (decision 15), so a failing new selection never
+    // replaces a working record.
+    if pending != null {
+        pending.pending_publication = true;
+        pending.pending_consumer_root = request.discovery.root_dir;
+        pending.pending_environment = request.environment;
+        for graph: graphs {
+            for selection_record: graph.selections array_add(*pending.pending_selections, selection_record);
+        }
     }
     return true;
 }

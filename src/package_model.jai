@@ -91,6 +91,17 @@ Prepared_Workspace :: struct {
     // command layer fills it before preparation; plugins never derive it from a
     // process-global value.
     environment: Resolution_Environment;
+    // Publication is deferred out of the resolution itself (spec 0087
+    // decision 15): the resolution computes the selections and shims, but the
+    // command commits them only after every applicable validation — the
+    // package's declarations, its plugin role/identity checks and the member
+    // plugin values' ABI/options — has passed. A failure before the commit
+    // leaves the previous resolution state untouched, so a broken new
+    // selection never replaces a working record.
+    pending_selections: [..] Resolved_Selection;
+    pending_consumer_root: string;
+    pending_environment: Resolution_Environment;
+    pending_publication: bool;
 }
 
 // Command selection request (spec 0087 decision 18). The mutual exclusion of

@@ -77,6 +77,12 @@ Plugin_Prepare_Result :: struct {
     member_hooks:      bool;
     ok:                bool;
     diagnostics:       [..] Plugin_Scan_Diagnostic;
+    // The Git records this package's plugin sources resolved through, in
+    // declaration order. The command publishes them together with the
+    // package's dependency selections once every applicable validation —
+    // the scan, the role check, the declarations and the plugin values'
+    // ABI/options — has passed (decisions 9/13-15).
+    git_selections:    [..] Resolved_Selection;
 }
 
 // One selected package's plugin preparation (ticket 0092, spec 0087 decision
@@ -96,6 +102,7 @@ Prepared_Package_Plugins :: struct {
     hits:              [..] Plugin_Scan_Hit;            // registration order
     diagnostics:       [..] Plugin_Scan_Diagnostic;
     ok:                bool;
+    git_selections:    [..] Resolved_Selection;
     // How many times this package's plugin sources were resolved. The
     // command layer only ever reads a prepared context (prepare_once_for),
     // so a build front, a second program or a re-entered phase never
@@ -141,6 +148,7 @@ prepare_plugins_once :: (preparation: *Plugin_Preparation, prepared: *Prepared_W
     request.environment = ifx preparation.environment.state_root != "" || preparation.environment.content_cache_root != "" then preparation.environment else prepared.environment;
     resolved := resolve_plugin_sources(request);
     entry.sources = resolved.sources;
+    entry.git_selections = plugin_resolution_selections(prepared.discovery.root_dir, package, resolved.sources);
     entry.ok = resolved.ok;
     for diagnostic: resolved.diagnostics array_add(*entry.diagnostics, diagnostic);
 
@@ -254,6 +262,7 @@ plugin_prepare_result :: (package_view: *Prepared_Package_Plugins) -> Plugin_Pre
     result.registration_path = package_view.registration_path;
     result.member_hooks = package_view.member_hooks;
     result.hits = package_view.hits;
+    result.git_selections = package_view.git_selections;
     for diagnostic: package_view.diagnostics array_add(*result.diagnostics, diagnostic);
     return result;
 }

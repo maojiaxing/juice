@@ -529,6 +529,13 @@ build_package :: (
         if !apply_plugin_host_effects(*pstage, host_records, lctx.diagnostics) return false;
     }
 
+    // Commit the deferred resolution now: the package's declaration, its plugin
+    // role/identity scan and (where a host ran) the member plugin values' ABI
+    // and options have all passed. A failure above leaves the previous records
+    // in place (decision 15); nothing below this line rolls the commit back —
+    // a later derived/compile failure is reported, not "repaired" by rollback.
+    if !commit_prepared_resolution(prepared, plugin_prepare.git_selections) return false;
+
     if !run_mounted_hooks(dispatch_table, .PRESTEP, .before, *lctx) return false;
     if !run_mounted_hooks(dispatch_table, .PRESTEP, .after, *lctx) return false;
 

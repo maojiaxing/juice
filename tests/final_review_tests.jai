@@ -592,3 +592,145 @@ final_review_member_lint_runs_with_member_paths :: () {
     expect(contains(combined, "tests/beta_tests.jai"));
     expect(!contains(combined, "members/beta/tests/beta_tests.jai"));
 } @test
+
+// ---------------------------------------------------------------------------
+// S06/S07: a plugin Git source is a resolution like any other. Its record lands
+// in the same state transaction as the package's dependency selections, and it
+// lands only after the package's plugin checks passed. The review trajectories:
+//   A) a plugins-only Git reference re-resolved on every build, offline failed
+//      even right after a successful build, and `update` skipped plugin sources
+//      entirely;
+//   B) build/update published the new commit before a plugin error, so a
+//      failing plugin silently replaced a working record.
+// ---------------------------------------------------------------------------
+
+// One plugin provider committed to a local repository. The plugin carries no
+// hooks so the build stays a pure resolution question.
+S06_PLUGIN_MODULE_SOURCE :: #string S06_END
+#import "Basic";
+#import "juice_core";
+
+S06_Plugin :: struct {
+    using base: Juice_Plugin;
+}
+
+get_juice_plugin :: () -> *S06_Plugin {
+    plugin := New(S06_Plugin);
+    plugin.id = "s06_plugin";
+    plugin.version = "1.0.0";
+    plugin.options = cast(*void) plugin;
+    return plugin;
+} @juice_plugin
+S06_END
+
+s06_write_plugin_repo :: (repo: string, module_source: string) -> string {
+    if !dr_git_init(repo) return "";
+    if !dr_write_file(repo, "package.jai", "#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"1\",\n    name    = \"s06-plugin\",\n    modules = .[.{name = \"plugin_module\", entry = \"plugin.jai\"}],\n};\n") return "";
+    if !dr_write_file(repo, "plugin.jai", module_source) return "";
+    return copy_string(dr_git_commit_all(repo, "s06 plugin provider"));
+}
+
+s06_write_app :: (app: string, repo: string) -> bool {
+    plugins := copy_string(tprint("    plugins = Plugin_Declaration.[.{id = \"s06_plugin\", source = .{kind = .GIT, git = .{url = %1}}, module = .{name = \"plugin_module\"}}],\n", quote_jai_string(repo)));
+    return fr_write_program(app, "s06_app", plugins, "#import \"Basic\";\n\nmain :: () { print(\"S06_OK\\n\"); }\n");
+}
+
+// The resolution state file belonging to one consumer root, read through the
+// production state root (the case isolates XDG_STATE_HOME through dr_isolate).
+s06_read_state :: (consumer_root: string) -> (string, bool) {
+    environment: Resolution_Environment;
+    environment.state_root = get_juice_resolution_state_root().path;
+    text, ok := read_entire_file(resolution_state_file(environment, consumer_root));
+    return text, ok;
+}
+
+// Trajectory A, first half: the plugin's commit is recorded, so a later build
+// with the remote moved on keeps the recorded commit, and an offline build
+// succeeds without contacting anything.
+final_review_plugin_git_source_is_recorded :: () {
+    scratch := dr_scratch("fr-plugin-git-record");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    repo := dr_path(scratch, "repo");
+    first := s06_write_plugin_repo(repo, S06_PLUGIN_MODULE_SOURCE);
+    expect(first.count == 40);
+    app := dr_path(scratch, "app");
+    expect(s06_write_app(app, repo));
+
+    built, built_output, built_errors := dr_run(app, string.["build"]);
+    if built.exit_code != 0 print("[fr] plugin-git first build:\n%\n", tprint("%\n%", built_output, built_errors));
+    expect(expect_exit("plugin-git-first", built, 0));
+
+    state_text, state_ok := s06_read_state(app);
+    expect(state_ok);
+    expect(contains(state_text, first));
+    // The record is the plugin ROLE record: its declaring key ends with the
+    // plugin package-path field, so a dependency of the same URL is a different
+    // record and cannot satisfy this lookup.
+    expect(contains(state_text, ":plugin"));
+
+    // The remote moves on; the recorded build must still resolve the record.
+    second := s06_write_plugin_repo(repo, tprint("%1\nS06_Extra :: 1;\n", S06_PLUGIN_MODULE_SOURCE));
+    expect(second != "" && second != first);
+    recorded, recorded_output, recorded_errors := dr_run(app, string.["build"]);
+    if recorded.exit_code != 0 print("[fr] plugin-git recorded build:\n%\n", tprint("%\n%", recorded_output, recorded_errors));
+    expect(expect_exit("plugin-git-recorded", recorded, 0));
+    after_text, after_ok := s06_read_state(app);
+    expect(after_ok);
+    expect(contains(after_text, first));
+    expect(!contains(after_text, second));
+
+    // Offline: the record alone answers the resolution.
+    offline, offline_output, offline_errors := dr_run(app, string.["build", "--offline"]);
+    if offline.exit_code != 0 print("[fr] plugin-git offline:\n%\n", tprint("%\n%", offline_output, offline_errors));
+    expect(expect_exit("plugin-git-offline", offline, 0));
+
+    // update refreshes the plugin graph (the remote commit) and runs no hook.
+    // The artifact is removed first, so "the update compiled nothing" is a real
+    // observation rather than a file the earlier builds left behind.
+    artifact := target_artifact_path(package_target_dir(app), "s06_app");
+    expect(file_delete(artifact));
+    updated, updated_output, updated_errors := dr_run(app, string.["update"]);
+    updated_text := tprint("%\n%", updated_output, updated_errors);
+    if updated.exit_code != 0 print("[fr] plugin-git update:\n%\n", updated_text);
+    expect(expect_exit("plugin-git-update", updated, 0));
+    update_text, update_ok := s06_read_state(app);
+    expect(update_ok);
+    expect(contains(update_text, second));
+    // No build hook ran and no program compiled: the artifact stayed absent.
+    expect(!file_exists(artifact));
+} @test
+
+// Trajectory B: a broken plugin must not replace a working record. The first
+// build records the good plugin; the plugin module is then replaced by one with
+// no entry at all (a role/entry failure the scan catches) and the second build
+// must fail while the state still names the good commit.
+final_review_plugin_failure_keeps_previous_state :: () {
+    scratch := dr_scratch("fr-plugin-git-rollback");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    repo := dr_path(scratch, "repo");
+    good := s06_write_plugin_repo(repo, S06_PLUGIN_MODULE_SOURCE);
+    expect(good.count == 40);
+    app := dr_path(scratch, "app");
+    expect(s06_write_app(app, repo));
+
+    built, built_output, built_errors := dr_run(app, string.["build"]);
+    if built.exit_code != 0 print("[fr] rollback first build:\n%\n", tprint("%\n%", built_output, built_errors));
+    expect(expect_exit("plugin-git-rollback-first", built, 0));
+
+    // A new commit whose plugin module has no plugin entry at all.
+    broken := s06_write_plugin_repo(repo, "#import \"Basic\";\n\nNot_A_Plugin :: 1;\n");
+    expect(broken != "" && broken != good);
+
+    failed, failed_output, failed_errors := dr_run(app, string.["update"]);
+    failed_text := tprint("%\n%", failed_output, failed_errors);
+    expect(failed.exit_code != 0);
+    expect(contains(failed_text, "Plugin capability missing"));
+    // The failing update published nothing: the previous record still names the
+    // good commit, and the broken one appears nowhere.
+    state_text, state_ok := s06_read_state(app);
+    expect(state_ok);
+    expect(contains(state_text, good));
+    expect(!contains(state_text, broken));
+} @test

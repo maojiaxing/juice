@@ -297,6 +297,15 @@ Resolved_Plugin_Source :: struct {
     import_name:       string;
     identity:          string;
     anchor_rel_path:   string;
+    // The Git selector this source resolved through ("" for PATH/WORKSPACE).
+    // A plugin Git source is a resolution like any other: the command records
+    // it in the same state transaction as the package's dependency selections
+    // (decision 9/13-15), so a later offline run reuses the same commit.
+    git_url:           string;
+    git_branch:        string;
+    git_tag:           string;
+    git_rev:           string;
+    git_commit:        string;
 }
 
 // The plugin-source resolution product. ok=false means the command must stop
@@ -318,14 +327,20 @@ plugin_source_identity :: (commit: string, package_dir: string, export_name: str
 // declaration): the provider package directory, the selected public module, its
 // entry file, and the identity/commit the source resolution produced.
 Reference_Module :: struct {
-    ok:          bool;
-    error:       string;
-    commit:      string;
+    ok:           bool;
+    error:        string;
+    commit:       string;
     provider_dir: string;
-    package:     Normalized_Package;
-    export_name: string;
-    entry_path:  string;
-    identity:    string;
+    package:      Normalized_Package;
+    export_name:  string;
+    entry_path:   string;
+    identity:     string;
+    // The selector spelling the reference resolved through (empty = PATH or
+    // WORKSPACE). Kept so a caller can publish the record it reused.
+    url:          string;
+    branch:       string;
+    tag:          string;
+    rev:          string;
 }
 
 // Resolve one typed source + module selection to a provider package and one of
@@ -374,7 +389,11 @@ resolve_reference_module :: (
             out.error = state.error;
             return out;
         }
-        declaring_key := resolution_declaring_key_git(source.url, "", "");
+        out.url = source.url;
+        out.branch = source.branch;
+        out.tag = source.tag;
+        out.rev = source.rev;
+        declaring_key := plugin_scoped_git_declaring_key(discovery.root_dir, declaring_dir, source.url);
         recorded := -1;
         if environment.mode != .UPDATE {
             recorded = find_resolved_selection(state, declaring_key, source.url, source.branch, source.tag, source.rev);
@@ -540,6 +559,41 @@ plugin_dependency_module_conflict :: (request: Plugin_Source_Request, candidate:
 // selected module with zero plugin entries (capability missing), a selected
 // module with several (entry ambiguity), the same actual plugin enabled twice,
 // and a module the ordinary dependencies already selected.
+// The declaring key of a plugin Git source. Plugins and ordinary dependencies
+// are different roles over the same content cache (decision 21), so their
+// records are kept apart even when they name the same URL: one role's record
+// never satisfies the other's lookup, and neither can overwrite the other.
+plugin_git_declaring_key :: (url: string) -> string {
+    return resolution_declaring_key_git(url, "", "plugin");
+}
+
+// A plugin record is scoped to the package that declared it, exactly like a
+// dependency record: two members enabling the same Git plugin keep independent
+// records, and neither reads the other's. The lookup and the publication build
+// the key through this one function, so they cannot drift apart.
+plugin_scoped_git_declaring_key :: (consumer_root: string, declaring_dir: string, url: string) -> string {
+    return tprint("consumer:%1|%2", resolution_declaring_key_local(consumer_root, declaring_dir), plugin_git_declaring_key(url));
+}
+
+// The Git selections this resolution actually used, in declaration order, as
+// state records ready for the command's single publication.
+plugin_resolution_selections :: (consumer_root: string, consumer: Normalized_Package, sources: [] Resolved_Plugin_Source) -> [..] Resolved_Selection {
+    selections: [..] Resolved_Selection;
+    for source: sources {
+        if source.git_url == "" continue;
+        declaring_key := plugin_scoped_git_declaring_key(consumer_root, consumer.dir, source.git_url);
+        array_add(*selections, Resolved_Selection.{
+            declaring_key = declaring_key,
+            url           = source.git_url,
+            branch        = source.git_branch,
+            tag           = source.git_tag,
+            rev           = source.git_rev,
+            commit        = source.git_commit,
+        });
+    }
+    return selections;
+}
+
 resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Resolution {
     out: Plugin_Source_Resolution;
     out.ok = true;
@@ -590,6 +644,11 @@ resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Reso
         candidate.import_name = plugin_import_name(declaration.id, resolved.identity);
         candidate.identity = resolved.identity;
         candidate.anchor_rel_path = scan_rel_path(resolved.entry_path, resolved.provider_dir);
+        candidate.git_url = resolved.url;
+        candidate.git_branch = resolved.branch;
+        candidate.git_tag = resolved.tag;
+        candidate.git_rev = resolved.rev;
+        candidate.git_commit = resolved.commit;
 
         conflict := "";
         for identity, i: identities {

@@ -671,6 +671,11 @@ test_package :: (
         if !apply_plugin_host_effects(*pstage, host_records, lctx.diagnostics) return false;
     }
 
+    // Commit the deferred resolution after this package's declarations, plugin
+    // role/identity scan and (where a host ran) the plugin values' ABI/options
+    // passed — one transaction, before any hook (decision 15).
+    if !commit_prepared_resolution(prepared, plugin_prepare.git_selections) return false;
+
     if !run_mounted_hooks(dispatch_table, .PRESTEP, .before, *lctx) return false;
     if !run_mounted_hooks(dispatch_table, .PRESTEP, .after, *lctx) return false;
 

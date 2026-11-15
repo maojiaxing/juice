@@ -44,8 +44,40 @@ update_command :: (command_context: *Command_Context, arguments: [] string) -> b
     batch.operation = "update";
     batch.total = selection.packages.count;
     for selected_package, index: selection.packages {
-        _, prepared_ok := prepare_command_package(command_context, selected_package);
+        prepared, prepared_ok := prepare_command_package(command_context, selected_package);
         if !prepared_ok {
+            package_batch_fail(*batch, *selection, index);
+            package_batch_report_failure(*batch);
+            return false;
+        }
+        // An update refreshes the package's COMPLETE source graph: the ordinary
+        // dependency graph (resolved above) and its plugin sources. The plugin
+        // preparation resolves every declared plugin source in the update mode
+        // — a Git plugin re-resolves instead of reusing its record — and its
+        // role/identity scan validates the result. No lifecycle hook runs
+        // (decision 23: 更新不因解析插件来源而执行构建 hook) and no program is
+        // compiled.
+        preparation: Plugin_Preparation;
+        preparation.environment = prepared.environment;
+        plugin_view := plugin_prepare_once_for(*preparation, *prepared, selected_package.package);
+        plugin_prepare := plugin_prepare_result(plugin_view);
+        report_plugin_prepare(plugin_prepare);
+        if !plugin_prepare.ok {
+            package_batch_fail(*batch, *selection, index);
+            package_batch_report_failure(*batch);
+            return false;
+        }
+        resolved := resolve_package_plugins(selected_package.package.plugins, selected_package.package.plugins_omitted);
+        if !resolved.ok {
+            for diagnostic: resolved.diagnostics print("[juice ERROR] %\n", diagnostic.message);
+            print("[juice ERROR] Invalid plugin declarations.\n");
+            package_batch_fail(*batch, *selection, index);
+            package_batch_report_failure(*batch);
+            return false;
+        }
+        // Publish both halves of the refreshed graph as one transaction, and
+        // only now: a failed plugin source leaves the previous records.
+        if !commit_prepared_resolution(*prepared, plugin_prepare.git_selections) {
             package_batch_fail(*batch, *selection, index);
             package_batch_report_failure(*batch);
             return false;
