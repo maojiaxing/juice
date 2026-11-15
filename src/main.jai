@@ -126,19 +126,33 @@ main :: () {
     // (packages_dir etc.) are derived from root_dir by their respective
     // owners. ctx.workspace zero-initializes to the EMPTY phase; discovery
     // fills it on the first command that prepares the workspace.
-    ctx.cache_dir = tprint("%1/juice", get_cache_home());
     // The typed roots (spec 0087 decision 15): Git source content and the
     // per-consumer resolution state live in separate XDG-derived roots. A
-    // relative or unusable XDG value falls back with a warning; it never
-    // switches juice to cwd or a temporary directory.
+    // relative XDG value falls back with a warning; it never switches juice to
+    // cwd or a temporary directory. A root that cannot be created or written
+    // is not a warning but a failure: the command would otherwise report
+    // success while silently discarding the state and content it claims to
+    // keep, so the typed result is checked here, once, at the entry.
     content_cache := get_juice_content_cache_root();
     if content_cache.warning {
         print("[juice WARNING] XDG_CACHE_HOME is not an absolute path; using the platform default content cache.\n");
+    }
+    if !content_cache.success {
+        print("[juice ERROR] Could not determine a writable content cache root; set an absolute, writable XDG_CACHE_HOME.\n");
+        exit(1);
     }
     state_root := get_juice_resolution_state_root();
     if state_root.warning {
         print("[juice WARNING] XDG_STATE_HOME is not an absolute path; using the platform default resolution state.\n");
     }
+    if !state_root.success {
+        print("[juice ERROR] Could not determine a writable resolution state root; set an absolute, writable XDG_STATE_HOME.\n");
+        exit(1);
+    }
+    // Every cache consumer — the manifest evaluator's temp files included —
+    // reads the verified typed root, so an invalid XDG value cannot reappear
+    // through the legacy base-home helper.
+    ctx.cache_dir = content_cache.path;
     ctx.content_cache_dir = content_cache.path;
     ctx.state_dir = state_root.path;
     ctx.workspace.environment = .{

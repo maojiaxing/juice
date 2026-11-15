@@ -889,7 +889,7 @@ plugin_derived_builtin_triad_test_cli :: () {
             view_text, view_ok := read_entire_file(tprint("%1/src/main.jai", dir));
             if view_ok print("[triad-test-empty] view %:\n%\n", dir, view_text);
         }
-        _eval_src, eval_data := manifest_temp_file_names(tprint("%1/juice", get_cache_home()), empty_root);
+        _eval_src, eval_data := manifest_temp_file_names(get_juice_content_cache_root().path, empty_root);
         eval_text, eval_ok := read_entire_file(eval_data);
         if eval_ok print("[triad-test-empty] manifest data %:\n%\n", eval_data, eval_text);
     }

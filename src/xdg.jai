@@ -202,16 +202,3 @@ get_user_home_directory :: () -> string {
     }
 }
 
-// Legacy base-home helper. Existing callers append their own /juice suffix;
-// new code must use the typed content/state root getters above.
-get_cache_home :: () -> string {
-    #if OS == .WINDOWS {
-        local_app_data := get_env("LOCALAPPDATA");
-        if local_app_data && local_app_data != "" return local_app_data;
-        return tprint("%1/AppData/Local", get_user_home_directory());
-    } else {
-        cache_home := get_env("XDG_CACHE_HOME");
-        if cache_home && cache_home != "" return cache_home;
-        return tprint("%1/.cache", get_user_home_directory());
-    }
-}
