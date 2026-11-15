@@ -816,27 +816,30 @@ check_internal_rule :: () {
 
 # A01–A16 验收对照
 
-“示例”列是本指南中实际执行的例子；“状态”区分 **已执行** 与 **未执行**（本次未跑，不宣称通过）。
-验收票 0096 负责在发布模块上做完整验收；本表只说明迁移文档覆盖到哪里。
+“示例”列是本指南中实际执行的例子；“状态”区分 **已执行** 与 **未执行**（本指南未跑，不宣称通过）。
+验收票 0096 负责在发布模块上做完整验收，其结果记录在
+[`docs/implementation/package-declaration-acceptance.md`](../implementation/package-declaration-acceptance.md)
+（A01–A16 与 E01–E10 映射、三条发布路径、新补的真实 CLI 用例名与红证据、明确未验证项）。
+本表只说明迁移文档覆盖到哪里；“0096 验收”列指明该组由哪个测试或哪条记录背书。
 
-| 验收组 | 对应示例/章节 | 状态 |
-| --- | --- | --- |
-| A01 声明与旧字段 | §1 逐字段表、E01–E05、E10；旧字段探针 `probe-legacy-*.log` | 已执行（声明形状与拒绝）；`workspace` 保留见 E04/E05 |
-| A02 工作区与 Git 同名 | E06、E07；§4.4、§5 | 部分：来源显式与 Git 复用已执行；**同名成员不覆盖 Git 来源**未构造专门示例 |
-| A03 来源资格与去重 | E06（PATH/WORKSPACE）、E09（插件模块去重）、§4.2 | 已执行（来源资格、重复模块失败）；不同来源/修订同名包并存未单独执行 |
-| A04 传递可见性 | §4.3；提供方内部导入探针 `probe-provider-internal-module-import.log`；环探针 `e06-probe-cycle.log` | 部分：提供方内部模块与环已执行；完整多跳环链路 `a -> b -> a` 未单独执行 |
-| A05 普通引用与插件 | E09 两个负例 | 已执行 |
-| A06 插件默认与配置 | §2 三态表；E08/E09；探针 `probe-plugins-omitted.log`（省略 = 内置）、`probe-plugins-empty.log`（空 = 全禁用） | 部分：三态已执行；“坏 options 在 hook 前失败”的迁移示例未执行（0092/0096 覆盖） |
-| A07 多程序与批量插件 | E03、E04、E05 | 已执行（只编译被选程序、批量选包）；“包级准备一次”未在示例中直接观察 |
-| A08 派生输出 | §1.5、§4.3 | **未执行**（需要插件派生视图用例，属 0092/0096） |
-| A09 离线解析 | E07 `--offline`；§4.4 | 部分：有记录时离线成功已执行；无记录/浮动/短修订拒绝未执行 |
-| A10 更新与失败 | E07 `update`；§4.4 | 部分：全图刷新已执行；失败保旧状态、成员隔离、`update --offline` 冲突未执行 |
-| A11 内容与状态 | §4.4、§7 | **未执行**（清缓存不清选择、损坏状态、移根新上下文、XDG 回退） |
-| A12 提供方内部来源 | §4.3；Git 内部相对引用未构造 | **未执行** |
-| A13 成员校验与扫描 | §0 结论 4、§5 | 部分：未选中成员的声明错误会阻止操作来自代码路径；下级包测试不混入未执行 |
-| A14 命令选择与零集合 | E02、E04、E05、E10；§5、§6 | 已执行（默认/显式集合、`run` 基数、零程序/零测试、未知名字） |
-| A15 跨文件系统路径 | §3；连字符包名探针 | 部分：Windows 下名称/路径规则已执行；链接拒绝与大小写敏感文件系统未执行 |
-| A16 完整安装 | §7 | **未执行**（安装单元校验由 0094/0096 证据覆盖，本指南只引用其契约） |
+| 验收组 | 对应示例/章节 | 本指南状态 | 0096 验收 |
+| --- | --- | --- | --- |
+| A01 声明与旧字段 | §1 逐字段表、E01–E05、E10；旧字段探针 `probe-legacy-*.log` | 已执行（声明形状与拒绝）；`workspace` 保留见 E04/E05 | `declaration_schema_` 11/0、`declaration_loader_` 3/0；`acceptance_a13_unselected_invalid_member_blocks` 在真实 CLI 上复现旧字段拒绝 |
+| A02 工作区与 Git 同名 | E06、E07；§4.4、§5 | 部分：来源显式与 Git 复用已执行；同名成员不覆盖 Git 来源未构造专门示例 | `dependency_resolution_workspace_source_membership`；新增 `acceptance_a02_member_does_not_override_git_source` |
+| A03 来源资格与去重 | E06（PATH/WORKSPACE）、E09（插件模块去重）、§4.2 | 已执行（来源资格、重复模块失败）；不同来源/修订同名包并存未单独执行 | `dependency_resolution_module_selection_rules`、`_module_identity_and_name_conflicts`；新增 `acceptance_a03_same_name_sources_coexist`、`_same_name_revisions_coexist` |
+| A04 传递可见性 | §4.3；提供方内部导入探针 `probe-provider-internal-module-import.log`；环探针 `e06-probe-cycle.log` | 部分：提供方内部模块与环已执行；完整多跳环链路未单独执行 | `dependency_resolution_package_cycle_reports_chain`（`app -> alpha -> beta -> alpha`）、`_transitive_visibility`、`_own_module_*` 三个用例 |
+| A05 普通引用与插件 | E09 两个负例 | 已执行 | `plugin_derived_duplicate_enablement_cli`、`plugin_derived_ordinary_dependency_roles_cli` |
+| A06 插件默认与配置 | §2 三态表；E08/E09；探针 `probe-plugins-omitted.log`（省略 = 内置）、`probe-plugins-empty.log`（空 = 全禁用） | 部分：三态已执行；坏 options 在 hook 前失败的迁移示例未执行 | `plugin_derived_options_errors_cli`（未知/必填缺失/重复键，hook 前失败）、`plugin_derived_builtin_triad_cli`/`_resolver`/`_test_cli`、`plugin_host_tests.jai` options 拒绝 E2E |
+| A07 多程序与批量插件 | E03、E04、E05 | 已执行（只编译被选程序、批量选包）；包级准备一次未在示例中直接观察 | `plugin_derived_prepare_once`（同包 `prepare_count == 1`、各包私有派生区）、`plugin_derived_unselected_member_isolation_cli`、`run_selection_only_selected_program_cli` |
+| A08 派生输出 | §1.5、§4.3 | 未执行（需要插件派生视图用例） | `plugin_derived_view_rules`（substitute/drop/generated 冲突矩阵、本轮注册表即视图、保留源码不可覆盖）、`plugin_host_tests.jai` 替换/drop/逻辑路径 E2E、`plugin_derived_git_source_read_only_cli` |
+| A09 离线解析 | E07 `--offline`；§4.4 | 部分：有记录时离线成功已执行；无记录/浮动/短修订拒绝未执行 | `dependency_resolution_offline_matrix`（浮动/短修订/缺内容拒绝、完整提交且内容已缓存例外）、`_git_content_restore` |
+| A10 更新与失败 | E07 `update`；§4.4 | 部分：全图刷新已执行；失败保旧状态、成员隔离、`update --offline` 冲突未执行 | `dependency_resolution_git_reuse_and_update`（含 `update --offline`）、`_context_isolation`、`_failure_preserves_old_state`、`command_selection_update_scope_cli` |
+| A11 内容与状态 | §4.4、§7 | 未执行（清缓存不清选择、损坏状态、移根新上下文、XDG 回退） | `dependency_resolution_git_content_restore`、`_corrupt_state_fails`；新增 `acceptance_a11_moved_root_is_new_context`、`_xdg_relative_falls_back` |
+| A12 提供方内部来源 | §4.3；Git 内部相对引用未构造 | 未执行 | `dependency_resolution_git_checkout_boundary`（检出内兄弟包、越界拒绝、检出只读）；新增 `acceptance_a12_git_provider_workspace_boundary`（检出内工作区不借消费者成员） |
+| A13 成员校验与扫描 | §0 结论 4、§5 | 部分：未选中成员的声明错误会阻止操作来自代码路径；下级包测试不混入未执行 | `workspace_products_child_scan_boundary_cli`；新增 `acceptance_a13_unselected_invalid_member_blocks`（`build`/`run`/`test` 三命令） |
+| A14 命令选择与零集合 | E02、E04、E05、E10；§5、§6 | 已执行（默认/显式集合、`run` 基数、零程序/零测试、未知名字） | `command_selection_` 7/0、`run_selection_` 12/0 |
+| A15 跨文件系统路径 | §3；连字符包名探针 | 部分：Windows 下名称/路径规则已执行；链接拒绝与大小写敏感文件系统未执行 | `declaration_paths_tests.jai` 名称/链接/XDG 用例；新增 `acceptance_a15_entry_through_link_is_rejected`、`_case_identity_and_cross_category_names`；大小写敏感文件系统仍未验证 |
+| A16 完整安装 | §7 | 未执行（安装单元校验由 0094 证据覆盖，本指南只引用其契约） | `publication_install` 15/0、`bootstrap_publication_unit_marker`，以及 0096 的仓库外安装单元路径（`version`/`build`/`run`/`test`/`update`/`offline` 全 0，缺件与无回退负例为 1） |
 
 # 决策追溯
 
@@ -878,7 +881,10 @@ check_internal_rule :: () {
 2. `target/evidence/` 是易失证据区（`clean` 会删除）。需要长期保留的验收记录应复制到 `docs/implementation/` 或由 0096 收进其 Resolution。
 3. `test` 命令的测试程序会 `#load` 包内每个不在根级 `target/`、`modules/`、`tests/data/` 之下的 `.jai` 文件。因此本包模块入口若落在这些扫描区内，同一文件再被 `#import` 会重复声明（这与文件级 `#load` 的既有行为相同，与本票无关）。把本包公开模块放在包内 `modules/` 下即可避免；`build`/`run` 不受此限，模块入口可在包内任意位置。
 4. 本指南没有展开：Testing 迁移 effort、兄弟仓库、静态/动态库产物、包注册中心、版本范围求解。
-5. 以下行为在本指南中未执行（因此不宣称通过）：同名成员与 Git 来源冲突（A02）、不同来源同名包并存（A03）、完整多跳环链路（A04）、插件坏 options 与派生视图冲突（A06/A08）、无记录离线/短修订拒绝（A09）、失败保旧状态与成员隔离（A10）、缓存清理与状态损坏（A11）、Git 内部相对引用（A12）、下级包测试扫描剪除（A13）、链接拒绝与大小写敏感文件系统（A15）、安装单元缺失/混装（A16）。
+5. 以下行为在本指南的示例中没有执行：同名成员与 Git 来源冲突（A02）、不同来源同名包并存（A03）、完整多跳环链路（A04）、插件坏 options 与派生视图冲突（A06/A08）、无记录离线/短修订拒绝（A09）、失败保旧状态与成员隔离（A10）、缓存清理与状态损坏与移根新上下文与 XDG 回退（A11）、Git 内部相对引用与检出内工作区（A12）、未选中成员阻止操作与下级包测试扫描剪除（A13）、链接拒绝（A15）、安装单元缺失/混装（A16）。
+   这些行为已由 0096 用真实 CLI 用例补齐并执行，逐条映射与用例名见
+   [`docs/implementation/package-declaration-acceptance.md`](../implementation/package-declaration-acceptance.md) §2、§5；
+   **大小写敏感文件系统契约与 Linux 仍为未验证**，不得把 Windows 结果当跨平台结论。
 6. 仓库内 `packages/juice-plugin-lint/package.jai`、`packages/juice-plugin-jaix/package.jai` 的注释仍写着旧词（“LIB with no targets”、声明 version 必须重复）。声明本身已是新写法；注释漂移不在本票文件所有权内，登记给维护者。
 7. 首次构建时可能出现 `Unable to open directory '<包根>/target'` 一类目录探测噪声（目标目录尚未创建）。它不影响退出码与产物，属于既有输出，不是声明语义。
 
