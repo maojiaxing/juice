@@ -82,7 +82,8 @@ J1/J2/J3 为维护性判断而非硬错误：普通依赖与插件重复来源�
 - 既有用户批准的真实CLI/现有模块/自举/相邻模块安装测试接缝继续有效，不再次请求审批。
 - 单独 sibling worktree + 分支，从当前集成tip开始，确认基线；只写自己的工作区或指定外部scratch。
 - 行为逐项红绿，保留负例：无隐式可见性、无来源替代、坏配置无hook、副作用与状态提交时机、不丢模块测试。
-- Windows与可用WSL大小写敏感FS验证；实际debug/release自举、配套安装、修复后的`publication_install`与S01均须真实退出0。超时、0命中过滤与打印中间汇总不能算通过。
+- **平台范围（用户决定）：本轮验收以 Windows 为准。** 实际debug/release自举、配套安装、修复后的`publication_install`与S01均须在Windows真实退出0。超时、0命中过滤与打印中间汇总不能算通过。
+- Linux 改为**显式未验证**，不再作为本轮关闭门禁：已获 Linux 证据（此前debug/release自举0、S01失败、`publication_install`复制权限缺陷）保留为历史记录；L01修复代码保留，但不得在任何文档/Resolution中声称 Linux 已通过。文档须逐项列出“Windows已验证 / Linux未验证”，不得用Windows结果推断POSIX行为。
 - 完整套件需真实终止和连续两轮最终0失败，确认新增测试按名称执行。合入最新integration后再验证；merger核对diff、独立复核后关闭本票与0096。
 - 挂起Windows测试及关联Git进程的终止/maintenance对照仍等待用户许可；本票不授权停用防护、改全局Git或擅自终止这些进程。不得用主检出的挂起测试目录运行并发构建。
 - 产出每个S/H/J/L编号的修复、反证或未解决映射；未解决的强制合同阻止0087关闭。
