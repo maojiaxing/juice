@@ -165,3 +165,29 @@ JUICE_HOME=$PWD/target/evidence/install-home JUICE_SOURCE=$PWD \
 `full-2.log`；合入最新 integration tip 后的复跑见 `full-final.log`。套件打印的聚合数不是总用例数
 （`tests/module_tests.jai` 调用 `finish()` 重置自己的计数），判定以最终摘要与退出码为准，新用例按名字在日志里
 `grep -c "^\[test\] acceptance_"` 确认为 9。
+
+## 8. 本次门禁结果（原文数值）
+
+| 命令（cwd = 工作树根） | 退出码 | 计数 / 观察 |
+| --- | --- | --- |
+| `jai.exe build.jai` | 0 | debug 自举，`target/juice.exe` |
+| `jai.exe build.jai - release` | 0 | release 自举，1654784 B |
+| `./target/accept.exe test acceptance_` | 0 | 9 passed / 0 failed |
+| `test dependency_resolution_` | 0 | 17 / 0 |
+| `test workspace_` | 0 | 14 / 0 |
+| `test command_selection_` | 0 | 7 / 0 |
+| `test plugin_derived_` | 0 | 16 / 0 |
+| `test declaration_schema_` | 0 | 11 / 0 |
+| `test run_selection_` | 0 | 12 / 0 |
+| `test publication_install` | 0 | 15 / 0 |
+| `test install_compatibility_` | 0 | 0 命中（`No tests matched`，真实前缀是 `publication_install`） |
+| `./target/juice-full.exe test`（第 1 轮） | 0 | 380 passed / 0 failed，`EXIT: 0` |
+| `./target/juice-full.exe test`（第 2 轮） | 0 | 380 passed / 0 failed，`EXIT: 0` |
+| 合入 integration tip | — | `already up to date`；`merge-base --is-ancestor` 为真 |
+| 合入后 8 个过滤 | 0 | 与上表一致（`postmerge-*.log`） |
+| `./target/juice-full.exe test`（合入后） | 0 | 380 passed / 0 failed，`EXIT: 0`（`full-final.log`） |
+| `sh target/evidence/reproduce-published-install.sh` | 0 | 见 §4（版本/构建/运行/测试/更新/离线全 0，两个负例 1） |
+| `bash target/evidence/reproduce-examples.sh` | 0 | 33 次调用：25 × exit 0，8 × exit 1（预期失败） |
+
+每份完整套件日志中 `[test] acceptance_` 行数为 9，`expect failed` 行数为 6（`module_tests.jai` 与
+已发布 Testing 模块自身的故意失败夹具，与 0097 基线同类型同数量）；`[test]` 行数 669。
