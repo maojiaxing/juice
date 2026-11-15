@@ -114,13 +114,11 @@ workspace_path_already_seen :: (paths: [] string, candidate: string) -> bool {
     return false;
 }
 
-// Nearest-declaration lookup (spec 0087 decision 17): from the starting
-// directory upward, the first directory holding a package.jai is the root a
-// command operates on. The found declaration stays authoritative even when
-// its contents are invalid - callers must report that failure instead of
-// continuing to an outer package, so this returns the directory only, never
-// a validity verdict. Returns "" when no ancestor declares a package, which
-// leaves the caller on its original root (the manifest-less clean case).
+// Nearest-declaration lookup (spec 0087 decision 17): the closest declaration
+// identifies the current package, not necessarily its workspace. It remains
+// authoritative even when invalid; callers must fail rather than fall through
+// to an outer declaration. Membership is determined only after it is valid.
+// Returns "" for the manifest-less clean case.
 locate_declaration_root :: (start_dir: string) -> string {
     if start_dir == "" return "";
     current, ok := normalize_existing_path(start_dir);
@@ -184,7 +182,12 @@ discover_workspace :: (root_dir: string, cache_dir: string, modules_dir: string 
             print("[juice ERROR] Invalid workspace exclude path: %\n", rule);
             return discovery, false;
         }
-        array_add(*excluded_rules, normalize_package_relative_path(rule).path);
+        normalized := normalize_package_relative_path(rule).path;
+        if root_package.has_package && workspace_rule_excludes(normalized, ".") {
+            print("[juice ERROR] workspace.exclude cannot exclude the root package: %\n", rule);
+            return discovery, false;
+        }
+        array_add(*excluded_rules, normalized);
     }
     candidates: [..] string;
     for rule: root_package.workspace.members {
@@ -246,6 +249,18 @@ discover_workspace :: (root_dir: string, cache_dir: string, modules_dir: string 
     discovery.has_package = root_package.has_package;
     discovery.root_package = root_package;
     discovery.member_packages = packages;
+    // Defaults are part of the declaration, even when the command supplies an
+    // explicit selection. An explicit empty list is valid; only using it as a
+    // command's final selection is an error.
+    if discovery.has_workspace && !root_package.workspace.default_members_omitted && root_package.workspace.default_members.count > 0 {
+        default_packages: [..] Normalized_Package;
+        default_paths: [..] string;
+        defaults := select_root_defaults(discovery, *default_packages, *default_paths);
+        if !defaults.success {
+            print("[juice ERROR] %\n", defaults.error);
+            return discovery, false;
+        }
+    }
     return discovery, true;
 }
 
@@ -286,6 +301,45 @@ ensure_workspace_discovered :: (
     if !ok || (!discovery.has_package && !discovery.has_workspace) {
         if ok print("[juice ERROR] No package.jai found in current directory.\n");
         return false;
+    }
+    if !discovery.has_workspace {
+        ancestor := workspace_parent_directory(discovery.root_dir);
+        while ancestor != "" {
+            if inspect_path_entry(tprint("%/package.jai", ancestor)).exists {
+                ancestor_package, ancestor_ok := load_package_manifest(cache_dir, ancestor);
+                if !ancestor_ok return false;
+                if ancestor_package.has_workspace {
+                    // The nearest workspace is the only possible owner. An
+                    // excluded or unlisted package remains independent, even
+                    // when an outer workspace would otherwise include it.
+                    relative := workspace_relative_directory(ancestor, discovery.root_dir);
+                    included := false;
+                    for rule: ancestor_package.workspace.members {
+                        normalized := normalize_package_relative_path(rule);
+                        if !normalized.success || !workspace_relative_path_is_valid(rule) continue;
+                        pattern_parts := split(normalized.path, "/");
+                        relative_parts := split(relative, "/");
+                        if pattern_parts.count != relative_parts.count continue;
+                        matches := true;
+                        for part, index: pattern_parts {
+                            if !workspace_component_matches(part, relative_parts[index]) matches = false;
+                        }
+                        if matches included = true;
+                    }
+                    for rule: ancestor_package.workspace.exclude {
+                        normalized := normalize_package_relative_path(rule);
+                        if normalized.success && workspace_rule_excludes(normalized.path, relative) included = false;
+                    }
+                    if included {
+                        containing, containing_ok := discover(ancestor, cache_dir, "");
+                        if !containing_ok return false;
+                        discovery = containing;
+                    }
+                    break;
+                }
+            }
+            ancestor = workspace_parent_directory(ancestor);
+        }
     }
     state.discovery = discovery;
     state.phase = .DISCOVERED;

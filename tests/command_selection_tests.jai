@@ -130,6 +130,59 @@ command_selection_flags_cli :: () {
     expect(output_matches("member-default", combined, .["Compiling Target 'alpha'"], want = false));
 } @test
 
+// A member keeps its nearest declaration as the current package, but explicit
+// selections and declaration validation use its containing workspace.
+command_selection_member_workspace_cli :: () {
+    root := otter_scratch("command-selection-member-workspace");
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(build_seam_write(root, "package.jai", "#import \"Juice\";\nPACKAGE :: Package.{workspace = .{members = .[\"members/*\"]}};\n"));
+    expect(cs_write_program_member(root, "members/alpha", "alpha"));
+    expect(cs_write_program_member(root, "members/beta", "beta"));
+
+    working_directory := cs_package(root, "members/alpha/src");
+    result, output, errors := run_otter_child_at(working_directory, .["build", "--package-path", "members/beta"]);
+    combined := tprint("%\n%", output, errors);
+    expect(expect_exit("member-selects-sibling", result, 0));
+    expect(output_matches("member-selects-sibling", combined, .["Compiling Target 'beta'"]));
+    expect(!cs_artifact_exists(root, "members/alpha", "alpha"));
+    expect(cs_artifact_exists(root, "members/beta", "beta"));
+
+    expect(build_seam_write(cs_package(root, "members/beta"), "package.jai", "#import \"Juice\";\nPACKAGE :: Package.{name = \"beta\"};\n"));
+    result, output, errors = run_otter_child_at(working_directory, .["build"]);
+    expect(expect_exit("member-invalid-sibling", result, 1));
+    expect(!cs_artifact_exists(root, "members/alpha", "alpha"));
+} @test
+
+// Declaration validity does not depend on whether defaults are selected.
+command_selection_workspace_declaration_preflight_cli :: () {
+    root := otter_scratch("command-selection-declaration-preflight");
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(cs_write_program_member(root, "members/alpha", "alpha"));
+    expect(build_seam_write(root, "package.jai", "#import \"Juice\";\nPACKAGE :: Package.{workspace = .{members = .[\"members/alpha\"], default_members = .[\"missing\"]}};\n"));
+    result, output, errors := run_otter_child_at(root, .["build", "-p", "alpha"]);
+    expect(expect_exit("explicit-selection-invalid-default", result, 1));
+    expect(!cs_artifact_exists(root, "members/alpha", "alpha"));
+} @test
+
+command_selection_workspace_root_exclude_cli :: () {
+    root := otter_scratch("command-selection-root-exclude");
+    delete_directory_full(root);
+    defer delete_directory_full(root);
+    expect(cs_write_program_member(root, "members/alpha", "alpha"));
+    expect(build_seam_write(root, "package.jai", "#import \"Juice\";\nPACKAGE :: Package.{name = \"root\", version = \"1\", modules = .[], executables = .[], workspace = .{members = .[\"members/alpha\"], exclude = .[\".\"]}};\n"));
+    result, output, errors := run_otter_child_at(root, .["build"]);
+    expect(expect_exit("cannot-exclude-root-package", result, 1));
+
+    // Explicit empty defaults remain valid, and an explicit selection can
+    // replace that empty default set.
+    expect(build_seam_write(root, "package.jai", "#import \"Juice\";\nPACKAGE :: Package.{workspace = .{members = .[\"members/alpha\"], default_members = .[]}};\n"));
+    result, output, errors = run_otter_child_at(root, .["build", "-p", "alpha"]);
+    expect(expect_exit("explicit-selection-empty-default", result, 0));
+    expect(cs_artifact_exists(root, "members/alpha", "alpha"));
+} @test
+
 // ---------------------------------------------------------------------------
 // Selection failures stop before any command work (decision 18/70): no program
 // is compiled and no artifact appears.
