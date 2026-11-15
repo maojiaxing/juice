@@ -788,3 +788,84 @@ final_review_program_name_match_is_ascii_insensitive :: () {
     // The declaration spelling still names the artifact.
     expect(file_exists(target_artifact_path(package_target_dir(app), "Tool")));
 } @test
+
+// ---------------------------------------------------------------------------
+// S15: the typed XDG roots are a contract, not a hint. A root that cannot be
+// created or written is a failure the command reports, and every cache consumer
+// — the manifest evaluator's temp files included — uses the verified typed root
+// rather than a legacy base-home helper that would reinterpret an invalid
+// XDG_CACHE_HOME as a cwd-relative path.
+// ---------------------------------------------------------------------------
+
+// A no-Git build under an XDG_CACHE_HOME that is an existing REGULAR FILE. The
+// typed root cannot be created there, so the entry must refuse instead of
+// running on an unusable root.
+final_review_unusable_cache_root_fails_the_command :: () {
+    scratch := dr_scratch("fr-xdg-cache");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    blocked := dr_path(scratch, "blocked-cache");
+    expect(write_entire_file(blocked, "regular file"));
+    dr_set_process_env("XDG_CACHE_HOME", blocked);
+
+    app := dr_path(scratch, "app");
+    expect(fr_write_program(app, "app", "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", "#import \"Basic\";\n\nmain :: () { print(\"XDG_OK\\n\"); }\n"));
+    result, output, errors := dr_run(app, string.["build"]);
+    combined := tprint("%\n%", output, errors);
+    if result.exit_code == 0 print("[fr] xdg-cache child:\n%\n", combined);
+    // Pre-fix: the failure flag was ignored and the build reported success.
+    expect(result.exit_code != 0);
+    expect(contains(combined, "content cache root"));
+    expect(!contains(combined, "Build completed successfully"));
+    // The path really is still a regular file: nothing was created behind it.
+    blocked_content, read_ok := read_entire_file(blocked);
+    expect(read_ok && blocked_content == "regular file");
+} @test
+
+// The same for XDG_STATE_HOME. The dependency-free build never writes state, so
+// only the entry check can catch it — which is exactly the review point.
+final_review_unusable_state_root_fails_the_command :: () {
+    scratch := dr_scratch("fr-xdg-state");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    blocked := dr_path(scratch, "blocked-state");
+    expect(write_entire_file(blocked, "regular file"));
+    dr_set_process_env("XDG_STATE_HOME", blocked);
+
+    app := dr_path(scratch, "app");
+    expect(fr_write_program(app, "app", "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", "#import \"Basic\";\n\nmain :: () { print(\"XDG_OK\\n\"); }\n"));
+    result, output, errors := dr_run(app, string.["build"]);
+    combined := tprint("%\n%", output, errors);
+    if result.exit_code == 0 print("[fr] xdg-state child:\n%\n", combined);
+    expect(result.exit_code != 0);
+    expect(contains(combined, "resolution state root"));
+    expect(!contains(combined, "Build completed successfully"));
+} @test
+
+// The evaluator cache follows the VERIFIED typed root: with a valid custom
+// XDG_CACHE_HOME the manifest evaluator's generated source and data land under
+// that root's juice directory, and nothing lands in a cwd-relative `juice/`.
+final_review_evaluator_cache_uses_typed_root :: () {
+    scratch := dr_scratch("fr-xdg-evaluator");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    app := dr_path(scratch, "app");
+    expect(fr_write_program(app, "app", "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", "#import \"Basic\";\n\nmain :: () { print(\"XDG_OK\\n\"); }\n"));
+
+    built, built_output, built_errors := dr_run(app, string.["build"]);
+    if built.exit_code != 0 print("[fr] xdg-evaluator child:\n%\n", tprint("%\n%", built_output, built_errors));
+    expect(expect_exit("xdg-evaluator", built, 0));
+
+    // The evaluator wrote under the typed root this case isolated.
+    typed_root := tprint("%1/juice", dr_path(scratch, "xdg-cache"));
+    expect(is_directory(typed_root));
+    evaluator_files: [..] string;
+    collect :: (info: *File_Visit_Info, out: *[..] string) {
+        if !contains(info.short_name, "manifest_data_") return;
+        array_add(out, copy_string(info.full_name));
+    }
+    visit_files(typed_root, true, *evaluator_files, collect, visit_directories = false);
+    expect(evaluator_files.count > 0);
+    // And no legacy cwd-relative cache appeared beside the package.
+    expect(!is_directory(dr_path(app, "juice")));
+} @test
