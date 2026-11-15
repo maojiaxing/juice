@@ -62,10 +62,10 @@ dr_path :: (base: string, name: string) -> string {
 // path formatting. Directory names must be at least two characters long: Jai's
 // recursive make_directory_if_it_does_not_exist returns success without creating
 // a one-character final segment (its start_index == name.count - 1 shortcut).
-dr_write_file :: (dir: string, file_name: string, content: string) -> bool {
+dr_write_file :: (directory: string, file_name: string, content: string) -> bool {
     content_copy := copy_string(content);
-    path := dr_path(dir, file_name);
-    make_directory_if_it_does_not_exist(dir, recursive = true);
+    path := dr_path(directory, file_name);
+    make_directory_if_it_does_not_exist(directory, recursive = true);
     return write_entire_file(path, content_copy);
 }
 
@@ -178,16 +178,16 @@ dr_package_source :: (name: string, body: string) -> string {
 
 // A single-export provider: the fixed auto-discovery candidate `module.jai`
 // carries the export, so the declaration needs no module list.
-dr_write_module_provider :: (dir: string, name: string, module_body: string) -> bool {
+dr_write_module_provider :: (directory: string, name: string, module_body: string) -> bool {
     declaration := dr_package_source(name, "");
-    if !dr_write_file(dir, "package.jai", declaration) return false;
-    return dr_write_file(dir, "module.jai", module_body);
+    if !dr_write_file(directory, "package.jai", declaration) return false;
+    return dr_write_file(directory, "module.jai", module_body);
 }
 
-dr_write_app :: (dir: string, declaration_body: string, main_source: string) -> bool {
+dr_write_app :: (directory: string, declaration_body: string, main_source: string) -> bool {
     declaration := dr_package_source("app", declaration_body);
-    if !dr_write_file(dir, "package.jai", declaration) return false;
-    return dr_write_file(dr_path(dir, "src"), "main.jai", main_source);
+    if !dr_write_file(directory, "package.jai", declaration) return false;
+    return dr_write_file(dr_path(directory, "src"), "main.jai", main_source);
 }
 
 dr_git :: (arguments: [] string) -> (Process_Result, string) {
@@ -198,24 +198,24 @@ dr_git :: (arguments: [] string) -> (Process_Result, string) {
     return result, trim(output);
 }
 
-dr_git_init :: (repo: string) -> bool {
-    if !make_directory_if_it_does_not_exist(repo, recursive = true) return false;
-    result, _ := dr_git(string.["init", "-q", "-b", "main", repo]);
+dr_git_init :: (repository: string) -> bool {
+    if !make_directory_if_it_does_not_exist(repository, recursive = true) return false;
+    result, _ := dr_git(string.["init", "-q", "-b", "main", repository]);
     if result.exit_code != 0 return false;
-    dr_git(string.["-C", repo, "config", "user.email", "juice@example.test"]);
-    dr_git(string.["-C", repo, "config", "user.name", "Juice Test"]);
+    dr_git(string.["-C", repository, "config", "user.email", "juice@example.test"]);
+    dr_git(string.["-C", repository, "config", "user.name", "Juice Test"]);
     return true;
 }
 
-dr_git_commit_all :: (repo: string, message: string) -> string {
-    dr_git(string.["-C", repo, "add", "-A"]);
-    result, _ := dr_git(string.["-C", repo, "commit", "-qm", message]);
+dr_git_commit_all :: (repository: string, message: string) -> string {
+    dr_git(string.["-C", repository, "add", "-A"]);
+    result, _ := dr_git(string.["-C", repository, "commit", "-qm", message]);
     if result.exit_code != 0 return "";
-    return copy_string(dr_git_head(repo));
+    return copy_string(dr_git_head(repository));
 }
 
-dr_git_head :: (repo: string) -> string {
-    _, head := dr_git(string.["-C", repo, "rev-parse", "HEAD"]);
+dr_git_head :: (repository: string) -> string {
+    _, head := dr_git(string.["-C", repository, "rev-parse", "HEAD"]);
     return head;
 }
 

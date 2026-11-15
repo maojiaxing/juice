@@ -15,9 +15,9 @@
 
 // A provider package whose single export carries Git_Value, so a case can prove
 // which commit's content was actually compiled.
-dr_git_provider_value :: (repo: string, value: int) -> bool {
-    if !dr_write_file(repo, "package.jai", dr_package_source("gitlib", "")) return false;
-    return dr_write_file(repo, "module.jai", tprint("Git_Value :: %;\n", value));
+dr_git_provider_value :: (repository: string, value: int) -> bool {
+    if !dr_write_file(repository, "package.jai", dr_package_source("gitlib", "")) return false;
+    return dr_write_file(repository, "module.jai", tprint("Git_Value :: %;\n", value));
 }
 
 // A consumer app that imports the provider's single export under the given import
@@ -43,14 +43,14 @@ dependency_resolution_git_reuse_and_update :: () {
     scratch := dr_scratch("git-reuse");
     dr_isolate(scratch);
     defer dr_restore_env();
-    repo := dr_path(scratch, "repo");
-    expect(dr_git_init(repo));
-    expect(dr_git_provider_value(repo, 100));
-    first_commit := copy_string(dr_git_commit_all(repo, "first"));
+    repository := dr_path(scratch, "repo");
+    expect(dr_git_init(repository));
+    expect(dr_git_provider_value(repository, 100));
+    first_commit := copy_string(dr_git_commit_all(repository, "first"));
     expect(first_commit.count == 40);
 
     app := dr_path(scratch, "app");
-    expect(dr_write_git_app(app, repo, "Lib", ", branch = \"main\""));
+    expect(dr_write_git_app(app, repository, "Lib", ", branch = \"main\""));
     expect(dr_build_app(app) == 0);
     exit_code, run_output := dr_run_app(app);
     print("[dbg] exit=% output=[%]\n", exit_code, run_output);
@@ -59,8 +59,8 @@ dependency_resolution_git_reuse_and_update :: () {
 
     // The branch moves; an ordinary build keeps the recorded commit and its
     // content instead of following the new tip.
-    expect(dr_git_provider_value(repo, 200));
-    second_commit := copy_string(dr_git_commit_all(repo, "second"));
+    expect(dr_git_provider_value(repository, 200));
+    second_commit := copy_string(dr_git_commit_all(repository, "second"));
     expect(second_commit.count == 40 && second_commit != first_commit);
     expect(dr_build_app(app) == 0);
     exit_code, run_output = dr_run_app(app);
@@ -69,7 +69,7 @@ dependency_resolution_git_reuse_and_update :: () {
     expect(contains(state, first_commit) && !contains(state, second_commit));
 
     // A changed import name/alias does not re-resolve.
-    expect(dr_write_git_app(app, repo, "Renamed", ", branch = \"main\""));
+    expect(dr_write_git_app(app, repository, "Renamed", ", branch = \"main\""));
     expect(dr_build_app(app) == 0);
     exit_code, run_output = dr_run_app(app);
     expect(exit_code == 0 && contains(run_output, "value=100"));
@@ -96,17 +96,17 @@ dependency_resolution_git_content_restore :: () {
     scratch := dr_scratch("git-restore");
     dr_isolate(scratch);
     defer dr_restore_env();
-    repo := dr_path(scratch, "repo");
-    expect(dr_git_init(repo));
-    expect(dr_git_provider_value(repo, 100));
-    first_commit := copy_string(dr_git_commit_all(repo, "first"));
+    repository := dr_path(scratch, "repo");
+    expect(dr_git_init(repository));
+    expect(dr_git_provider_value(repository, 100));
+    first_commit := copy_string(dr_git_commit_all(repository, "first"));
     app := dr_path(scratch, "app");
-    expect(dr_write_git_app(app, repo, "Lib", ", branch = \"main\""));
+    expect(dr_write_git_app(app, repository, "Lib", ", branch = \"main\""));
     expect(dr_build_app(app) == 0);
 
     // Move the branch, then delete every content checkout (state stays).
-    expect(dr_git_provider_value(repo, 300));
-    second_commit := copy_string(dr_git_commit_all(repo, "second"));
+    expect(dr_git_provider_value(repository, 300));
+    second_commit := copy_string(dr_git_commit_all(repository, "second"));
     expect(dr_delete_wait(dr_path(scratch, "xdg-cache/juice/content")));
     expect(!is_directory(dr_path(scratch, "xdg-cache/juice/content")));
     expect(contains(dr_state_text(scratch), first_commit));
@@ -132,14 +132,14 @@ dependency_resolution_offline_matrix :: () {
     scratch := dr_scratch("offline");
     dr_isolate(scratch);
     defer dr_restore_env();
-    repo := dr_path(scratch, "repo");
-    expect(dr_git_init(repo));
-    expect(dr_git_provider_value(repo, 100));
-    first_commit := copy_string(dr_git_commit_all(repo, "first"));
+    repository := dr_path(scratch, "repo");
+    expect(dr_git_init(repository));
+    expect(dr_git_provider_value(repository, 100));
+    first_commit := copy_string(dr_git_commit_all(repository, "first"));
 
     // No record: a floating branch is rejected offline.
     app := dr_path(scratch, "app");
-    expect(dr_write_git_app(app, repo, "Lib", ", branch = \"main\""));
+    expect(dr_write_git_app(app, repository, "Lib", ", branch = \"main\""));
     floating_result, floating_output, floating_errors := dr_run(app, string.["build", "--offline"]);
     expect(floating_result.exit_code != 0);
     floating_combined := tprint("%\n%", floating_output, floating_errors);
@@ -147,7 +147,7 @@ dependency_resolution_offline_matrix :: () {
 
     // A short revision does not establish a record offline.
     short_app := dr_path(scratch, "short-app");
-    expect(dr_write_git_app(short_app, repo, "Lib", ", rev = \"abcdef1\""));
+    expect(dr_write_git_app(short_app, repository, "Lib", ", rev = \"abcdef1\""));
     short_result, short_output, short_errors := dr_run(short_app, string.["build", "--offline"]);
     expect(short_result.exit_code != 0);
 
@@ -155,7 +155,7 @@ dependency_resolution_offline_matrix :: () {
     // offline because its content is already present.
     expect(dr_build_app(app) == 0);
     pinned_app := dr_path(scratch, "pinned-app");
-    expect(dr_write_git_app(pinned_app, repo, "Lib", copy_string(tprint(", rev = \"%1\"", first_commit))));
+    expect(dr_write_git_app(pinned_app, repository, "Lib", copy_string(tprint(", rev = \"%1\"", first_commit))));
     pinned_result, pinned_output, pinned_errors := dr_run(pinned_app, string.["build", "--offline"]);
     expect(expect_exit("pinned offline", pinned_result, 0, "dependency resolution"));
     pinned_exit, pinned_run := dr_run_app(pinned_app);
@@ -168,7 +168,7 @@ dependency_resolution_offline_matrix :: () {
     // A full commit id whose content is absent cannot be established offline.
     unknown_commit := "0123456789abcdef0123456789abcdef01234567";
     unknown_app := dr_path(scratch, "unknown-app");
-    expect(dr_write_git_app(unknown_app, repo, "Lib", copy_string(tprint(", rev = \"%1\"", unknown_commit))));
+    expect(dr_write_git_app(unknown_app, repository, "Lib", copy_string(tprint(", rev = \"%1\"", unknown_commit))));
     unknown_result, unknown_output, unknown_errors := dr_run(unknown_app, string.["build", "--offline"]);
     expect(unknown_result.exit_code != 0);
     unknown_combined := tprint("%\n%", unknown_output, unknown_errors);
@@ -181,21 +181,21 @@ dependency_resolution_context_isolation :: () {
     scratch := dr_scratch("isolation");
     dr_isolate(scratch);
     defer dr_restore_env();
-    repo := dr_path(scratch, "repo");
-    expect(dr_git_init(repo));
-    expect(dr_git_provider_value(repo, 100));
-    first_commit := copy_string(dr_git_commit_all(repo, "first"));
+    repository := dr_path(scratch, "repo");
+    expect(dr_git_init(repository));
+    expect(dr_git_provider_value(repository, 100));
+    first_commit := copy_string(dr_git_commit_all(repository, "first"));
 
     app_one := dr_path(scratch, "app-one");
     app_two := dr_path(scratch, "app-two");
-    expect(dr_write_git_app(app_one, repo, "Lib", ", branch = \"main\""));
-    expect(dr_write_git_app(app_two, repo, "Lib", ", branch = \"main\""));
+    expect(dr_write_git_app(app_one, repository, "Lib", ", branch = \"main\""));
+    expect(dr_write_git_app(app_two, repository, "Lib", ", branch = \"main\""));
     expect(dr_build_app(app_one) == 0);
     expect(dr_build_app(app_two) == 0);
 
     // The branch moves and only the first project updates.
-    expect(dr_git_provider_value(repo, 200));
-    second_commit := copy_string(dr_git_commit_all(repo, "second"));
+    expect(dr_git_provider_value(repository, 200));
+    second_commit := copy_string(dr_git_commit_all(repository, "second"));
     update_result, update_output, update_errors := dr_update_app(app_one);
     expect(expect_exit("update app one", update_result, 0, "dependency resolution"));
     expect(dr_build_app(app_one) == 0);
@@ -214,12 +214,12 @@ dependency_resolution_context_isolation :: () {
     member_one := dr_path(workspace, "member-one");
     member_two := dr_path(workspace, "member-two");
     expect(dr_write_file(workspace, "package.jai", "#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"0.1.0\",\n    name    = \"ws_root\",\n\n    workspace = .{\n        members = string.[\"member-one\", \"member-two\"],\n    },\n};\n"));
-    expect(dr_write_git_app(member_one, repo, "Lib", ", branch = \"main\""));
-    expect(dr_write_git_app(member_two, repo, "Lib", ", branch = \"main\""));
+    expect(dr_write_git_app(member_one, repository, "Lib", ", branch = \"main\""));
+    expect(dr_write_git_app(member_two, repository, "Lib", ", branch = \"main\""));
     expect(dr_build_app(member_one) == 0);
     expect(dr_build_app(member_two) == 0);
-    expect(dr_git_provider_value(repo, 300));
-    third_commit := copy_string(dr_git_commit_all(repo, "third"));
+    expect(dr_git_provider_value(repository, 300));
+    third_commit := copy_string(dr_git_commit_all(repository, "third"));
     member_update, member_output, member_errors := dr_update_app(member_one);
     expect(expect_exit("member update", member_update, 0, "dependency resolution"));
     expect(dr_build_app(member_one) == 0);
@@ -240,13 +240,13 @@ dependency_resolution_corrupt_state_fails :: () {
     scratch := dr_scratch("corrupt-state");
     dr_isolate(scratch);
     defer dr_restore_env();
-    repo := dr_path(scratch, "repo");
-    expect(dr_git_init(repo));
-    expect(dr_git_provider_value(repo, 100));
-    expect(dr_git_commit_all(repo, "first").count == 40);
+    repository := dr_path(scratch, "repo");
+    expect(dr_git_init(repository));
+    expect(dr_git_provider_value(repository, 100));
+    expect(dr_git_commit_all(repository, "first").count == 40);
 
     app := dr_path(scratch, "app");
-    expect(dr_write_git_app(app, repo, "Lib", ", branch = \"main\""));
+    expect(dr_write_git_app(app, repository, "Lib", ", branch = \"main\""));
     expect(dr_build_app(app) == 0);
 
     contexts := dr_path(scratch, "xdg-state/juice/contexts");
@@ -270,20 +270,20 @@ dependency_resolution_failure_preserves_old_state :: () {
     scratch := dr_scratch("failure-state");
     dr_isolate(scratch);
     defer dr_restore_env();
-    repo := dr_path(scratch, "repo");
-    expect(dr_git_init(repo));
-    expect(dr_git_provider_value(repo, 100));
-    first_commit := copy_string(dr_git_commit_all(repo, "first"));
+    repository := dr_path(scratch, "repo");
+    expect(dr_git_init(repository));
+    expect(dr_git_provider_value(repository, 100));
+    first_commit := copy_string(dr_git_commit_all(repository, "first"));
 
     app := dr_path(scratch, "app");
-    expect(dr_write_git_app(app, repo, "Lib", ", branch = \"main\""));
+    expect(dr_write_git_app(app, repository, "Lib", ", branch = \"main\""));
     expect(dr_build_app(app) == 0);
     expect(contains(dr_state_text(scratch), first_commit));
 
     // A resolution failure (unknown export) fails the build and keeps the record.
     broken := dr_path(scratch, "broken-app");
-    expect(dr_write_git_app(broken, repo, "Lib", ", branch = \"main\""));
-    broken_body := copy_string(tprint("    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"gitlib\", source = .{kind = .GIT, git = .{url = \"%1\", branch = \"main\"}}, modules = .[.{name = \"Missing\"}]},\n    ],\n", repo));
+    expect(dr_write_git_app(broken, repository, "Lib", ", branch = \"main\""));
+    broken_body := copy_string(tprint("    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"gitlib\", source = .{kind = .GIT, git = .{url = \"%1\", branch = \"main\"}}, modules = .[.{name = \"Missing\"}]},\n    ],\n", repository));
     expect(dr_write_file(broken, "package.jai", dr_package_source("app", broken_body)));
     broken_result, broken_output, broken_errors := dr_run(broken, string.["build"]);
     expect(broken_result.exit_code != 0);
@@ -296,8 +296,8 @@ dependency_resolution_failure_preserves_old_state :: () {
 
     // Update advances the record; a broken source then fails to compile while the
     // new selection stays recorded (a compile failure does not roll back).
-    expect(dr_git_provider_value(repo, 200));
-    second_commit := copy_string(dr_git_commit_all(repo, "second"));
+    expect(dr_git_provider_value(repository, 200));
+    second_commit := copy_string(dr_git_commit_all(repository, "second"));
     update_result, update_output, update_errors := dr_run(app, string.["update"]);
     expect(expect_exit("update", update_result, 0, "dependency resolution"));
     expect(contains(dr_state_text(scratch), second_commit));
@@ -314,25 +314,25 @@ dependency_resolution_git_checkout_boundary :: () {
     scratch := dr_scratch("git-boundary");
     dr_isolate(scratch);
     defer dr_restore_env();
-    repo := dr_path(scratch, "repo");
-    expect(dr_git_init(repo));
+    repository := dr_path(scratch, "repository");
+    expect(dr_git_init(repository));
 
-    sibling := dr_path(dr_path(repo, "libs"), "sibling");
+    sibling := dr_path(dr_path(repository, "libs"), "sibling");
     expect(dr_write_module_provider(sibling, "sibling", "Sibling_Value :: 21;\n"));
-    provider := dr_path(repo, "provider");
+    provider := dr_path(repository, "provider");
     expect(dr_write_file(provider, "package.jai", dr_package_source("provider", "    dependencies = Dependency.[\n        .{name = \"sibling\", source = .{kind = .PATH, path = \"../libs/sibling\"}, modules = .[.{alias = \"Sibling\"}]},\n    ],\n")));
     expect(dr_write_file(provider, "module.jai", "#import \"Sibling\";\n\nGit_Value :: Sibling_Value + 1;\n"));
-    commit := copy_string(dr_git_commit_all(repo, "provider with sibling"));
+    commit := copy_string(dr_git_commit_all(repository, "provider with sibling"));
     expect(commit.count == 40);
 
     app := dr_path(scratch, "app");
-    expect(dr_write_git_app_module(app, repo, "Prov", "provider"));
+    expect(dr_write_git_app_module(app, repository, "Prov", "provider"));
     expect(dr_build_app(app) == 0);
     exit_code, run_output := dr_run_app(app);
     expect(exit_code == 0 && contains(run_output, "value=22"));
 
     // The shared checkout is untouched and no consumer view landed inside it.
-    status_result, status_output := dr_git(string.["-C", repo, "status", "--porcelain"]);
+    status_result, status_output := dr_git(string.["-C", repository, "status", "--porcelain"]);
     expect(status_result.exit_code == 0 && trim(status_output) == "");
     expect(dr_content_has_commit(scratch, commit));
     for directory: dr_content_directories(scratch) {
@@ -344,10 +344,10 @@ dependency_resolution_git_checkout_boundary :: () {
     // A path that escapes the checkout is rejected.
     expect(dr_write_file(provider, "package.jai", dr_package_source("provider", "    dependencies = Dependency.[\n        .{name = \"escape\", source = .{kind = .PATH, path = \"../../outside\"}, modules = .[.{}]},\n    ],\n")));
     expect(dr_write_file(provider, "module.jai", "#import \"Sibling\";\n\nGit_Value :: Sibling_Value + 1;\n"));
-    escape_commit := copy_string(dr_git_commit_all(repo, "escaping path"));
+    escape_commit := copy_string(dr_git_commit_all(repository, "escaping path"));
     expect(escape_commit.count == 40);
     escape_app := dr_path(scratch, "escape-app");
-    expect(dr_write_git_app_module(escape_app, repo, "Prov", "provider"));
+    expect(dr_write_git_app_module(escape_app, repository, "Prov", "provider"));
     escape_result, escape_output, escape_errors := dr_run(escape_app, string.["build"]);
     expect(escape_result.exit_code != 0);
     escape_combined := tprint("%\n%", escape_output, escape_errors);

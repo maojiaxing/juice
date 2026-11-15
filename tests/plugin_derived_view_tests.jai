@@ -57,8 +57,8 @@ pdv_stage :: (root: string, retained: [] string) -> Prestep_Stage {
     derived_root := tprint("%1/derived", root);
     make_directory_if_it_does_not_exist(package_root, recursive = true);
     make_directory_if_it_does_not_exist(derived_root, recursive = true);
-    for rel: retained {
-        path := tprint("%1/%2", package_root, rel);
+    for relative_path: retained {
+        path := tprint("%1/%2", package_root, relative_path);
         make_directory_if_it_does_not_exist(path_strip_filename(path), recursive = true);
         write_entire_file(path, "// retained\n");
     }
@@ -74,16 +74,16 @@ pdv_stage :: (root: string, retained: [] string) -> Prestep_Stage {
     return stage;
 }
 
-pdv_ctx :: (stage: *Prestep_Stage, diags: *[..] Lifecycle_Diagnostic) -> Lifecycle_Context {
-    ctx: Lifecycle_Context;
-    ctx.diagnostics = diags;
-    ctx.prestep = stage;
-    return ctx;
+pdv_ctx :: (stage: *Prestep_Stage, diagnostics: *[..] Lifecycle_Diagnostic) -> Lifecycle_Context {
+    lifecycle_context: Lifecycle_Context;
+    lifecycle_context.diagnostics = diagnostics;
+    lifecycle_context.prestep = stage;
+    return lifecycle_context;
 }
 
-pdv_last_error :: (diags: [] Lifecycle_Diagnostic) -> string {
-    if diags.count == 0 return "";
-    return diags[diags.count - 1].message;
+pdv_last_error :: (diagnostics: [] Lifecycle_Diagnostic) -> string {
+    if diagnostics.count == 0 return "";
+    return diagnostics[diagnostics.count - 1].message;
 }
 
 plugin_derived_view_rules :: () {
@@ -92,31 +92,31 @@ plugin_derived_view_rules :: () {
     root := pdv_scratch("substitute");
     defer delete_directory_full(root);
     stage := pdv_stage(root, .["src/main.jai"]);
-    diags: [..] Lifecycle_Diagnostic;
-    ctx := pdv_ctx(*stage, *diags);
+    diagnostics: [..] Lifecycle_Diagnostic;
+    lifecycle_context := pdv_ctx(*stage, *diagnostics);
 
     // A replacement in the package sources (or anywhere else) is the read-only
     // violation: the source tree is never an output area.
-    expect(!prestep_add_substitution(*ctx, "src/main.jai", tprint("%1/package/src/main.jai", root)));
-    expect(find_index_from_left(pdv_last_error(diags), "outside the package's private derived area") >= 0);
+    expect(!prestep_add_substitution(*lifecycle_context, "src/main.jai", tprint("%1/package/src/main.jai", root)));
+    expect(find_index_from_left(pdv_last_error(diagnostics), "outside the package's private derived area") >= 0);
 
     // A logical path that invents a source the package does not have fails
     // too: substitute MAPS an existing input, it never creates one.
-    expect(!prestep_add_substitution(*ctx, "src/missing.jai", tprint("%1/derived/x.jai", root)));
-    expect(find_index_from_left(pdv_last_error(diags), "not a retained package source") >= 0);
+    expect(!prestep_add_substitution(*lifecycle_context, "src/missing.jai", tprint("%1/derived/x.jai", root)));
+    expect(find_index_from_left(pdv_last_error(diagnostics), "not a retained package source") >= 0);
 
     // An absolute, backslashed or escaping logical path never resolves.
-    expect(!prestep_add_substitution(*ctx, "../escape.jai", tprint("%1/derived/x.jai", root)));
-    expect(find_index_from_left(pdv_last_error(diags), "not a package-relative source path") >= 0);
-    expect(!prestep_add_substitution(*ctx, "C:/abs.jai", tprint("%1/derived/x.jai", root)));
-    expect(!prestep_add_substitution(*ctx, "src\\main.jai", tprint("%1/derived/x.jai", root)));
+    expect(!prestep_add_substitution(*lifecycle_context, "../escape.jai", tprint("%1/derived/x.jai", root)));
+    expect(find_index_from_left(pdv_last_error(diagnostics), "not a package-relative source path") >= 0);
+    expect(!prestep_add_substitution(*lifecycle_context, "C:/abs.jai", tprint("%1/derived/x.jai", root)));
+    expect(!prestep_add_substitution(*lifecycle_context, "src\\main.jai", tprint("%1/derived/x.jai", root)));
 
     // The accepted row keeps the LOGICAL path as its key (imports, diagnostics
     // and test attribution stay the package's own path) and stores the
     // physical file only for reading.
-    replacement, written := prestep_write_derived(*ctx, "src/main.jai", "// derived main\n");
+    replacement, written := prestep_write_derived(*lifecycle_context, "src/main.jai", "// derived main\n");
     expect(written && file_exists(replacement));
-    expect(prestep_add_substitution(*ctx, "src/main.jai", replacement));
+    expect(prestep_add_substitution(*lifecycle_context, "src/main.jai", replacement));
     physical, found := prestep_substitution_for(*stage, "src/main.jai");
     expect(found && physical == replacement);
     reverse, reverse_found := prestep_substitution_for(*stage, replacement);
@@ -127,82 +127,82 @@ plugin_derived_view_rules :: () {
     drop_root := pdv_scratch("drop");
     defer delete_directory_full(drop_root);
     drop_stage := pdv_stage(drop_root, .["src/main.jai", "src/skip.jai"]);
-    drop_diags: [..] Lifecycle_Diagnostic;
-    drop_ctx := pdv_ctx(*drop_stage, *drop_diags);
+    drop_diagnostics: [..] Lifecycle_Diagnostic;
+    drop_context := pdv_ctx(*drop_stage, *drop_diagnostics);
 
-    expect(prestep_add_drop(*drop_ctx, "src/skip.jai"));
-    expect(prestep_add_drop(*drop_ctx, "src/skip.jai"));       // idempotent
-    expect(drop_diags.count == 0);
+    expect(prestep_add_drop(*drop_context, "src/skip.jai"));
+    expect(prestep_add_drop(*drop_context, "src/skip.jai"));       // idempotent
+    expect(drop_diagnostics.count == 0);
 
-    expect(!prestep_add_substitution(*drop_ctx, "src/skip.jai", tprint("%1/derived/skip.jai", drop_root)));
-    expect(find_index_from_left(pdv_last_error(drop_diags), "substitution conflicts with a drop") >= 0);
+    expect(!prestep_add_substitution(*drop_context, "src/skip.jai", tprint("%1/derived/skip.jai", drop_root)));
+    expect(find_index_from_left(pdv_last_error(drop_diagnostics), "substitution conflicts with a drop") >= 0);
 
-    drop_derived, drop_written := prestep_write_derived(*drop_ctx, "src/main.jai", "// derived main\n");
+    drop_derived, drop_written := prestep_write_derived(*drop_context, "src/main.jai", "// derived main\n");
     expect(drop_written);
-    expect(prestep_add_substitution(*drop_ctx, "src/main.jai", drop_derived));
-    expect(!prestep_add_drop(*drop_ctx, "src/main.jai"));
-    expect(find_index_from_left(pdv_last_error(drop_diags), "drop conflicts with a source substitution") >= 0);
+    expect(prestep_add_substitution(*drop_context, "src/main.jai", drop_derived));
+    expect(!prestep_add_drop(*drop_context, "src/main.jai"));
+    expect(find_index_from_left(pdv_last_error(drop_diagnostics), "drop conflicts with a source substitution") >= 0);
 
     // --- generated: explicit registration only, conflicts never resolve by
     // declaration order ------------------------------------------------------
-    gen_root := pdv_scratch("generated");
-    defer delete_directory_full(gen_root);
-    gen_stage := pdv_stage(gen_root, .["src/main.jai"]);
-    gen_diags: [..] Lifecycle_Diagnostic;
-    gen_ctx := pdv_ctx(*gen_stage, *gen_diags);
+    generated_root := pdv_scratch("generated");
+    defer delete_directory_full(generated_root);
+    generated_stage := pdv_stage(generated_root, .["src/main.jai"]);
+    generated_diagnostics: [..] Lifecycle_Diagnostic;
+    generated_context := pdv_ctx(*generated_stage, *generated_diagnostics);
 
     // A brand-new auxiliary file lands inside the private derived area.
-    expect(prestep_add_generated(*gen_ctx, "src/generated_helper.jai", "// helper\n"));
-    expect(gen_stage.generated.count == 1);
-    expect(file_exists(gen_stage.generated[0].physical_path));
-    expect(derived_path_within_root(gen_stage.derived_root, gen_stage.generated[0].physical_path));
-    generated_physical, generated_found := prestep_generated_for(*gen_stage, "src/generated_helper.jai");
-    expect(generated_found && generated_physical == gen_stage.generated[0].physical_path);
+    expect(prestep_add_generated(*generated_context, "src/generated_helper.jai", "// helper\n"));
+    expect(generated_stage.generated.count == 1);
+    expect(file_exists(generated_stage.generated[0].physical_path));
+    expect(derived_path_within_root(generated_stage.derived_root, generated_stage.generated[0].physical_path));
+    generated_physical, generated_found := prestep_generated_for(*generated_stage, "src/generated_helper.jai");
+    expect(generated_found && generated_physical == generated_stage.generated[0].physical_path);
 
     // The same logical path twice conflicts — even with identical text, so two
     // plugins can never silently agree on one output — and the rejected
     // registration never rewrites the file the first one wrote.
-    expect(!prestep_add_generated(*gen_ctx, "src/generated_helper.jai", "// helper\n"));
-    expect(find_index_from_left(pdv_last_error(gen_diags), "duplicate auxiliary source path") >= 0);
-    expect(!prestep_add_generated(*gen_ctx, "src/generated_helper.jai", "// different\n"));
-    expect(find_index_from_left(pdv_last_error(gen_diags), "duplicate auxiliary source path") >= 0);
-    expect(gen_stage.generated.count == 1);
-    helper_content, helper_read := read_entire_file(gen_stage.generated[0].physical_path);
+    expect(!prestep_add_generated(*generated_context, "src/generated_helper.jai", "// helper\n"));
+    expect(find_index_from_left(pdv_last_error(generated_diagnostics), "duplicate auxiliary source path") >= 0);
+    expect(!prestep_add_generated(*generated_context, "src/generated_helper.jai", "// different\n"));
+    expect(find_index_from_left(pdv_last_error(generated_diagnostics), "duplicate auxiliary source path") >= 0);
+    expect(generated_stage.generated.count == 1);
+    helper_content, helper_read := read_entire_file(generated_stage.generated[0].physical_path);
     expect(helper_read && helper_content == "// helper\n");
 
     // Covering a retained source is a conflict: changing an existing input is
     // what substitute is for, and an auxiliary file must never become a root
     // entry.
-    expect(!prestep_add_generated(*gen_ctx, "src/main.jai", "// takeover\n"));
-    expect(find_index_from_left(pdv_last_error(gen_diags), "would cover a retained package source") >= 0);
+    expect(!prestep_add_generated(*generated_context, "src/main.jai", "// takeover\n"));
+    expect(find_index_from_left(pdv_last_error(generated_diagnostics), "would cover a retained package source") >= 0);
 
     // A non-.jai path, an absolute path and an escaping path never register.
-    expect(!prestep_add_generated(*gen_ctx, "src/data.txt", "x"));
-    expect(find_index_from_left(pdv_last_error(gen_diags), "not a package-relative .jai path") >= 0);
-    expect(!prestep_add_generated(*gen_ctx, "/abs/helper.jai", "x"));
-    expect(!prestep_add_generated(*gen_ctx, "../helper.jai", "x"));
+    expect(!prestep_add_generated(*generated_context, "src/data.txt", "x"));
+    expect(find_index_from_left(pdv_last_error(generated_diagnostics), "not a package-relative .jai path") >= 0);
+    expect(!prestep_add_generated(*generated_context, "/abs/helper.jai", "x"));
+    expect(!prestep_add_generated(*generated_context, "../helper.jai", "x"));
 
     // An auxiliary path already dropped, or already substituted, conflicts.
-    expect(prestep_add_drop(*gen_ctx, "src/none.jai"));
-    expect(!prestep_add_generated(*gen_ctx, "src/none.jai", "x"));
-    expect(find_index_from_left(pdv_last_error(gen_diags), "conflicts with a drop") >= 0);
-    gen_derived, gen_written := prestep_write_derived(*gen_ctx, "src/other.jai", "// derived other\n");
-    expect(gen_written);
-    make_directory_if_it_does_not_exist(path_strip_filename(tprint("%1/package/src/other.jai", gen_root)), recursive = true);
-    write_entire_file(tprint("%1/package/src/other.jai", gen_root), "// retained\n");
-    expect(prestep_add_substitution(*gen_ctx, "src/other.jai", gen_derived));
-    expect(!prestep_add_generated(*gen_ctx, "src/other.jai", "x"));
-    expect(find_index_from_left(pdv_last_error(gen_diags), "would cover a retained package source") >= 0);
+    expect(prestep_add_drop(*generated_context, "src/none.jai"));
+    expect(!prestep_add_generated(*generated_context, "src/none.jai", "x"));
+    expect(find_index_from_left(pdv_last_error(generated_diagnostics), "conflicts with a drop") >= 0);
+    generated_source_path, generated_written := prestep_write_derived(*generated_context, "src/other.jai", "// derived other\n");
+    expect(generated_written);
+    make_directory_if_it_does_not_exist(path_strip_filename(tprint("%1/package/src/other.jai", generated_root)), recursive = true);
+    write_entire_file(tprint("%1/package/src/other.jai", generated_root), "// retained\n");
+    expect(prestep_add_substitution(*generated_context, "src/other.jai", generated_source_path));
+    expect(!prestep_add_generated(*generated_context, "src/other.jai", "x"));
+    expect(find_index_from_left(pdv_last_error(generated_diagnostics), "would cover a retained package source") >= 0);
 
     // --- the round boundary: only THIS round's registrations answer, so a
     // stale file on disk is never consumed --------------------------------
     round_root := pdv_scratch("round");
     defer delete_directory_full(round_root);
     round_stage := pdv_stage(round_root, .["src/main.jai"]);
-    round_diags: [..] Lifecycle_Diagnostic;
-    round_ctx := pdv_ctx(*round_stage, *round_diags);
+    round_diagnostics: [..] Lifecycle_Diagnostic;
+    round_context := pdv_ctx(*round_stage, *round_diagnostics);
 
-    expect(prestep_add_generated(*round_ctx, "src/helper.jai", "// round one\n"));
+    expect(prestep_add_generated(*round_context, "src/helper.jai", "// round one\n"));
     stale_path := round_stage.generated[0].physical_path;
     round_physical, round_found := prestep_derived_source_for(*round_stage, "src/helper.jai");
     expect(round_found && round_physical == stale_path);
@@ -216,8 +216,8 @@ plugin_derived_view_rules :: () {
     next.package_root = round_stage.package_root;
     next.derived_root = round_stage.derived_root;
     expect(file_exists(stale_path));
-    next_diags: [..] Lifecycle_Diagnostic;
-    next_ctx := pdv_ctx(*next, *next_diags);
+    next_diagnostics: [..] Lifecycle_Diagnostic;
+    next_context := pdv_ctx(*next, *next_diagnostics);
     expect(next.generated.count == 0);
     next_physical, next_found := prestep_derived_source_for(*next, "src/helper.jai");
     expect(!next_found && next_physical == "");
@@ -230,12 +230,12 @@ plugin_derived_view_rules :: () {
     defer delete_directory_full(bare_root);
     bare: Prestep_Stage;
     bare.package_root = bare_root;
-    bare_diags: [..] Lifecycle_Diagnostic;
-    bare_ctx := pdv_ctx(*bare, *bare_diags);
-    expect(!prestep_add_generated(*bare_ctx, "src/helper.jai", "x"));
-    expect(find_index_from_left(pdv_last_error(bare_diags), "no private derived area") >= 0);
-    expect(!prestep_write_derived(*bare_ctx, "src/helper.jai", "x"));
-    expect(find_index_from_left(pdv_last_error(bare_diags), "no private derived area") >= 0);
+    bare_diagnostics: [..] Lifecycle_Diagnostic;
+    bare_context := pdv_ctx(*bare, *bare_diagnostics);
+    expect(!prestep_add_generated(*bare_context, "src/helper.jai", "x"));
+    expect(find_index_from_left(pdv_last_error(bare_diagnostics), "no private derived area") >= 0);
+    expect(!prestep_write_derived(*bare_context, "src/helper.jai", "x"));
+    expect(find_index_from_left(pdv_last_error(bare_diagnostics), "no private derived area") >= 0);
 } @test
 
 // The pre-0092 caller shape keeps working: with no package_root/derived_root
@@ -244,11 +244,11 @@ plugin_derived_view_rules :: () {
 plugin_derived_view_legacy_stage :: () {
     stage: Prestep_Stage;
     stage.root_dir = "C:/pkg";
-    diags: [..] Lifecycle_Diagnostic;
-    ctx := pdv_ctx(*stage, *diags);
-    expect(prestep_add_substitution(*ctx, "src/a.jai", "C:/mirror/a.jai"));
-    expect(prestep_add_drop(*ctx, "config.toml"));
-    expect(diags.count == 0);
+    diagnostics: [..] Lifecycle_Diagnostic;
+    lifecycle_context := pdv_ctx(*stage, *diagnostics);
+    expect(prestep_add_substitution(*lifecycle_context, "src/a.jai", "C:/mirror/a.jai"));
+    expect(prestep_add_drop(*lifecycle_context, "config.toml"));
+    expect(diagnostics.count == 0);
     replacement, found := prestep_substitution_for(*stage, "src/a.jai");
     expect(found && replacement == "C:/mirror/a.jai");
     derived, derived_found := prestep_derived_source_for(*stage, "src/a.jai");
@@ -261,7 +261,7 @@ plugin_derived_view_legacy_stage :: () {
 
 PDV_ABI_HOOK_RUNS: s64;
 
-pdv_abi_hook :: (ctx: *Lifecycle_Context, state: *void) -> bool {
+pdv_abi_hook :: (lifecycle_context: *Lifecycle_Context, state: *void) -> bool {
     PDV_ABI_HOOK_RUNS += 1;
     return true;
 }
@@ -289,9 +289,9 @@ plugin_derived_entry_abi :: () {
     expect(rejected.hook_table.count == 0);
     expect(rejected.pipeline.count == 0);
     expect(find_index_from_left(rejected.diagnostics[0].message, "incompatible plugin entry ABI") >= 0);
-    diags: [..] Lifecycle_Diagnostic;
-    ctx := pdv_ctx(null, *diags);
-    expect(run_mounted_hooks(rejected.hook_table, .PRESTEP, .before, *ctx));
+    diagnostics: [..] Lifecycle_Diagnostic;
+    lifecycle_context := pdv_ctx(null, *diagnostics);
+    expect(run_mounted_hooks(rejected.hook_table, .PRESTEP, .before, *lifecycle_context));
     expect(PDV_ABI_HOOK_RUNS == 0);
 } @test
 
@@ -347,14 +347,14 @@ ipdv_validate :: (options: *void) -> string {
     return "";
 }
 
-ipdv_before_hook :: (ctx: *Lifecycle_Context, state: *void) -> bool {
-    if state == null || ctx.prestep == null return false;
+ipdv_before_hook :: (lifecycle_context: *Lifecycle_Context, state: *void) -> bool {
+    if state == null || lifecycle_context.prestep == null return false;
     plugin := cast(*IPDV_Plugin) state;
-    physical, written := prestep_write_derived(ctx, plugin.config.entry, IPDV_DERIVED_MAIN);
+    physical, written := prestep_write_derived(lifecycle_context, plugin.config.entry, IPDV_DERIVED_MAIN);
     if !written return false;
-    if !prestep_add_substitution(ctx, plugin.config.entry, physical) return false;
+    if !prestep_add_substitution(lifecycle_context, plugin.config.entry, physical) return false;
     if plugin.config.helper != "" {
-        if !prestep_add_generated(ctx, plugin.config.helper, "// registered auxiliary source\nAUX_VALUE :: 1;\n") return false;
+        if !prestep_add_generated(lifecycle_context, plugin.config.helper, "// registered auxiliary source\nAUX_VALUE :: 1;\n") return false;
     }
     return true;
 }
@@ -850,8 +850,8 @@ plugin_derived_prepare_once :: () {
 // need the no-member shape (a declared member directory that does not exist is a
 // discovery error, not a plugin question) and the isolation case needs exactly
 // one real member.
-pdv_write_app_shaped :: (root: string, plugins_field: string, member_dir: string, main_source: string) -> bool {
-    workspace_field := ifx member_dir == "" then "" else tprint("    workspace = .{members = .[\"%\"]},\n", member_dir);
+pdv_write_app_shaped :: (root: string, plugins_field: string, member_directory: string, main_source: string) -> bool {
+    workspace_field := ifx member_directory == "" then "" else tprint("    workspace = .{members = .[\"%\"]},\n", member_directory);
     manifest := tprint("#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"plugin-app\",\n    version = \"1\",\n    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n%1%2};\n", workspace_field, plugins_field);
     if !build_seam_write(root, "package.jai", manifest) return false;
     if !build_seam_write(root, "src/main.jai", main_source) return false;
@@ -889,9 +889,9 @@ plugin_derived_builtin_triad_test_cli :: () {
             view_text, view_ok := read_entire_file(tprint("%1/src/main.jai", dir));
             if view_ok print("[triad-test-empty] view %:\n%\n", dir, view_text);
         }
-        _eval_src, eval_data := manifest_temp_file_names(get_juice_content_cache_root().path, empty_root);
-        eval_text, eval_ok := read_entire_file(eval_data);
-        if eval_ok print("[triad-test-empty] manifest data %:\n%\n", eval_data, eval_text);
+        _evaluation_source, evaluation_data := manifest_temp_file_names(get_juice_content_cache_root().path, empty_root);
+        evaluation_text, evaluation_ok := read_entire_file(evaluation_data);
+        if evaluation_ok print("[triad-test-empty] manifest data %:\n%\n", evaluation_data, evaluation_text);
     }
     expect(expect_exit("triad-test-empty", empty_result, 1));
     expect(output_matches("triad-test-empty", empty_text, .["[juice ERROR] Test compilation failed."]));
@@ -988,18 +988,18 @@ plugin_derived_git_source_read_only_cli :: () {
     scratch := dr_scratch("plugin-git-source");
     dr_isolate(scratch);
     defer dr_restore_env();
-    repo := dr_path(scratch, "repo");
-    expect(dr_git_init(repo));
+    provider_repository := dr_path(scratch, "provider_repository");
+    expect(dr_git_init(provider_repository));
     // The provider package at the repository root: one public plugin module whose
     // PRESTEP hook writes its derived main through the view.
-    expect(dr_write_file(repo, "package.jai",
+    expect(dr_write_file(provider_repository, "package.jai",
         "#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"1\",\n    name    = \"git-plugin\",\n    modules = .[.{name = \"plugin_module\", entry = \"plugin.jai\"}],\n};\n"));
-    expect(dr_write_file(repo, "plugin.jai", PDV_PLUGIN_MODULE_SOURCE));
-    commit := copy_string(dr_git_commit_all(repo, "plugin provider"));
+    expect(dr_write_file(provider_repository, "plugin.jai", PDV_PLUGIN_MODULE_SOURCE));
+    commit := copy_string(dr_git_commit_all(provider_repository, "plugin provider"));
     expect(commit.count == 40);
 
     app := dr_path(scratch, "app");
-    git_plugins := copy_string(tprint("    plugins = Plugin_Declaration.[\n        .{id = \"my_plugin\", source = .{kind = .GIT, git = .{url = \"%1\"}}, module = .{name = \"plugin_module\"}, options = Plugin_Option.[%2]},\n    ],\n", repo, PDV_OPTIONS_ENTRY_HELPER));
+    git_plugins := copy_string(tprint("    plugins = Plugin_Declaration.[\n        .{id = \"my_plugin\", source = .{kind = .GIT, git = .{url = \"%1\"}}, module = .{name = \"plugin_module\"}, options = Plugin_Option.[%2]},\n    ],\n", provider_repository, PDV_OPTIONS_ENTRY_HELPER));
     expect(pdv_write_standalone_app(app, git_plugins, PDV_APP_MAIN));
 
     result, output, errors := run_otter_child_at(app, .["build"]);
@@ -1020,7 +1020,7 @@ plugin_derived_git_source_read_only_cli :: () {
     // or untracked change.
     environment: Resolution_Environment;
     environment.content_cache_root = get_juice_content_cache_root().path;
-    checkout := git_content_checkout_directory(environment, path_slashes(repo), commit);
+    checkout := git_content_checkout_directory(environment, path_slashes(provider_repository), commit);
     expect(is_directory(checkout));
     expect(file_exists(tprint("%1/plugin.jai", checkout)));
     status_result, status := dr_git(string.["-C", checkout, "status", "--porcelain"]);
@@ -1029,7 +1029,7 @@ plugin_derived_git_source_read_only_cli :: () {
 
     // A module path that escapes the checkout is rejected (spec 0087 decision 12:
     // 越出检出根直接报错). The GIT source resolves; the selection does not.
-    escape_plugins := copy_string(tprint("    plugins = Plugin_Declaration.[\n        .{id = \"my_plugin\", source = .{kind = .GIT, git = .{url = \"%1\"}}, module = .{path = \"../..\", name = \"plugin_module\"}},\n    ],\n", repo));
+    escape_plugins := copy_string(tprint("    plugins = Plugin_Declaration.[\n        .{id = \"my_plugin\", source = .{kind = .GIT, git = .{url = \"%1\"}}, module = .{path = \"../..\", name = \"plugin_module\"}},\n    ],\n", provider_repository));
     expect(pdv_write_standalone_app(app, escape_plugins, PDV_APP_MAIN));
     escape_result, escape_output, escape_errors := run_otter_child_at(app, .["build"]);
     escape_text := pdv_child_text(escape_output, escape_errors);
@@ -1037,9 +1037,9 @@ plugin_derived_git_source_read_only_cli :: () {
     expect(output_matches("git-escape", escape_text, .["module path escapes its source root: ../.."]));
     expect(output_matches("git-escape", escape_text, .["Could not prepare the workspace's plugin declarations"]));
     // The source repository itself was never written to either.
-    repo_status_result, repo_status := dr_git(string.["-C", repo, "status", "--porcelain"]);
-    expect(repo_status_result.exit_code == 0);
-    expect(repo_status == "");
+    repository_status_result, repository_status := dr_git(string.["-C", provider_repository, "status", "--porcelain"]);
+    expect(repository_status_result.exit_code == 0);
+    expect(repository_status == "");
 } @test
 
 // ===========================================================================

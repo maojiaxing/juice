@@ -469,10 +469,10 @@ find_selected_package :: (packages: [] Normalized_Package, directory: string) ->
 // Deepest member containing the working directory, or null when the directory
 // is the workspace root itself or lies outside every member (a root-owned
 // scratch directory keeps the root rules).
-nearest_member_for_directory :: (discovery: Workspace_Discovery, cwd: string) -> *Normalized_Package {
+nearest_member_for_directory :: (discovery: Workspace_Discovery, working_directory: string) -> *Normalized_Package {
     deepest: *Normalized_Package = null;
     for *package: discovery.member_packages {
-        if !path_is_within(package.dir, cwd) continue;
+        if !path_is_within(package.dir, working_directory) continue;
         if deepest == null || package.dir.count > deepest.dir.count deepest = package;
     }
     return deepest;
@@ -485,18 +485,18 @@ append_selected_package :: (packages: *[..] Normalized_Package, paths: *[..] str
 }
 
 sort_selection_by_path :: (selection: *Package_Selection) {
-    for i: 1..selection.packages.count-1 {
-        if i >= selection.packages.count break;
-        package_key := selection.packages[i];
-        path_key := selection.paths[i];
-        j := i - 1;
-        while j >= 0 && compare(selection.paths[j], path_key) > 0 {
-            selection.packages[j+1] = selection.packages[j];
-            selection.paths[j+1] = selection.paths[j];
-            j -= 1;
+    for package_index: 1..selection.packages.count-1 {
+        if package_index >= selection.packages.count break;
+        package_key := selection.packages[package_index];
+        path_key := selection.paths[package_index];
+        insertion_index := package_index - 1;
+        while insertion_index >= 0 && compare(selection.paths[insertion_index], path_key) > 0 {
+            selection.packages[insertion_index+1] = selection.packages[insertion_index];
+            selection.paths[insertion_index+1] = selection.paths[insertion_index];
+            insertion_index -= 1;
         }
-        selection.packages[j+1] = package_key;
-        selection.paths[j+1] = path_key;
+        selection.packages[insertion_index+1] = package_key;
+        selection.paths[insertion_index+1] = path_key;
     }
 }
 
@@ -537,7 +537,7 @@ select_root_defaults :: (discovery: Workspace_Discovery, packages: *[..] Normali
     return .{success = true};
 }
 
-select_workspace_packages :: (discovery: Workspace_Discovery, cwd: string, request: Package_Selection_Request) -> Package_Selection {
+select_workspace_packages :: (discovery: Workspace_Discovery, working_directory: string, request: Package_Selection_Request) -> Package_Selection {
     if request.all_members && (request.names.count > 0 || request.paths.count > 0) {
         return selection_failure("--workspace cannot be combined with --package or --package-path.");
     }
@@ -578,7 +578,7 @@ select_workspace_packages :: (discovery: Workspace_Discovery, cwd: string, reque
     } else {
         // Location defaults: inside a member only that member, at the root the
         // workspace's default members.
-        nearest := nearest_member_for_directory(discovery, cwd);
+        nearest := nearest_member_for_directory(discovery, working_directory);
         if nearest != null && !paths_equal(nearest.dir, discovery.root_dir) {
             append_selected_package(*packages, *paths, nearest, discovery.root_dir);
         } else {

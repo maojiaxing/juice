@@ -165,14 +165,14 @@ test "Concurrent write probes are independent and never reuse a fixed name" {
         return 0;
     }
     workers: [8] Probe_Worker;
-    for i: 0..workers.count-1 {
-        workers[i].root = scratch;
-        expect(thread_init(*workers[i].thread, probe_worker));
-        thread_start(*workers[i].thread);
+    for worker_index: 0..workers.count-1 {
+        workers[worker_index].root = scratch;
+        expect(thread_init(*workers[worker_index].thread, probe_worker));
+        thread_start(*workers[worker_index].thread);
     }
-    for i: 0..workers.count-1 {
-        thread_is_done(*workers[i].thread, -1);
-        thread_deinit(*workers[i].thread);
+    for worker_index: 0..workers.count-1 {
+        thread_is_done(*workers[worker_index].thread, -1);
+        thread_deinit(*workers[worker_index].thread);
     }
     for worker: workers expect(worker.success);
     files := file_list(scratch);

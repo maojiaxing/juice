@@ -549,9 +549,9 @@ build_package :: (
     pstage: Prestep_Stage;
     pstage.root_dir = package.dir;
     if !prepare_package_derived_view(plugin_view, *pstage) return false;
-    for pkg: prepared.discovery.member_packages {
-        if paths_equal(pkg.dir, package.dir) continue;   // the package being built
-        array_add(*pstage.member_dirs, copy_string(pkg.dir));
+    for member_package: prepared.discovery.member_packages {
+        if paths_equal(member_package.dir, package.dir) continue;   // the package being built
+        array_add(*pstage.member_dirs, copy_string(member_package.dir));
     }
     lctx.prestep = *pstage;
 

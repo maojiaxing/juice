@@ -221,22 +221,22 @@ scan_plugin_package :: (root: string) -> Plugin_Scan_Result {
             result.ok = false;
             continue;
         }
-        s := normalize_view_line_endings(source);
-        tokens := lex_source(s);
-        i := 0;
-        while i < tokens.count {
+        normalized_source := normalize_view_line_endings(source);
+        tokens := lex_source(normalized_source);
+        token_index := 0;
+        while token_index < tokens.count {
             // The hooks-face probe (ticket 060): one IDENT token named
             // "hooks" anywhere in the package marks the scan result — the
-            // prepare's conservative host trigger (see Plugin_Scan_Result).
-            if tokens[i].kind == .IDENT && token_text(s, tokens[i]) == "hooks" result.has_hooks = true;
-            if is_juice_plugin_anchor(s, tokens, i) {
+            // prepare'normalized_source conservative host trigger (see Plugin_Scan_Result).
+            if tokens[token_index].kind == .IDENT && token_text(normalized_source, tokens[token_index]) == "hooks" result.has_hooks = true;
+            if is_juice_plugin_anchor(normalized_source, tokens, token_index) {
                 hit: Plugin_Scan_Hit;
                 hit.module_name = plugin_module_name(file.rel_path, collect.pkg_name);
                 hit.rel_path = file.rel_path;
                 hit.abs_path = file.abs_path;
                 place_scan_hit(*result, hit);
             }
-            i += 1;
+            token_index += 1;
         }
     }
     return result;
@@ -359,43 +359,43 @@ resolve_reference_module :: (
     source: Source_Reference,
     selection: Module_Reference
 ) -> Reference_Module {
-    out: Reference_Module;
+    reference: Reference_Module;
 
     source_root := "";
     if source.kind == .PATH {
         if source.path == "" {
-            out.error = "path source is empty";
-            return out;
+            reference.error = "path source is empty";
+            return reference;
         }
         candidate := source.path;
         if !path_is_absolute_portable(candidate) candidate = tprint("%1/%2", declaring_dir, source.path);
         normalized, normalized_ok := normalize_existing_path(candidate);
         if !normalized_ok {
-            out.error = tprint("path source could not be normalized: %", source.path);
-            return out;
+            reference.error = tprint("path source could not be normalized: %", source.path);
+            return reference;
         }
         source_root = normalized;
     } else if source.kind == .WORKSPACE {
         if discovery.root_dir == "" || !discovery.has_workspace {
-            out.error = "workspace source needs a workspace declaration";
-            return out;
+            reference.error = "workspace source needs a workspace declaration";
+            return reference;
         }
         source_root = path_slashes(discovery.root_dir);
     } else if source.kind == .GIT {
         if source.url == "" {
-            out.error = "Git source has an empty URL";
-            return out;
+            reference.error = "Git source has an empty URL";
+            return reference;
         }
         commit := "";
         state := read_resolution_state(resolution_state_file(environment, discovery.root_dir));
         if state.corrupt {
-            out.error = state.error;
-            return out;
+            reference.error = state.error;
+            return reference;
         }
-        out.url = source.url;
-        out.branch = source.branch;
-        out.tag = source.tag;
-        out.rev = source.rev;
+        reference.url = source.url;
+        reference.branch = source.branch;
+        reference.tag = source.tag;
+        reference.rev = source.rev;
         declaring_key := plugin_scoped_git_declaring_key(discovery.root_dir, declaring_dir, source.url);
         recorded := -1;
         if environment.mode != .UPDATE {
@@ -406,60 +406,60 @@ resolve_reference_module :: (
         } else if environment.mode == .OFFLINE {
             if source.rev != "" && is_full_commit_id(source.rev) commit = source.rev;
             if commit == "" {
-                out.error = tprint("offline resolution has no recorded plugin source for %", source.url);
-                return out;
+                reference.error = tprint("offline resolution has no recorded plugin source for %", source.url);
+                return reference;
             }
         } else {
             resolved, resolution_error := git_resolve_selector(environment, source.url, source.branch, source.tag, source.rev);
             if resolution_error != "" {
-                out.error = resolution_error;
-                return out;
+                reference.error = resolution_error;
+                return reference;
             }
             commit = resolved;
         }
         content_dir, content_error := git_ensure_content(environment, source.url, commit);
         if content_error != "" {
-            out.error = content_error;
-            return out;
+            reference.error = content_error;
+            return reference;
         }
-        out.commit = commit;
+        reference.commit = commit;
         source_root = path_slashes(content_dir);
     } else {
-        out.error = "an explicit PATH, GIT or WORKSPACE source is required";
-        return out;
+        reference.error = "an explicit PATH, GIT or WORKSPACE source is required";
+        return reference;
     }
 
     logical := normalize_package_relative_path(selection.path);
     if !logical.success {
-        out.error = tprint("module path escapes its source root: %", selection.path);
-        return out;
+        reference.error = tprint("module path escapes its source root: %", selection.path);
+        return reference;
     }
     if source.kind == .WORKSPACE {
         expected := ifx logical.path == "." then source_root else tprint("%1/%2", source_root, logical.path);
         normalized_expected, expected_ok := normalize_existing_path(expected);
         if !expected_ok {
-            out.error = tprint("workspace module path does not exist: %", selection.path);
-            return out;
+            reference.error = tprint("workspace module path does not exist: %", selection.path);
+            return reference;
         }
         member := false;
         for candidate: discovery.member_packages {
             if paths_equal(candidate.dir, normalized_expected) member = true;
         }
         if !member {
-            out.error = tprint("workspace source selects a directory that is not a workspace member: %", selection.path);
-            return out;
+            reference.error = tprint("workspace source selects a directory that is not a workspace member: %", selection.path);
+            return reference;
         }
     }
 
     provider_spelling := ifx logical.path == "." then source_root else tprint("%1/%2", source_root, logical.path);
     provider_dir, provider_ok := normalize_existing_path(provider_spelling);
     if !provider_ok {
-        out.error = tprint("module path could not be normalized: %", selection.path);
-        return out;
+        reference.error = tprint("module path could not be normalized: %", selection.path);
+        return reference;
     }
     if !resolution_path_within(source_root, provider_dir) {
-        out.error = tprint("module path escapes its source root: %", selection.path);
-        return out;
+        reference.error = tprint("module path escapes its source root: %", selection.path);
+        return reference;
     }
 
     // The provider must be a package with a declaration: plugins come from
@@ -476,30 +476,30 @@ resolve_reference_module :: (
     }
     if !package_ok package, package_ok = load_package_manifest(tprint("%1/manifest", package_target_dir(discovery.root_dir)), provider_dir);
     if !package_ok || !package.has_package {
-        out.error = tprint("provider package has no declaration: %", path_slashes(provider_dir));
-        return out;
+        reference.error = tprint("provider package has no declaration: %", path_slashes(provider_dir));
+        return reference;
     }
     if path_slashes(package.dir) != path_slashes(provider_dir) {
         package.dir = path_slashes(provider_dir);
     }
-    out.package = package;
-    out.provider_dir = path_slashes(provider_dir);
+    reference.package = package;
+    reference.provider_dir = path_slashes(provider_dir);
 
     exports := resolve_product_list(package, package.modules, package.modules_omitted, true);
     if !exports.success {
-        out.error = tprint("provider package products are invalid: %", exports.error);
-        return out;
+        reference.error = tprint("provider package products are invalid: %", exports.error);
+        return reference;
     }
     export, selection_error := resolution_select_export(exports.targets, selection);
     if selection_error != "" {
-        out.error = selection_error;
-        return out;
+        reference.error = selection_error;
+        return reference;
     }
-    out.export_name = export.name;
-    out.entry_path = path_slashes(export.source_path);
-    out.identity = plugin_source_identity(out.commit, provider_dir, export.name);
-    out.ok = true;
-    return out;
+    reference.export_name = export.name;
+    reference.entry_path = path_slashes(export.source_path);
+    reference.identity = plugin_source_identity(reference.commit, provider_dir, export.name);
+    reference.ok = true;
+    return reference;
 }
 
 // Count the plugin entry anchors of the selected public module: its own entry
@@ -520,8 +520,8 @@ plugin_entry_anchor_count :: (package_root: string, entry_path: string) -> (s64,
         if !read_ok return 0, "", false;
         normalized := normalize_view_line_endings(source);
         tokens := lex_source(normalized);
-        for i: 0..tokens.count-1 {
-            if is_juice_plugin_anchor(normalized, tokens, i) count += 1;
+        for token_index: 0..tokens.count-1 {
+            if is_juice_plugin_anchor(normalized, tokens, token_index) count += 1;
         }
         print_to_builder(*builder, "%\n", normalized);
     }
@@ -637,8 +637,8 @@ resolve_plugin_provider_dependencies :: (
 }
 
 resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Resolution {
-    out: Plugin_Source_Resolution;
-    out.ok = true;
+    resolution: Plugin_Source_Resolution;
+    resolution.ok = true;
 
     identities: [..] string;
     identity_ids: [..] string;
@@ -655,25 +655,25 @@ resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Reso
 
         resolved := resolve_reference_module(request.consumer.dir, request.discovery, request.environment, source, declaration.module);
         if !resolved.ok {
-            array_add(*out.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin '%' source: %", declaration.id, resolved.error), fatal = true});
-            out.ok = false;
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin '%' source: %", declaration.id, resolved.error), fatal = true});
+            resolution.ok = false;
             continue;
         }
 
         count, _, read_ok := plugin_entry_anchor_count(resolved.provider_dir, resolved.entry_path);
         if !read_ok {
-            array_add(*out.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin module source could not be read: %", resolved.entry_path), fatal = true});
-            out.ok = false;
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin module source could not be read: %", resolved.entry_path), fatal = true});
+            resolution.ok = false;
             continue;
         }
         if count == 0 {
-            array_add(*out.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin capability missing: module '%' of package '%' has no plugin entry", resolved.export_name, resolved.package.name), fatal = true});
-            out.ok = false;
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin capability missing: module '%' of package '%' has no plugin entry", resolved.export_name, resolved.package.name), fatal = true});
+            resolution.ok = false;
             continue;
         }
         if count > 1 {
-            array_add(*out.diagnostics, .{rel_path = declaration.id, message = tprint("ambiguous plugin entry: module '%' of package '%' has % entries", resolved.export_name, resolved.package.name, count), fatal = true});
-            out.ok = false;
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = tprint("ambiguous plugin entry: module '%' of package '%' has % entries", resolved.export_name, resolved.package.name, count), fatal = true});
+            resolution.ok = false;
             continue;
         }
 
@@ -700,16 +700,16 @@ resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Reso
         }
         if conflict == "" conflict = plugin_dependency_module_conflict(request, candidate);
         if conflict != "" {
-            array_add(*out.diagnostics, .{rel_path = declaration.id, message = conflict, fatal = true});
-            out.ok = false;
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = conflict, fatal = true});
+            resolution.ok = false;
             continue;
         }
 
         array_add(*identities, candidate.identity);
         array_add(*identity_ids, candidate.id);
-        array_add(*out.sources, candidate);
+        array_add(*resolution.sources, candidate);
     }
-    return out;
+    return resolution;
 }
 
 // The workspace-level scan: Package.plugins is the only activation surface

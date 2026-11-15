@@ -125,9 +125,9 @@ collect_test_files :: (prepared: *Prepared_Workspace, package_root: string) -> [
     collect.root = package_root;
     // Member boundaries come from the workspace discovery snapshot (root
     // package first); the scan consumes it without merging into discovery.
-    for pkg: prepared.discovery.member_packages {
-        if paths_equal(pkg.dir, package_root) continue;   // the package being tested
-        array_add(*collect.member_dirs, copy_string(pkg.dir));
+    for member_package: prepared.discovery.member_packages {
+        if paths_equal(member_package.dir, package_root) continue;   // the package being tested
+        array_add(*collect.member_dirs, copy_string(member_package.dir));
     }
     files, ok := collect_scan_files(collect.root, *collect, collect_directory_is_excluded, collect_file_is_excluded);
     if !ok {
@@ -653,9 +653,9 @@ test_package :: (
     // consumes this round's registrations only, and every auxiliary output
     // lands inside this package's own derived area.
     if !prepare_package_derived_view(plugin_view, *pstage) return false;
-    for pkg: prepared.discovery.member_packages {
-        if paths_equal(pkg.dir, package.dir) continue;   // the package being tested
-        array_add(*pstage.member_dirs, copy_string(pkg.dir));
+    for member_package: prepared.discovery.member_packages {
+        if paths_equal(member_package.dir, package.dir) continue;   // the package being tested
+        array_add(*pstage.member_dirs, copy_string(member_package.dir));
     }
     lctx.prestep = *pstage;
 

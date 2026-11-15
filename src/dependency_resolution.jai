@@ -699,15 +699,15 @@ resolution_collect_package_files :: (package_dir: string) -> [..] string, bool {
     if !visited return collect.files, false;
     // Stable, deterministic file order (insertion sort, matching the shim
     // enumeration convention).
-    for i: 1..collect.files.count-1 {
-        if i >= collect.files.count break;
-        key := collect.files[i];
-        j := i - 1;
-        while j >= 0 && compare(collect.files[j], key) > 0 {
-            collect.files[j+1] = collect.files[j];
-            j -= 1;
+    for file_index: 1..collect.files.count-1 {
+        if file_index >= collect.files.count break;
+        key := collect.files[file_index];
+        insertion_index := file_index - 1;
+        while insertion_index >= 0 && compare(collect.files[insertion_index], key) > 0 {
+            collect.files[insertion_index+1] = collect.files[insertion_index];
+            insertion_index -= 1;
         }
-        collect.files[j+1] = key;
+        collect.files[insertion_index+1] = key;
     }
     return collect.files, true;
 }

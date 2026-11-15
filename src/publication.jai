@@ -520,12 +520,12 @@ install_relative_path_is_valid :: (relative_path: string) -> bool {
 // against mixing releases, not a cryptographic signature).
 install_artifact_digest :: (text: string) -> string {
     hash := fnv1a_hash(text.data, text.count);
-    out: [16] u8;
-    for i: 0..15 {
-        nibble := cast(s64) ((hash >> cast(u64) (4 * (15 - i))) & 0xf);
-        out[i] = cast(u8) ifx nibble < 10 then #char "0" + nibble else #char "a" + (nibble - 10);
+    digest_bytes: [16] u8;
+    for digit_index: 0..15 {
+        nibble := cast(s64) ((hash >> cast(u64) (4 * (15 - digit_index))) & 0xf);
+        digest_bytes[digit_index] = cast(u8) ifx nibble < 10 then #char "0" + nibble else #char "a" + (nibble - 10);
     }
-    return copy_string(to_string(out.data, 16));
+    return copy_string(to_string(digest_bytes.data, 16));
 }
 
 // The integer value of a constant declaration line (`NAME :: VALUE;`, the
@@ -634,8 +634,8 @@ parse_install_manifest :: (text: string) -> (Install_Manifest, bool) {
     result.manifest_version = manifest_version;
     result.compatibility = compatibility;
     result.plugin_abi = plugin_abi;
-    for i: 4..line_count - 1 {
-        line := lines[i];
+    for line_index: 4..line_count - 1 {
+        line := lines[line_index];
         space := find_index_from_left(line, " ");
         if space <= 0 return .{}, false;
         relative_path := slice(line, 0, space);
