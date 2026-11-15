@@ -363,14 +363,12 @@ resolve_reference_module :: (
 
     source_root := "";
     if source.kind == .PATH {
-        if source.path == "" {
+        normalized, path_status := source_path_root(source.path, declaring_dir);
+        if path_status == .EMPTY {
             reference.error = "path source is empty";
             return reference;
         }
-        candidate := source.path;
-        if !path_is_absolute_portable(candidate) candidate = tprint("%1/%2", declaring_dir, source.path);
-        normalized, normalized_ok := normalize_existing_path(candidate);
-        if !normalized_ok {
+        if path_status == .NOT_NORMALIZED {
             reference.error = tprint("path source could not be normalized: %", source.path);
             return reference;
         }
@@ -386,7 +384,6 @@ resolve_reference_module :: (
             reference.error = "Git source has an empty URL";
             return reference;
         }
-        commit := "";
         state := read_resolution_state(resolution_state_file(environment, discovery.root_dir));
         if state.corrupt {
             reference.error = state.error;
@@ -397,33 +394,19 @@ resolve_reference_module :: (
         reference.tag = source.tag;
         reference.rev = source.rev;
         declaring_key := plugin_scoped_git_declaring_key(discovery.root_dir, declaring_dir, source.url);
-        recorded := -1;
-        if environment.mode != .UPDATE {
-            recorded = find_resolved_selection(state, declaring_key, source.url, source.branch, source.tag, source.rev);
-        }
-        if recorded >= 0 {
-            commit = state.selections[recorded].commit;
-        } else if environment.mode == .OFFLINE {
-            if source.rev != "" && is_full_commit_id(source.rev) commit = source.rev;
-            if commit == "" {
-                reference.error = tprint("offline resolution has no recorded plugin source for %", source.url);
-                return reference;
-            }
-        } else {
-            resolved, resolution_error := git_resolve_selector(environment, source.url, source.branch, source.tag, source.rev);
-            if resolution_error != "" {
-                reference.error = resolution_error;
-                return reference;
-            }
-            commit = resolved;
-        }
-        content_dir, content_error := git_ensure_content(environment, source.url, commit);
-        if content_error != "" {
-            reference.error = content_error;
+        // Same Git selection step as the dependency graph; the plugin declaration
+        // trusts a pinned full commit id and phrases its own offline diagnostic.
+        resolved := git_resolve_source(state, environment, declaring_key, source, .TRUST_PINNED_COMMIT);
+        if resolved.error == .OFFLINE_UNRECORDED {
+            reference.error = tprint("offline resolution has no recorded plugin source for %", source.url);
             return reference;
         }
-        reference.commit = commit;
-        source_root = path_slashes(content_dir);
+        if resolved.error != .NONE {
+            reference.error = resolved.message;
+            return reference;
+        }
+        reference.commit = resolved.commit;
+        source_root = path_slashes(resolved.content_dir);
     } else {
         reference.error = "an explicit PATH, GIT or WORKSPACE source is required";
         return reference;

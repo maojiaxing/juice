@@ -431,6 +431,93 @@ git_resolve_selector :: (environment: Resolution_Environment, url: string, branc
     return "", tprint("The default branch did not resolve to a commit in %", url);
 }
 
+// How an OFFLINE run may establish a commit that has no recorded selection.
+// The two callers differ here and the difference is deliberate, so it is named
+// at each call site instead of being folded into one behaviour:
+// - the dependency graph verifies the pinned commit against the content cache
+//   (a full commit id is only accepted when the cache really holds that commit);
+// - the plugin resolver trusts the pinned full commit id as given, and lets the
+//   content step fail if the cache cannot supply it.
+Offline_Commit_Policy :: enum {
+    REQUIRE_CACHED_CONTENT;
+    TRUST_PINNED_COMMIT;
+}
+
+// One resolved Git source. `error` names the failing step so each caller can
+// phrase its own diagnostic; `message` carries the underlying resolver/state
+// text for the two steps that have one.
+Git_Source_Error :: enum {
+    NONE;
+    OFFLINE_UNRECORDED;
+    SELECTOR_FAILED;
+    CONTENT_FAILED;
+}
+
+Resolved_Git_Source :: struct {
+    commit:      string;
+    content_dir: string;
+    error:       Git_Source_Error;
+    message:     string;
+}
+
+// The one Git-selection step: a recorded selection is reused unless the mode
+// demands a new resolution, an offline run falls back to a pinned full commit id
+// under the caller's policy, and an online run asks the selector resolver. Then
+// the commit's content is materialized in the shared cache. Callers own what
+// they do with the result — recording it, or exposing it as a provider source.
+git_resolve_source :: (
+    state: Resolution_State,
+    environment: Resolution_Environment,
+    declaring_key: string,
+    source: Source_Reference,
+    offline_policy: Offline_Commit_Policy
+) -> Resolved_Git_Source {
+    result: Resolved_Git_Source;
+    commit := "";
+    recorded := -1;
+    if environment.mode != .UPDATE {
+        recorded = find_resolved_selection(state, declaring_key, source.url, source.branch, source.tag, source.rev);
+    }
+
+    if recorded >= 0 {
+        commit = state.selections[recorded].commit;
+    } else if environment.mode == .OFFLINE {
+        // The only record a full commit id may establish without a record: its
+        // content must already be in the cache. Floating and short selectors are
+        // rejected rather than guessed.
+        if source.rev != "" && is_full_commit_id(source.rev) {
+            commit = source.rev;
+            if offline_policy == .REQUIRE_CACHED_CONTENT {
+                checkout := git_content_checkout_directory(environment, source.url, source.rev);
+                current, current_ok := git_checkout_commit(checkout);
+                if !current_ok || current != source.rev commit = "";
+            }
+        }
+        if commit == "" {
+            result.error = .OFFLINE_UNRECORDED;
+            return result;
+        }
+    } else {
+        resolved, resolution_error := git_resolve_selector(environment, source.url, source.branch, source.tag, source.rev);
+        if resolution_error != "" {
+            result.error = .SELECTOR_FAILED;
+            result.message = resolution_error;
+            return result;
+        }
+        commit = resolved;
+    }
+
+    content_dir, content_error := git_ensure_content(environment, source.url, commit);
+    if content_error != "" {
+        result.error = .CONTENT_FAILED;
+        result.message = content_error;
+        return result;
+    }
+    result.commit = commit;
+    result.content_dir = content_dir;
+    return result;
+}
+
 // Materialize one commit's content. A recorded commit is restored by itself
 // (never by moving to the newest branch); a damaged or missing checkout is
 // rebuilt from the shared repository when the network is allowed, and is an

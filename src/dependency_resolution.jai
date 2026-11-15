@@ -446,38 +446,40 @@ resolution_select_export :: (exports: [] Effective_Target, selection: Module_Ref
     return .{}, tprint("Provider does not export module '%'.", selection.name);
 }
 
+// The status of a source-location attempt whose failure the CALLER phrases:
+// the empty-value and normalization rules are shared, the diagnostics are not
+// (a dependency names itself, a plugin declaration does not).
+Source_Path_Status :: enum {
+    OK;
+    EMPTY;
+    NOT_NORMALIZED;
+}
+
+// The physical root a PATH source names (spec 0087 decision 9): an absolute path
+// is taken as given and a relative one is anchored at the declaring package. The
+// result is the real path, so a link cannot move the provider silently.
+source_path_root :: (raw: string, declaring_dir: string) -> (string, Source_Path_Status) {
+    if raw == "" return "", .EMPTY;
+    candidate := raw;
+    if !path_is_absolute_portable(candidate) candidate = tprint("%1/%2", declaring_dir, raw);
+    normalized, normalized_ok := normalize_existing_path(candidate);
+    if !normalized_ok return "", .NOT_NORMALIZED;
+    return normalized, .OK;
+}
+
 // Resolve one Git source to a commit plus its content directory, honoring the
-// recorded selection unless the mode demands (or forbids) a new resolution.
+// recorded selection unless the mode demands (or forbids) a new resolution. The
+// selection itself is the shared Git step; this caller owns the record it writes
+// and the wording of the dependency diagnostic.
 resolution_resolve_git :: (graph: *Resolution_Graph, request: Dependency_Preparation_Request, declaring_key: string, source: Source_Reference) -> (string, string, string) {
     selector_identity := git_selector_identity(source.branch, source.tag, source.rev);
-    recorded := -1;
-    if request.environment.mode != .UPDATE {
-        recorded = find_resolved_selection(graph.state, declaring_key, source.url, source.branch, source.tag, source.rev);
+    resolved := git_resolve_source(graph.state, request.environment, declaring_key, source, .REQUIRE_CACHED_CONTENT);
+    if resolved.error == .OFFLINE_UNRECORDED {
+        return "", "", tprint("Offline resolution has no recorded selection for % (%).", source.url, selector_identity);
     }
-
-    commit := "";
-    if recorded >= 0 {
-        commit = graph.state.selections[recorded].commit;
-    } else if request.environment.mode == .OFFLINE {
-        // The only record a full commit id may establish without a record: its
-        // content is already in the cache. Floating and short selectors are
-        // rejected rather than guessed.
-        if source.rev != "" && is_full_commit_id(source.rev) {
-            checkout := git_content_checkout_directory(request.environment, source.url, source.rev);
-            current, current_ok := git_checkout_commit(checkout);
-            if current_ok && current == source.rev commit = source.rev;
-        }
-        if commit == "" {
-            return "", "", tprint("Offline resolution has no recorded selection for % (%).", source.url, selector_identity);
-        }
-    } else {
-        resolved, resolution_error := git_resolve_selector(request.environment, source.url, source.branch, source.tag, source.rev);
-        if resolution_error != "" return "", "", resolution_error;
-        commit = resolved;
-    }
-
-    content_dir, content_error := git_ensure_content(request.environment, source.url, commit);
-    if content_error != "" return "", "", content_error;
+    if resolved.error != .NONE return "", "", resolved.message;
+    commit := resolved.commit;
+    content_dir := resolved.content_dir;
     array_add(*graph.selections, .{
         declaring_key = declaring_key,
         url           = source.url,
@@ -505,11 +507,9 @@ resolution_resolve_node :: (graph: *Resolution_Graph, request: Dependency_Prepar
 
         if source_kind == .PATH {
             raw := dependency.source.path;
-            if raw == "" return resolution_fail(graph, tprint("Dependency '%' has an empty path source.", dependency.name));
-            candidate := raw;
-            if !path_is_absolute_portable(candidate) candidate = tprint("%1/%2", node.dir, raw);
-            normalized, normalized_ok := normalize_existing_path(candidate);
-            if !normalized_ok return resolution_fail(graph, tprint("Dependency '%' path source could not be normalized: %", dependency.name, raw));
+            normalized, path_status := source_path_root(raw, node.dir);
+            if path_status == .EMPTY return resolution_fail(graph, tprint("Dependency '%' has an empty path source.", dependency.name));
+            if path_status == .NOT_NORMALIZED return resolution_fail(graph, tprint("Dependency '%' path source could not be normalized: %", dependency.name, raw));
             if node.source_kind == .GIT {
                 // Inside a Git checkout the edge stays inside that checkout and
                 // keeps the repository/commit provenance of the declaring node.
