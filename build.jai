@@ -86,7 +86,7 @@
 // ---------------------------------------------------------------------------
 bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     root := front_slashes(get_working_directory());
-    closure, ok := probe_package_closure(root, entry_rel, "[Build System] ❌ ");
+    closure, ok := probe_package_closure(root, entry_rel, "[Build System] Error: ");
     if !ok return "", false;
     if !closure_has_tests(closure) return tprint("%1/%2", root, entry_rel), true;
 
@@ -95,14 +95,14 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     state.transpile = transpile_build_file;
     state.transpile_dir = tprint("%1/bootstrap", target_transpile_dir(package_target_dir(root)));
     state.layout = .PLAIN;
-    state.error_prefix = "[Build System] ❌ ";
+    state.error_prefix = "[Build System] Error: ";
     for _: closure {
         array_add(*state.states, 0);
         array_add(*state.view_paths, "");
     }
     entry_index, found := closure_index(*state, entry_rel);
     if !found {
-        print("[Build System] ❌ 入口不在闭包中: %1\n", entry_rel);
+        print("[Build System] Error: 入口不在闭包中: %1\n", entry_rel);
         return "", false;
     }
     entry_path, view_ok := view_of_file(*state, entry_index);
@@ -197,46 +197,46 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     modules_dir := target_modules_dir(target_dir);
     module_source, module_read_ok := read_entire_file(tprint("%1/src/module.jai", root));
     if !module_read_ok {
-        print("[Build System] ❌ 无法读取定义源 src/module.jai（发布步骤）\n");
+        print("[Build System] Error: 无法读取定义源 src/module.jai（发布步骤）\n");
         exit(1);
     }
     discovery_source, discovery_read_ok := read_entire_file(tprint("%1/src/test_discovery.jai", root));
     if !discovery_read_ok {
-        print("[Build System] ❌ 无法读取发现面源 src/test_discovery.jai（发布步骤）\n");
+        print("[Build System] Error: 无法读取发现面源 src/test_discovery.jai（发布步骤）\n");
         exit(1);
     }
     closure_sources: [..] string;
     for file: JUICE_CORE_LOAD_FILES {
         closure_source, closure_read_ok := read_entire_file(tprint("%1/src/%2", root, file));
         if !closure_read_ok {
-            print("[Build System] ❌ 无法读取插件面闭包源 src/%1（发布步骤）\n", file);
+            print("[Build System] Error: 无法读取插件面闭包源 src/%1（发布步骤）\n", file);
             exit(1);
         }
         array_add(*closure_sources, closure_source);
     }
     plugin_source, plugin_read_ok := read_entire_file(tprint("%1/src/plugin.jai", root));
     if !plugin_read_ok {
-        print("[Build System] ❌ 无法读取插件 ABI 源 src/plugin.jai（发布步骤）\n");
+        print("[Build System] Error: 无法读取插件 ABI 源 src/plugin.jai（发布步骤）\n");
         exit(1);
     }
     plugin_abi_line, plugin_abi_ok := extract_constant_line(plugin_source, "JUICE_PLUGIN_ABI_VERSION");
     if !plugin_abi_ok {
-        print("[Build System] ❌ 未找到 JUICE_PLUGIN_ABI_VERSION 常量声明（安装标记）\n");
+        print("[Build System] Error: 未找到 JUICE_PLUGIN_ABI_VERSION 常量声明（安装标记）\n");
         exit(1);
     }
     juice_text, juice_ok := publish_juice_module(module_source);
     if !juice_ok {
-        print("[Build System] ❌ 发布 Juice 模块失败（段标记契约破坏）\n");
+        print("[Build System] Error: 发布 Juice 模块失败（段标记契约破坏）\n");
         exit(1);
     }
     testing_text, testing_ok := publish_testing_module(module_source);
     if !testing_ok {
-        print("[Build System] ❌ 发布 Testing 模块失败（段标记契约破坏）\n");
+        print("[Build System] Error: 发布 Testing 模块失败（段标记契约破坏）\n");
         exit(1);
     }
     core_text, core_ok := publish_juice_core(module_source);
     if !core_ok {
-        print("[Build System] ❌ 发布 juice_core 模块失败（内置 id 常量缺失）\n");
+        print("[Build System] Error: 发布 juice_core 模块失败（内置 id 常量缺失）\n");
         exit(1);
     }
     // The installation unit (ticket 0094): every artifact in
@@ -251,13 +251,13 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     for closure_source: closure_sources array_add(*published_texts, closure_source);
     publish_failure, published_ok := publish_install_set(modules_dir, plugin_abi_line, published_texts);
     if !published_ok {
-        print("[Build System] ❌ 发布安装单元失败: %1\n", publish_failure);
+        print("[Build System] Error: 发布安装单元失败: %1\n", publish_failure);
         exit(1);
     }
     flat_seed := tprint("%1/modules/Juice.jai", target_dir);
     if file_exists(flat_seed) {
         if !file_delete(flat_seed) {
-            print("[Build System] ❌ 无法退役平铺 Juice.jai 种子 %1\n", flat_seed);
+            print("[Build System] Error: 无法退役平铺 Juice.jai 种子 %1\n", flat_seed);
             exit(1);
         }
     }
@@ -283,27 +283,27 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     // -------------------------------------------------------------
     version_source, version_read_ok := read_entire_file("src/commands/version.jai");
     if !version_read_ok {
-        print("[Build System] ❌ 无法读取 src/commands/version.jai（版本断言）\n");
+        print("[Build System] Error: 无法读取 src/commands/version.jai（版本断言）\n");
         exit(1);
     }
     juice_version_line, version_line_ok := extract_constant_line(version_source, "JUICE_VERSION");
     if !version_line_ok {
-        print("[Build System] ❌ 未找到 JUICE_VERSION 常量声明（版本断言）\n");
+        print("[Build System] Error: 未找到 JUICE_VERSION 常量声明（版本断言）\n");
         exit(1);
     }
     build_dir := target_build_dir(target_dir);
     if !make_directory_if_it_does_not_exist(build_dir, recursive = true) {
-        print("[Build System] ❌ 无法创建构建驱动目录 %1\n", build_dir);
+        print("[Build System] Error: 无法创建构建驱动目录 %1\n", build_dir);
         exit(1);
     }
     version_check_path := target_session_driver_path(build_dir, "bootstrap-version-check.jai");
     if !write_entire_file(version_check_path, generate_version_assertion_driver(tprint("%1/package.jai", root), juice_version_line)) {
-        print("[Build System] ❌ 无法写入版本断言 driver: %1\n", version_check_path);
+        print("[Build System] Error: 无法写入版本断言 driver: %1\n", version_check_path);
         exit(1);
     }
     version_result := run_command("jai", version_check_path, "-import_dir", target_modules_dir(target_dir), "-quiet");
     if version_result.exit_code != 0 {
-        print("[Build System] ❌ Version assertion failed.\n");
+        print("[Build System] Error: Version assertion failed.\n");
         exit(1);
     }
 
@@ -347,7 +347,7 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     //    inline test blocks. A missing module degrades to "" (zero change)
     //    — but step 3 just wrote it, so that is a defensive branch only.
     // -------------------------------------------------------------
-    testing_view_dir := testing_module_strip_view_dir(root, testing_module_path(target_dir), "[Build System] ❌ ");
+    testing_view_dir := testing_module_strip_view_dir(root, testing_module_path(target_dir), "[Build System] Error: ");
 
     // -------------------------------------------------------------
     // 7. Generate the compile metaprogram (sharing the Metaprogram generator
@@ -360,9 +360,9 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     //    relative "target" would resolve one layer deeper into
     //    target/build/target/ (058 deviation ④, fixed here). The child's
     //    output passes through in real time (this metaprogram's prints are
-    //    collected by jai and flushed only on normal exit — so the 🚀/✅
+    //    collected by jai and flushed only on normal exit — so the success
     //    lines appear after the compile output; the failure path's exit(1)
-    //    swallows this metaprogram's ❌ lines, but the exit code and the
+    //    swallows this metaprogram's error lines, but the exit code and the
     //    child's error output stay intact). Failures propagate the exit
     //    code with exit(1), keeping the failure-seam contract.
     //
@@ -379,7 +379,7 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     make_directory_if_it_does_not_exist(build_dir);
     meta_path := target_session_driver_path(build_dir, "bootstrap-meta.jai");
     if !write_entire_file(meta_path, generate_compiler_metaprogram(meta)) {
-        print("[Build System] ❌ 无法写入构建 metaprogram: %1\n", meta_path);
+        print("[Build System] Error: 无法写入构建 metaprogram: %1\n", meta_path);
         exit(1);
     }
 
@@ -390,7 +390,7 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     }
     result := run_command("jai", meta_path);
     if result.exit_code != 0 {
-        print("[Build System] ❌ Build failed.\n");
+        print("[Build System] Error: Build failed.\n");
         exit(1);
     }
 

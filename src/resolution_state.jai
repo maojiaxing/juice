@@ -351,10 +351,6 @@ resolution_source_key :: (url: string) -> string {
     return resolution_sanitized_key(url, 24);
 }
 
-git_content_repository_directory :: (environment: Resolution_Environment, url: string) -> string {
-    return tprint("%1/git/%2", environment.content_cache_root, resolution_source_key(url));
-}
-
 git_content_checkout_directory :: (environment: Resolution_Environment, url: string, commit: string) -> string {
     return tprint("%1/content/%2/%3", environment.content_cache_root, resolution_source_key(url), commit);
 }
@@ -380,7 +376,7 @@ git_checkout_commit :: (checkout: string) -> string, bool {
 // and an ordinary reuse never calls it at all because the recorded content is
 // already present.
 git_ensure_repository :: (environment: Resolution_Environment, url: string, allow_network: bool, refresh: bool) -> string, string {
-    repository := git_content_repository_directory(environment, url);
+    repository := tprint("%1/git/%2", environment.content_cache_root, resolution_source_key(url));
     if git_repository_present(repository) {
         if refresh && allow_network {
             _, fetched := git_captured_value(string.["-C", repository, "fetch", "--quiet", "--tags", "--prune", "--all"]);

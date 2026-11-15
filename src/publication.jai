@@ -468,12 +468,10 @@ Install_Check :: struct {
     reason: string;
 }
 
-install_manifest_relative_path :: () -> string {
-    return tprint("%1/%2", JUICE_INTERNAL_DIR, INSTALL_MANIFEST_FILE_NAME);
-}
-
+// The marker file's modules-relative coordinate and its absolute path: one call
+// site each, so the literal expression lives at the path builder below.
 install_manifest_path :: (modules_dir: string) -> string {
-    return front_slashes(tprint("%1/%2", modules_dir, install_manifest_relative_path()));
+    return front_slashes(tprint("%1/%2/%3", modules_dir, JUICE_INTERNAL_DIR, INSTALL_MANIFEST_FILE_NAME));
 }
 
 // The complete published set of one installation, in publication order: the

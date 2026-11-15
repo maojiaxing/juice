@@ -27,17 +27,13 @@
 // address a recycled buffer.
 // ---------------------------------------------------------------------------
 
-dr_root :: () -> string {
-    return copy_string(tprint("%1/target/dep-resolution", otter_root()));
-}
-
 // A fresh directory per case: pick the first unused ordinal instead of deleting a
 // previous tree. A recursive delete returns before the filesystem finishes on
 // Windows, so reusing a name could remove the tree a case just created.
 dr_scratch :: (name: string) -> string {
     root := "";
     for 1..1000000 {
-        candidate := copy_string(tprint("%1/%2-%3", dr_root(), name, it));
+        candidate := copy_string(tprint("%1/target/dep-resolution/%2-%3", otter_root(), name, it));
         if file_exists(candidate) continue;
         root = candidate;
         break;
