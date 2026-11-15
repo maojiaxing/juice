@@ -272,3 +272,106 @@ final_review_consumer_contexts_are_independent :: () {
     expect(contains(beta_second_output, "BETA=1"));
     expect(!contains(beta_second_output, "BETA=2"));
 } @test
+
+// ---------------------------------------------------------------------------
+// S13: every enabled external plugin is validated through its real module
+// value — entry uniqueness across the selected module's #load closure, entry
+// ABI and options — regardless of whether the entry mentions hooks. The review
+// probes 16-24 (plugin-verification.md) recorded the pre-fix behavior: ABI 999
+// and unknown options without hooks built successfully, and a #load-only entry
+// with its single real plugin value was rejected as capability-missing.
+// ---------------------------------------------------------------------------
+
+FR_PLUGIN_HEADER :: #string FR_END
+#import "Basic";
+#import "juice_core";
+
+FR_Plugin_Options :: struct {
+    label: string = "default";
+}
+
+FR_Plugin :: struct {
+    using base: Juice_Plugin;
+    config: FR_Plugin_Options;
+}
+
+get_juice_plugin :: () -> *FR_Plugin {
+    plugin := New(FR_Plugin);
+    plugin.id = "fr_plugin";
+    plugin.version = "1.0.0";
+FR_END
+
+// A valid plugin that contributes no hooks at all.
+fr_plugin_no_hooks_source :: () -> string {
+    return tprint("%1    plugin.options = cast(*void) plugin;\n    return plugin;\n} @juice_plugin\n", FR_PLUGIN_HEADER);
+}
+
+// Same shape, but compiled value claims a foreign entry ABI.
+fr_plugin_bad_abi_source :: () -> string {
+    return tprint("%1    plugin.options = cast(*void) plugin;\n    plugin.abi_version = 999;\n    return plugin;\n} @juice_plugin\n", FR_PLUGIN_HEADER);
+}
+
+fr_write_plugin_provider :: (provider: string, module_source: string) -> bool {
+    if !fr_write_package(provider, "fr_plugin_provider", "    modules = .[.{name = \"plugin_module\", entry = \"plugin.jai\"}],\n") return false;
+    return dr_write_file(provider, "plugin.jai", module_source);
+}
+
+fr_write_plugin_consumer :: (app: string, provider: string, options_field: string) -> bool {
+    plugins := copy_string(tprint("    plugins = Plugin_Declaration.[.{id = \"fr_plugin\", source = .{kind = .PATH, path = %1}, module = .{name = \"plugin_module\"}%2}],\n", quote_jai_string(provider), options_field));
+    return fr_write_program(app, "plugin_app", tprint("%1    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", plugins), "#import \"Basic\";\n\nmain :: () { print(\"PLUGIN_APP_OK\\n\"); }\n");
+}
+
+final_review_no_hook_plugin_is_validated :: () {
+    scratch := dr_scratch("fr-plugin-valid");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    provider := dr_path(scratch, "provider");
+    expect(fr_write_plugin_provider(provider, fr_plugin_no_hooks_source()));
+    app := dr_path(scratch, "app");
+    expect(fr_write_plugin_consumer(app, provider, ""));
+
+    result, output, errors := dr_run(app, string.["run"]);
+    if result.exit_code != 0 print("[fr] valid-no-hook child:\n%\n%\n", output, errors);
+    expect(expect_exit("valid-no-hook-plugin", result, 0));
+    expect(contains(output, "PLUGIN_APP_OK"));
+
+    // The same plugin module with a foreign ABI must fail before anything runs.
+    expect(dr_write_file(provider, "plugin.jai", fr_plugin_bad_abi_source()));
+    bad_result, bad_output, bad_errors := dr_run(app, string.["build"]);
+    expect(bad_result.exit_code != 0);
+    bad_combined := tprint("%\n%", bad_output, bad_errors);
+    expect(contains(bad_combined, "ABI") || contains(bad_combined, "incompatible"));
+} @test
+
+final_review_no_hook_plugin_rejects_unknown_options :: () {
+    scratch := dr_scratch("fr-plugin-options");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    provider := dr_path(scratch, "provider");
+    expect(fr_write_plugin_provider(provider, fr_plugin_no_hooks_source()));
+    app := dr_path(scratch, "app");
+    expect(fr_write_plugin_consumer(app, provider, ", options = .[{key = \"bogus\", value = \"1\"}]"));
+
+    result, output, errors := dr_run(app, string.["build"]);
+    expect(result.exit_code != 0);
+    combined := tprint("%\n%", output, errors);
+    expect(contains(combined, "bogus") || contains(combined, "unknown"));
+} @test
+
+final_review_plugin_entry_through_load_closure :: () {
+    scratch := dr_scratch("fr-plugin-closure");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    provider := dr_path(scratch, "provider");
+    // The selected module entry only #loads its implementation, which carries
+    // the module's single get_juice_plugin value.
+    expect(fr_write_plugin_provider(provider, "#load \"implementation.jai\";\n"));
+    expect(dr_write_file(provider, "implementation.jai", fr_plugin_no_hooks_source()));
+    app := dr_path(scratch, "app");
+    expect(fr_write_plugin_consumer(app, provider, ""));
+
+    result, output, errors := dr_run(app, string.["run"]);
+    if result.exit_code != 0 print("[fr] load-closure child:\n%\n%\n", output, errors);
+    expect(expect_exit("plugin-entry-through-load", result, 0));
+    expect(contains(output, "PLUGIN_APP_OK"));
+} @test

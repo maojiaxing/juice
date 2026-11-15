@@ -480,21 +480,30 @@ resolve_reference_module :: (
     return out;
 }
 
-// Count the plugin entry anchors in ONE module entry file (the selected public
-// module — not the whole package): the provider advertises a plugin through the
-// module the enablement selected, so an unrelated module's anchor never
-// activates. Lexical recognition only (the contract above), so the file need
-// not compile.
-plugin_entry_anchor_count :: (entry_path: string) -> (s64, string, bool) {
-    source, read_ok := read_entire_file(entry_path);
-    if !read_ok return 0, "", false;
-    s := normalize_view_line_endings(source);
-    tokens := lex_source(s);
-    count := 0;
-    for i: 0..tokens.count-1 {
-        if is_juice_plugin_anchor(s, tokens, i) count += 1;
+// Count the plugin entry anchors of the selected public module: its own entry
+// file plus every file that entry reaches through literal in-package #load
+// edges. The module VALUE is what counts, not the spelling location, so an
+// entry that only `#load`s its implementation file carrying the single
+// get_juice_plugin is valid. Lexical recognition only (the contract above), so
+// the closure need not compile. The second result is the module's closure text
+// in probe order, used by the hooks-face probe.
+plugin_entry_anchor_count :: (package_root: string, entry_path: string) -> (s64, string, bool) {
+    entry_rel := scan_rel_path(entry_path, package_root);
+    closure, probe_ok := probe_package_closure(package_root, entry_rel);
+    if !probe_ok return 0, "", false;
+    count: s64 = 0;
+    builder: String_Builder;
+    for file: closure {
+        source, read_ok := read_entire_file(tprint("%1/%2", package_root, file.file.rel_path));
+        if !read_ok return 0, "", false;
+        normalized := normalize_view_line_endings(source);
+        tokens := lex_source(normalized);
+        for i: 0..tokens.count-1 {
+            if is_juice_plugin_anchor(normalized, tokens, i) count += 1;
+        }
+        print_to_builder(*builder, "%\n", normalized);
     }
-    return count, s, true;
+    return count, builder_to_string(*builder), true;
 }
 
 // Whether the consumer's ordinary dependencies already select this exact
@@ -555,7 +564,7 @@ resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Reso
             continue;
         }
 
-        count, _, read_ok := plugin_entry_anchor_count(resolved.entry_path);
+        count, _, read_ok := plugin_entry_anchor_count(resolved.provider_dir, resolved.entry_path);
         if !read_ok {
             array_add(*out.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin module source could not be read: %", resolved.entry_path), fatal = true});
             out.ok = false;
@@ -641,16 +650,11 @@ plugin_scan_result_from_sources :: (discovery: Workspace_Discovery, resolved: Pl
 
     shim_dir_ready := false;
     for source: resolved.sources {
-        // The hooks-face probe (ticket 060): an IDENT token "hooks" in the
-        // selected module's entry marks the result — the prepare's
-        // conservative host trigger.
-        count, text, read_ok := plugin_entry_anchor_count(source.entry_path);
-        if read_ok && count == 1 {
-            tokens := lex_source(text);
-            for token: tokens {
-                if token.kind == .IDENT && token_text(text, token) == "hooks" result.has_hooks = true;
-            }
-        }
+        // Every enabled external plugin needs the host: only a compiled child
+        // can read the module's real values, and the ABI/options check must not
+        // depend on whether the entry happens to spell its hooks face
+        // (decision 22: unknown or invalid options fail before any hook).
+        result.has_hooks = true;
 
         if !shim_dir_ready {
             shim_dir := packages_dir(discovery.root_dir);
