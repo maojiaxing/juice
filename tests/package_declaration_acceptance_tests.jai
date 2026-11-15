@@ -212,7 +212,7 @@ acceptance_a11_moved_root_is_new_context :: () {
 
     // A changed cwd inside the same project does not re-resolve: invoking from
     // a source subdirectory keeps the record of the package root found upward.
-    subdirectory_result, subdirectory_output, subdirectory_errors := dr_run(dr_path(original, "src"), string.["build"]);
+    subdirectory_result, subdirectory_output, subdirectory_errors := run_otter_child_at(dr_path(original, "src"), string.["build"]);
     expect(expect_exit("a11-subdirectory-build", subdirectory_result, 0));
     expect(output_matches("a11-subdirectory-build", tprint("%\n%", subdirectory_output, subdirectory_errors), .["Compiling Target 'app'"]));
     subdirectory_exit, subdirectory_run := dr_run_app(original);
@@ -258,7 +258,7 @@ acceptance_a11_xdg_relative_falls_back :: () {
     expect(dr_write_file(app, "package.jai", dr_package_source("app", "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n")));
     expect(build_seam_write(dr_path(app, "src"), "main.jai", "#import \"Basic\";\n\nmain :: () {\n    print(\"fallback\\n\");\n}\n"));
 
-    result, output, errors := dr_run(app, string.["build"]);
+    result, output, errors := run_otter_child_at(app, string.["build"]);
     combined := tprint("%\n%", output, errors);
     expect(expect_exit("a11-xdg-relative", result, 0));
     expect(output_matches("a11-xdg-relative", combined, .[
@@ -319,7 +319,7 @@ acceptance_a12_git_provider_workspace_boundary :: () {
     expect(dr_git_commit_all(repository, "consumer member reference").count == 40);
     escaping := dr_path(scratch, "escaping-app");
     expect(dr_write_app(escaping, body, provider_source));
-    escape_result, escape_output, escape_errors := dr_run(escaping, string.["build"]);
+    escape_result, escape_output, escape_errors := run_otter_child_at(escaping, string.["build"]);
     escape_combined := tprint("%\n%", escape_output, escape_errors);
     expect(escape_result.exit_code != 0);
     expect(contains(escape_combined, "not a workspace member") || contains(escape_combined, "WORKSPACE path escapes") || contains(escape_combined, "workspace"));
@@ -350,7 +350,7 @@ acceptance_a13_unselected_invalid_member_blocks :: () {
 
     // Selecting only the healthy package still fails: the member set is
     // validated as a whole before the selection runs.
-    result, output, errors := dr_run(workspace, string.["build", "-p", "good"]);
+    result, output, errors := run_otter_child_at(workspace, string.["build", "-p", "good"]);
     combined := tprint("%\n%", output, errors);
     expect(result.exit_code != 0);
     expect(contains(combined, "'type' is not a member of Package"));
@@ -358,10 +358,10 @@ acceptance_a13_unselected_invalid_member_blocks :: () {
     expect(!file_exists(target_artifact_path(package_target_dir(good), "good")));
 
     // The same is true for run and test: no partial command work happens.
-    run_result, run_output, run_errors := dr_run(workspace, string.["run", "-p", "good"]);
+    run_result, run_output, run_errors := run_otter_child_at(workspace, string.["run", "-p", "good"]);
     expect(run_result.exit_code != 0);
     expect(contains(tprint("%\n%", run_output, run_errors), "'type' is not a member of Package"));
-    test_result, test_output, test_errors := dr_run(workspace, string.["test", "-p", "good"]);
+    test_result, test_output, test_errors := run_otter_child_at(workspace, string.["test", "-p", "good"]);
     expect(test_result.exit_code != 0);
     expect(contains(tprint("%\n%", test_output, test_errors), "'type' is not a member of Package"));
 } @test
@@ -395,7 +395,7 @@ acceptance_a15_entry_through_link_is_rejected :: () {
         }
     }
 
-    result, output, errors := dr_run(package_directory, string.["build"]);
+    result, output, errors := run_otter_child_at(package_directory, string.["build"]);
     combined := tprint("%\n%", output, errors);
     expect(result.exit_code != 0);
     expect(contains(combined, "Product entry is not a regular link-free file: via_link/main.jai"));
@@ -419,7 +419,7 @@ acceptance_a15_case_identity_and_cross_category_names :: () {
     expect(dr_write_file(package_directory, "tool.jai", "Tool_Value :: 3;\n"));
     expect(build_seam_write(dr_path(package_directory, "src"), "main.jai", "#import \"Basic\";\n#import \"tool\";\n\nmain :: () {\n    print(\"tool=%\\n\", Tool_Value);\n}\n"));
 
-    result, output, errors := dr_run(package_directory, string.["build"]);
+    result, output, errors := run_otter_child_at(package_directory, string.["build"]);
     combined := tprint("%\n%", output, errors);
     #if OS == .WINDOWS {
         expect(expect_exit("a15-case-identity", result, 0));

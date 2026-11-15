@@ -406,18 +406,18 @@ command_selection_update_scope_cli :: () {
     expect(dr_write_file(git_member, "package.jai", git_declaration));
 
     // Offline update is rejected before any declaration work.
-    offline, offline_output, offline_errors := dr_run(root, string.["update", "--offline"]);
+    offline, offline_output, offline_errors := run_otter_child_at(root, string.["update", "--offline"]);
     expect(expect_exit("update-offline", offline, 1));
     expect(output_matches("update-offline", tprint("%\n%", offline_output, offline_errors), .["update cannot run offline"]));
 
     // Updating the plain member never resolves the Git source.
-    plain, plain_output, plain_errors := dr_run(root, string.["update", "-p", "plain"]);
+    plain, plain_output, plain_errors := run_otter_child_at(root, string.["update", "-p", "plain"]);
     expect(expect_exit("update-plain", plain, 0));
     expect(output_matches("update-plain", tprint("%\n%", plain_output, plain_errors), .["Dependency resolution graph updated."]));
     expect(!dr_content_has_commit(scratch, commit));
 
     // Updating the whole workspace does resolve it, once.
-    all, all_output, all_errors := dr_run(root, string.["update", "--workspace"]);
+    all, all_output, all_errors := run_otter_child_at(root, string.["update", "--workspace"]);
     expect(expect_exit("update-all", all, 0));
     expect(output_matches("update-all", tprint("%\n%", all_output, all_errors), .["Dependency resolution graph updated."]));
     expect(dr_content_has_commit(scratch, commit));

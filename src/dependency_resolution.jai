@@ -697,18 +697,9 @@ resolution_collect_package_files :: (package_dir: string) -> [..] string, bool {
     }
     visited := visit_files(package_dir, true, *collect, visitor, visit_files = true, visit_directories = true, visit_symlinks = false, follow_directory_symlinks = false);
     if !visited return collect.files, false;
-    // Stable, deterministic file order (insertion sort, matching the shim
-    // enumeration convention).
-    for file_index: 1..collect.files.count-1 {
-        if file_index >= collect.files.count break;
-        key := collect.files[file_index];
-        insertion_index := file_index - 1;
-        while insertion_index >= 0 && compare(collect.files[insertion_index], key) > 0 {
-            collect.files[insertion_index+1] = collect.files[insertion_index];
-            insertion_index -= 1;
-        }
-        collect.files[insertion_index+1] = key;
-    }
+    // Stable, deterministic file order: the same lexicographic sort the shim
+    // enumeration uses.
+    sort_strings_lexicographically(collect.files);
     return collect.files, true;
 }
 

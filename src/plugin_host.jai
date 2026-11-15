@@ -128,10 +128,14 @@ Plugin_Preparation :: struct {
     diagnostics: [..] Plugin_Scan_Diagnostic;
 }
 
-// Prepare one package's plugins. Resolving a package that already has a
-// context is a no-op that returns the SAME context (the single-prepare
-// guarantee); a new package appends a context with prepare_count = 1.
-prepare_plugins_once :: (preparation: *Plugin_Preparation, prepared: *Prepared_Workspace, package: Normalized_Package) -> *Prepared_Package_Plugins {
+// The single-prepare interface of the command layer: prepare one package's
+// plugins. Resolving a package that already has a context is a no-op that
+// returns the SAME context (the single-prepare guarantee); a new package
+// appends a context with prepare_count = 1. A build front that runs once per
+// package, a second program of the same package and an idempotent prerequisite
+// phase all come through here, so plugins are prepared once and the view is
+// consumed once.
+plugin_prepare_once_for :: (preparation: *Plugin_Preparation, prepared: *Prepared_Workspace, package: Normalized_Package) -> *Prepared_Package_Plugins {
     package_root := path_slashes(package.dir);
     for prepared_package, index: preparation.packages {
         if prepared_package.package_dir != package_root continue;
@@ -276,15 +280,6 @@ prepare_package_derived_view :: (
         return false;
     }
     return true;
-}
-
-// The single-prepare read interface for the command layer: the package's
-// context, prepared on first use and reused afterwards. A build front that
-// runs once per package, a second program of the same package and an
-// idempotent prerequisite phase all come through here, so plugins are
-// prepared once and the view is consumed once.
-plugin_prepare_once_for :: (preparation: *Plugin_Preparation, prepared: *Prepared_Workspace, package: Normalized_Package) -> *Prepared_Package_Plugins {
-    return prepare_plugins_once(preparation, prepared, package);
 }
 
 // Command-level plugin preparation of the ROOT package: the pre-0092 entry

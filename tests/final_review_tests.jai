@@ -55,7 +55,7 @@ final_review_member_imports_are_package_scoped :: () {
     expect(fr_write_program(beta, "beta", "    executables = .[.{name = \"beta\", entry = \"src/main.jai\"}],\n", "#import \"Basic\";\n#import \"Secret\";\n\nmain :: () { print(\"BETA_SECRET=%\\n\", Secret_Value); }\n"));
 
     // The declaring member resolves its own dependency.
-    alpha_run, alpha_output, alpha_errors := dr_run(alpha, string.["run"]);
+    alpha_run, alpha_output, alpha_errors := run_otter_child_at(alpha, string.["run"]);
     expect(expect_exit("member-own-dependency", alpha_run, 0));
     expect(contains(alpha_output, "ALPHA_SECRET=11"));
     // The import shim lives in the declaring package's private zone, never in
@@ -64,12 +64,12 @@ final_review_member_imports_are_package_scoped :: () {
     expect(!file_exists(tprint("%1/Secret.jai", dependency_imports_dir(root))));
 
     // The sibling member never sees the name -- alone or in the same batch.
-    beta_result, beta_output, beta_errors := dr_run(beta, string.["build"]);
+    beta_result, beta_output, beta_errors := run_otter_child_at(beta, string.["build"]);
     expect(beta_result.exit_code != 0);
     beta_combined := tprint("%\n%", beta_output, beta_errors);
     expect(contains(beta_combined, "Secret"));
 
-    batch_result, batch_output, batch_errors := dr_run(root, string.["build", "--workspace"]);
+    batch_result, batch_output, batch_errors := run_otter_child_at(root, string.["build", "--workspace"]);
     expect(batch_result.exit_code != 0);
     batch_combined := tprint("%\n%", batch_output, batch_errors);
     expect(contains(batch_combined, "Secret"));
@@ -89,7 +89,7 @@ final_review_root_modules_are_not_member_imports :: () {
     member := dr_path(root, "members/alpha");
     expect(fr_write_program(member, "alpha", "    executables = .[.{name = \"alpha\", entry = \"src/main.jai\"}],\n", "#import \"Basic\";\n#import \"RootApi\";\n\nmain :: () { print(\"MEMBER_ROOT=%\\n\", Root_Value); }\n"));
 
-    result, output, errors := dr_run(member, string.["build"]);
+    result, output, errors := run_otter_child_at(member, string.["build"]);
     expect(result.exit_code != 0);
     combined := tprint("%\n%", output, errors);
     expect(contains(combined, "RootApi"));
@@ -112,13 +112,13 @@ final_review_members_may_share_an_alias :: () {
     beta := dr_path(root, "members/beta");
     expect(fr_write_program(beta, "beta", fr_path_dependency("provider_two", provider_two, "Data"), "#import \"Basic\";\n#import \"Data\";\n\nmain :: () { print(\"BETA_DATA=%\\n\", Data_Value); }\n"));
 
-    batch_result, batch_output, batch_errors := dr_run(root, string.["build", "--workspace"]);
+    batch_result, batch_output, batch_errors := run_otter_child_at(root, string.["build", "--workspace"]);
     expect(expect_exit("members-share-alias", batch_result, 0));
 
-    alpha_run, alpha_output, alpha_errors := dr_run(alpha, string.["run"]);
+    alpha_run, alpha_output, alpha_errors := run_otter_child_at(alpha, string.["run"]);
     expect(expect_exit("alpha-alias-value", alpha_run, 0));
     expect(contains(alpha_output, "ALPHA_DATA=1"));
-    beta_run, beta_output, beta_errors := dr_run(beta, string.["run"]);
+    beta_run, beta_output, beta_errors := run_otter_child_at(beta, string.["run"]);
     expect(expect_exit("beta-alias-value", beta_run, 0));
     expect(contains(beta_output, "BETA_DATA=2"));
 } @test
@@ -145,7 +145,7 @@ final_review_provider_import_name_collision :: () {
     app_body := tprint("%1    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", fr_path_dependency("middle", middle, "Middle"));
     expect(fr_write_program(app, "app", app_body, "#import \"Basic\";\n#import \"Middle\";\n\nmain :: () { print(\"MIDDLE=%\\n\", Middle_Value()); }\n"));
 
-    result, output, errors := dr_run(app, string.["build"]);
+    result, output, errors := run_otter_child_at(app, string.["build"]);
     expect(result.exit_code != 0);
     combined := tprint("%\n%", output, errors);
     expect(contains(combined, "declared twice") || contains(combined, "two different modules"));
@@ -165,7 +165,7 @@ final_review_provider_duplicate_module_selection :: () {
     app_body := tprint("%1    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", fr_path_dependency("middle", middle, "Middle"));
     expect(fr_write_program(app, "app", app_body, "#import \"Basic\";\n#import \"Middle\";\n\nmain :: () { print(\"MIDDLE=%\\n\", Middle_Value()); }\n"));
 
-    result, output, errors := dr_run(app, string.["build"]);
+    result, output, errors := run_otter_child_at(app, string.["build"]);
     expect(result.exit_code != 0);
     combined := tprint("%\n%", output, errors);
     expect(contains(combined, "selected more than once"));
@@ -185,7 +185,7 @@ final_review_local_path_is_not_parent_bounded :: () {
     app_body := tprint("%1    executables = .[.{name = \"cli\", entry = \"src/main.jai\"}],\n", fr_path_dependency("core", library, "Core"));
     expect(fr_write_program(app, "cli", app_body, "#import \"Basic\";\n#import \"Core\";\n\nmain :: () { print(\"CLI_CORE=%\\n\", Core_Value); }\n"));
 
-    result, output, errors := dr_run(app, string.["run"]);
+    result, output, errors := run_otter_child_at(app, string.["run"]);
     expect(expect_exit("local-path-sibling", result, 0));
     expect(contains(output, "CLI_CORE=34"));
 } @test
@@ -215,7 +215,7 @@ final_review_git_internal_path_chain :: () {
     body := copy_string(tprint("    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"chain\", source = .{kind = .GIT, git = .{url = %1}}, modules = .[.{path = \"pkg_a\", name = \"pkg_a\", alias = \"A\"}]},\n    ],\n", quote_jai_string(repository)));
     expect(fr_write_program(app, "app", body, "#import \"Basic\";\n#import \"A\";\n\nmain :: () { print(\"CHAIN=%\\n\", A_Value()); }\n"));
 
-    result, output, errors := dr_run(app, string.["run"]);
+    result, output, errors := run_otter_child_at(app, string.["run"]);
     expect(expect_exit("git-internal-chain", result, 0));
     expect(contains(output, "CHAIN=8"));
 } @test
@@ -248,10 +248,10 @@ final_review_consumer_contexts_are_independent :: () {
     beta_body := tprint("%1    executables = .[.{name = \"beta\", entry = \"src/main.jai\"}],\n", fr_path_dependency("http", http, "HttpLib"));
     expect(fr_write_program(beta, "beta", beta_body, "#import \"Basic\";\n#import \"HttpLib\";\n\nmain :: () { print(\"BETA=%\\n\", Http_Value()); }\n"));
 
-    alpha_first, alpha_first_output, alpha_first_errors := dr_run(alpha, string.["run"]);
+    alpha_first, alpha_first_output, alpha_first_errors := run_otter_child_at(alpha, string.["run"]);
     expect(expect_exit("alpha-first", alpha_first, 0));
     expect(contains(alpha_first_output, "ALPHA=1"));
-    beta_first, beta_first_output, beta_first_errors := dr_run(beta, string.["run"]);
+    beta_first, beta_first_output, beta_first_errors := run_otter_child_at(beta, string.["run"]);
     expect(expect_exit("beta-first", beta_first, 0));
     expect(contains(beta_first_output, "BETA=1"));
 
@@ -259,15 +259,15 @@ final_review_consumer_contexts_are_independent :: () {
     expect(dr_write_module_provider(crypto, "crypto", "Crypto_Value :: 2;\n"));
     second_commit := copy_string(dr_git_commit_all(crypto, "crypto second"));
     expect(second_commit.count == 40 && second_commit != first_commit);
-    alpha_update, alpha_update_output, alpha_update_errors := dr_run(alpha, string.["update"]);
+    alpha_update, alpha_update_output, alpha_update_errors := run_otter_child_at(alpha, string.["update"]);
     expect(expect_exit("alpha-update", alpha_update, 0));
 
-    alpha_second, alpha_second_output, alpha_second_errors := dr_run(alpha, string.["run"]);
+    alpha_second, alpha_second_output, alpha_second_errors := run_otter_child_at(alpha, string.["run"]);
     expect(expect_exit("alpha-second", alpha_second, 0));
     expect(contains(alpha_second_output, "ALPHA=2"));
 
     // beta never updated, so its ordinary build keeps its own selection.
-    beta_second, beta_second_output, beta_second_errors := dr_run(beta, string.["run"]);
+    beta_second, beta_second_output, beta_second_errors := run_otter_child_at(beta, string.["run"]);
     expect(expect_exit("beta-second", beta_second, 0));
     expect(contains(beta_second_output, "BETA=1"));
     expect(!contains(beta_second_output, "BETA=2"));
@@ -336,14 +336,14 @@ final_review_no_hook_plugin_is_validated :: () {
     app := dr_path(scratch, "app");
     expect(fr_write_plugin_consumer(app, provider, ""));
 
-    result, output, errors := dr_run(app, string.["run"]);
+    result, output, errors := run_otter_child_at(app, string.["run"]);
     if result.exit_code != 0 print("[fr] valid-no-hook child:\n%\n%\n", output, errors);
     expect(expect_exit("valid-no-hook-plugin", result, 0));
     expect(contains(output, "PLUGIN_APP_OK"));
 
     // The same plugin module with a foreign ABI must fail before anything runs.
     expect(dr_write_file(provider, "plugin.jai", fr_plugin_bad_abi_source()));
-    bad_result, bad_output, bad_errors := dr_run(app, string.["build"]);
+    bad_result, bad_output, bad_errors := run_otter_child_at(app, string.["build"]);
     expect(bad_result.exit_code != 0);
     bad_combined := tprint("%\n%", bad_output, bad_errors);
     expect(contains(bad_combined, "ABI") || contains(bad_combined, "incompatible"));
@@ -358,7 +358,7 @@ final_review_no_hook_plugin_rejects_unknown_options :: () {
     app := dr_path(scratch, "app");
     expect(fr_write_plugin_consumer(app, provider, ", options = .[{key = \"bogus\", value = \"1\"}]"));
 
-    result, output, errors := dr_run(app, string.["build"]);
+    result, output, errors := run_otter_child_at(app, string.["build"]);
     expect(result.exit_code != 0);
     combined := tprint("%\n%", output, errors);
     expect(contains(combined, "bogus") || contains(combined, "unknown"));
@@ -376,7 +376,7 @@ final_review_plugin_entry_through_load_closure :: () {
     app := dr_path(scratch, "app");
     expect(fr_write_plugin_consumer(app, provider, ""));
 
-    result, output, errors := dr_run(app, string.["run"]);
+    result, output, errors := run_otter_child_at(app, string.["run"]);
     if result.exit_code != 0 print("[fr] load-closure child:\n%\n%\n", output, errors);
     expect(expect_exit("plugin-entry-through-load", result, 0));
     expect(contains(output, "PLUGIN_APP_OK"));
@@ -418,7 +418,7 @@ final_review_plugin_id_cannot_overwrite_business_alias :: () {
     app_body := tprint("%1    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", fr_path_dependency("business", business, "Tool"));
     expect(fr_write_program(dr_path(scratch, "app"), "plugin_app", app_body, "#import \"Basic\";\n#import \"Tool\";\n\nmain :: () { print(\"API=%\\n\", Get_Value()); }\n"));
     app := dr_path(scratch, "app");
-    control, control_output, control_errors := dr_run(app, string.["run"]);
+    control, control_output, control_errors := run_otter_child_at(app, string.["run"]);
     if control.exit_code != 0 print("[fr] alias control:'+chr(92)+'n%'+chr(92)+'n%'+chr(92)+'n", control_output, control_errors);
     expect(expect_exit("plugin-alias-control", control, 0));
     expect(contains(control_output, "API=7"));
@@ -427,7 +427,7 @@ final_review_plugin_id_cannot_overwrite_business_alias :: () {
     plugins := copy_string(tprint("    plugins = Plugin_Declaration.[.{id = \"Tool\", source = .{kind = .PATH, path = %1}, module = .{name = \"plugin_module\"}}],\n", quote_jai_string(plugin_provider)));
     with_plugin := tprint("%1%2    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", fr_path_dependency("business", business, "Tool"), plugins);
     expect(fr_write_program(app, "plugin_app", with_plugin, "#import \"Basic\";\n#import \"Tool\";\n\nmain :: () { print(\"API=%\\n\", Get_Value()); }\n"));
-    collision, collision_output, collision_errors := dr_run(app, string.["run"]);
+    collision, collision_output, collision_errors := run_otter_child_at(app, string.["run"]);
     if collision.exit_code != 0 print("[fr] collision:'+chr(92)+'n%'+chr(92)+'n%'+chr(92)+'n", collision_output, collision_errors);
     expect(expect_exit("plugin-alias-collision", collision, 0));
     expect(contains(collision_output, "API=7"));
@@ -445,7 +445,7 @@ final_review_plugin_alone_exposes_no_ordinary_import :: () {
     plugins := copy_string(tprint("    plugins = Plugin_Declaration.[.{id = \"Tool\", source = .{kind = .PATH, path = %1}, module = .{name = \"plugin_module\"}}],\n", quote_jai_string(plugin_provider)));
     expect(fr_write_program(app, "plugin_app", tprint("%1    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", plugins), "#import \"Basic\";\n#import \"Tool\";\n\nmain :: () { print(\"API=%\\n\", Get_Value()); }\n"));
 
-    result, output, errors := dr_run(app, string.["build"]);
+    result, output, errors := run_otter_child_at(app, string.["build"]);
     expect(result.exit_code != 0);
     combined := tprint("%\n%", output, errors);
     expect(contains(combined, "Tool"));
@@ -557,7 +557,7 @@ final_review_member_test_uses_member_config :: () {
     expect(dr_write_file(member, "module.jai", "alpha_value :: () -> s64 { return 3; }\n"));
     expect(dr_write_file(dr_path(member, "tests"), "alpha_tests.jai", "alpha_good_name :: () {\n    expect(alpha_value() == 3);\n} @test\n"));
 
-    result, output, errors := dr_run(member, string.["test"]);
+    result, output, errors := run_otter_child_at(member, string.["test"]);
     combined := tprint("%\n%", output, errors);
     if result.exit_code != 0 print("[fr] member-config child:\n%\n", combined);
     expect(expect_exit("member-config", result, 0));
@@ -582,7 +582,7 @@ final_review_member_lint_runs_with_member_paths :: () {
     expect(dr_write_file(member, "module.jai", "beta_value :: () -> s64 { return 4; }\n"));
     expect(dr_write_file(dr_path(member, "tests"), "beta_tests.jai", "BadTestOne :: () {\n    expect(beta_value() == 4);\n} @test\n"));
 
-    result, output, errors := dr_run(member, string.["test"]);
+    result, output, errors := run_otter_child_at(member, string.["test"]);
     combined := tprint("%\n%", output, errors);
     if result.exit_code == 0 print("[fr] member-lint child:\n%\n", combined);
     // Probe 09: pre-fix the member's lint never ran, so the run exited 0.
@@ -657,7 +657,7 @@ final_review_plugin_git_source_is_recorded :: () {
     app := dr_path(scratch, "app");
     expect(s06_write_app(app, repo));
 
-    built, built_output, built_errors := dr_run(app, string.["build"]);
+    built, built_output, built_errors := run_otter_child_at(app, string.["build"]);
     if built.exit_code != 0 print("[fr] plugin-git first build:\n%\n", tprint("%\n%", built_output, built_errors));
     expect(expect_exit("plugin-git-first", built, 0));
 
@@ -672,7 +672,7 @@ final_review_plugin_git_source_is_recorded :: () {
     // The remote moves on; the recorded build must still resolve the record.
     second := s06_write_plugin_repo(repo, tprint("%1\nS06_Extra :: 1;\n", S06_PLUGIN_MODULE_SOURCE));
     expect(second != "" && second != first);
-    recorded, recorded_output, recorded_errors := dr_run(app, string.["build"]);
+    recorded, recorded_output, recorded_errors := run_otter_child_at(app, string.["build"]);
     if recorded.exit_code != 0 print("[fr] plugin-git recorded build:\n%\n", tprint("%\n%", recorded_output, recorded_errors));
     expect(expect_exit("plugin-git-recorded", recorded, 0));
     after_text, after_ok := s06_read_state(app);
@@ -681,7 +681,7 @@ final_review_plugin_git_source_is_recorded :: () {
     expect(!contains(after_text, second));
 
     // Offline: the record alone answers the resolution.
-    offline, offline_output, offline_errors := dr_run(app, string.["build", "--offline"]);
+    offline, offline_output, offline_errors := run_otter_child_at(app, string.["build", "--offline"]);
     if offline.exit_code != 0 print("[fr] plugin-git offline:\n%\n", tprint("%\n%", offline_output, offline_errors));
     expect(expect_exit("plugin-git-offline", offline, 0));
 
@@ -690,7 +690,7 @@ final_review_plugin_git_source_is_recorded :: () {
     // observation rather than a file the earlier builds left behind.
     artifact := target_artifact_path(package_target_dir(app), "s06_app");
     expect(file_delete(artifact));
-    updated, updated_output, updated_errors := dr_run(app, string.["update"]);
+    updated, updated_output, updated_errors := run_otter_child_at(app, string.["update"]);
     updated_text := tprint("%\n%", updated_output, updated_errors);
     if updated.exit_code != 0 print("[fr] plugin-git update:\n%\n", updated_text);
     expect(expect_exit("plugin-git-update", updated, 0));
@@ -715,7 +715,7 @@ final_review_plugin_failure_keeps_previous_state :: () {
     app := dr_path(scratch, "app");
     expect(s06_write_app(app, repo));
 
-    built, built_output, built_errors := dr_run(app, string.["build"]);
+    built, built_output, built_errors := run_otter_child_at(app, string.["build"]);
     if built.exit_code != 0 print("[fr] rollback first build:\n%\n", tprint("%\n%", built_output, built_errors));
     expect(expect_exit("plugin-git-rollback-first", built, 0));
 
@@ -723,7 +723,7 @@ final_review_plugin_failure_keeps_previous_state :: () {
     broken := s06_write_plugin_repo(repo, "#import \"Basic\";\n\nNot_A_Plugin :: 1;\n");
     expect(broken != "" && broken != good);
 
-    failed, failed_output, failed_errors := dr_run(app, string.["update"]);
+    failed, failed_output, failed_errors := run_otter_child_at(app, string.["update"]);
     failed_text := tprint("%\n%", failed_output, failed_errors);
     expect(failed.exit_code != 0);
     expect(contains(failed_text, "Plugin capability missing"));
@@ -752,7 +752,7 @@ final_review_dependency_name_grammar_is_enforced :: () {
     body := tprint("    dependencies = Dependency.[.{name = \"bad name\", source = .{kind = .PATH, path = %1}, modules = .[.{alias = \"Bad\"}]}],\n    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", quote_jai_string(provider));
     expect(fr_write_program(app, "app", body, "#import \"Basic\";\n\nmain :: () { print(\"NOPE\\n\"); }\n"));
 
-    result, output, errors := dr_run(app, string.["build"]);
+    result, output, errors := run_otter_child_at(app, string.["build"]);
     combined := tprint("%\n%", output, errors);
     // Probe: pre-fix this build succeeded with the name accepted verbatim.
     expect(result.exit_code != 0);
@@ -761,7 +761,7 @@ final_review_dependency_name_grammar_is_enforced :: () {
     // A plugin id outside the identifier grammar is rejected at declaration time.
     plugin_body := "    plugins = Plugin_Declaration.[.{id = \"../escaped\", source = .{kind = .PATH, path = \"vendor/p\"}, module = .{name = \"p\"}}],\n    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n";
     expect(fr_write_program(dr_path(scratch, "app2"), "app2", plugin_body, "#import \"Basic\";\n\nmain :: () { print(\"NOPE\\n\"); }\n"));
-    plugin_result, plugin_output, plugin_errors := dr_run(dr_path(scratch, "app2"), string.["build"]);
+    plugin_result, plugin_output, plugin_errors := run_otter_child_at(dr_path(scratch, "app2"), string.["build"]);
     plugin_combined := tprint("%\n%", plugin_output, plugin_errors);
     expect(plugin_result.exit_code != 0);
     expect(contains(plugin_combined, "Invalid plugin id"));
@@ -776,11 +776,11 @@ final_review_program_name_match_is_ascii_insensitive :: () {
     app := dr_path(scratch, "app");
     expect(fr_write_program(app, "app", "    executables = .[.{name = \"Tool\", entry = \"src/main.jai\"}],\n", "#import \"Basic\";\n\nmain :: () { print(\"TOOL_RAN\\n\"); }\n"));
 
-    built, built_output, built_errors := dr_run(app, string.["build"]);
+    built, built_output, built_errors := run_otter_child_at(app, string.["build"]);
     if built.exit_code != 0 print("[fr] program-case build:\n%\n", tprint("%\n%", built_output, built_errors));
     expect(expect_exit("program-case-build", built, 0));
 
-    lower, lower_output, lower_errors := dr_run(app, string.["run", "tool"]);
+    lower, lower_output, lower_errors := run_otter_child_at(app, string.["run", "tool"]);
     if lower.exit_code != 0 print("[fr] program-case run tool:\n%\n", tprint("%\n%", lower_output, lower_errors));
     expect(expect_exit("program-case-run-lower", lower, 0));
     expect(contains(lower_output, "TOOL_RAN"));
@@ -810,7 +810,7 @@ final_review_unusable_cache_root_fails_the_command :: () {
 
     app := dr_path(scratch, "app");
     expect(fr_write_program(app, "app", "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", "#import \"Basic\";\n\nmain :: () { print(\"XDG_OK\\n\"); }\n"));
-    result, output, errors := dr_run(app, string.["build"]);
+    result, output, errors := run_otter_child_at(app, string.["build"]);
     combined := tprint("%\n%", output, errors);
     if result.exit_code == 0 print("[fr] xdg-cache child:\n%\n", combined);
     // Pre-fix: the failure flag was ignored and the build reported success.
@@ -834,7 +834,7 @@ final_review_unusable_state_root_fails_the_command :: () {
 
     app := dr_path(scratch, "app");
     expect(fr_write_program(app, "app", "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", "#import \"Basic\";\n\nmain :: () { print(\"XDG_OK\\n\"); }\n"));
-    result, output, errors := dr_run(app, string.["build"]);
+    result, output, errors := run_otter_child_at(app, string.["build"]);
     combined := tprint("%\n%", output, errors);
     if result.exit_code == 0 print("[fr] xdg-state child:\n%\n", combined);
     expect(result.exit_code != 0);
@@ -852,7 +852,7 @@ final_review_evaluator_cache_uses_typed_root :: () {
     app := dr_path(scratch, "app");
     expect(fr_write_program(app, "app", "    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", "#import \"Basic\";\n\nmain :: () { print(\"XDG_OK\\n\"); }\n"));
 
-    built, built_output, built_errors := dr_run(app, string.["build"]);
+    built, built_output, built_errors := run_otter_child_at(app, string.["build"]);
     if built.exit_code != 0 print("[fr] xdg-evaluator child:\n%\n", tprint("%\n%", built_output, built_errors));
     expect(expect_exit("xdg-evaluator", built, 0));
 
@@ -920,7 +920,7 @@ final_review_plugin_provider_dependencies_resolve :: () {
     plugins := copy_string(tprint("    plugins = Plugin_Declaration.[.{id = \"s06_provider_plugin\", source = .{kind = .GIT, git = .{url = %1}}, module = .{name = \"plugin_module\"}}],\n", quote_jai_string(repo)));
     expect(fr_write_program(app, "s06_app", plugins, "#import \"Basic\";\n\nmain :: () { print(\"S06_PROVIDER_OK\\n\"); }\n"));
 
-    built, built_output, built_errors := dr_run(app, string.["build"]);
+    built, built_output, built_errors := run_otter_child_at(app, string.["build"]);
     combined := tprint("%\n%", built_output, built_errors);
     if built.exit_code != 0 print("[fr] plugin-provider-deps child:\n%\n", combined);
     // Pre-fix: `Undeclared identifier 'HELPER_VALUE'` (or an unresolvable
@@ -932,7 +932,7 @@ final_review_plugin_provider_dependencies_resolve :: () {
     // refreshes it without running any hook.
     artifact := target_artifact_path(package_target_dir(app), "s06_app");
     expect(file_delete(artifact));
-    updated, updated_output, updated_errors := dr_run(app, string.["update"]);
+    updated, updated_output, updated_errors := run_otter_child_at(app, string.["update"]);
     updated_text := tprint("%\n%", updated_output, updated_errors);
     if updated.exit_code != 0 print("[fr] plugin-provider-deps update:\n%\n", updated_text);
     expect(expect_exit("plugin-provider-deps-update", updated, 0));
@@ -1199,7 +1199,7 @@ final_review_generated_helper_joins_the_closure :: () {
     // The retained main loads the generated name instead of the shipped helper.
     expect(dr_write_file(dr_path(app, "src"), "main.jai", "#import \"Basic\";\n\n#load \"gen_helper.jai\";\n\nmain :: () {\n    print(\"S10_GEN=%\\n\", Generated_Helper());\n}\n"));
 
-    built, built_output, built_errors := dr_run(app, string.["build"]);
+    built, built_output, built_errors := run_otter_child_at(app, string.["build"]);
     combined := tprint("%\n%", built_output, built_errors);
     if built.exit_code != 0 print("[fr] generated-closure child:\n%\n", combined);
     expect(expect_exit("generated-closure", built, 0));
@@ -1218,7 +1218,7 @@ final_review_nested_substitution_reaches_the_compile :: () {
     expect(s10_write_app(app, "src/deep.jai", ""));
     expect(s10_write_provider(app));
 
-    built, built_output, built_errors := dr_run(app, string.["build"]);
+    built, built_output, built_errors := run_otter_child_at(app, string.["build"]);
     combined := tprint("%\n%", built_output, built_errors);
     if built.exit_code != 0 print("[fr] nested-substitution child:\n%\n", combined);
     expect(expect_exit("nested-substitution", built, 0));
@@ -1256,7 +1256,7 @@ s01_case :: (scratch_name: string, package_dir: string, package_name: string, mo
     module_source := copy_string(tprint("#import \"Testing\";\n\nOwn_Value :: () -> s64 {\n    return 5;\n}\n\nown_module_bound :: () {\n    expect(Own_Value() == 5);\n} @test\n"));
     test_source := copy_string(tprint("#import \"Testing\";\n#import \"%1\";\n\nconsumer_bound :: () {\n    expect(Own_Value() == 5);\n} @test\n", module_name));
     if !s01_write_package(root, package_name, module_name, module_entry, module_source, test_source) return false, "", "", .{};
-    result, output, errors := dr_run(root, string.["test"]);
+    result, output, errors := run_otter_child_at(root, string.["test"]);
     return true, output, errors, result;
 }
 
@@ -1333,7 +1333,7 @@ final_review_workspace_root_provider_shorthand :: () {
     expect(dr_write_app(child_dir, "    executables = .[.{name = \"child\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"root_api\", source = .{kind = .WORKSPACE}, modules = .[.{alias = \"RootApi\"}]},\n    ],\n",
         "#import \"Basic\";\n#import \"RootApi\";\n\nmain :: () { print(\"root=%\\n\", Root_Value()); }\n"));
 
-    build_result, build_output, build_errors := dr_run(child_dir, string.["build"]);
+    build_result, build_output, build_errors := run_otter_child_at(child_dir, string.["build"]);
     if build_result.exit_code != 0 {
         print("[fr] ws-root-provider build failed:\n%\n%\n", build_output, build_errors);
     }
@@ -1368,7 +1368,7 @@ final_review_pure_workspace_still_needs_explicit_selection :: () {
     // Omitted `modules` with no root package: refused, not guessed.
     expect(dr_write_app(app_a, "    executables = .[.{name = \"alpha\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"beta\", source = .{kind = .WORKSPACE}},\n    ],\n",
         "#import \"Basic\";\n\nmain :: () {}\n"));
-    refused_result, refused_output, refused_errors := dr_run(app_a, string.["build"]);
+    refused_result, refused_output, refused_errors := run_otter_child_at(app_a, string.["build"]);
     refused := tprint("%\n%", refused_output, refused_errors);
     if refused_result.exit_code == 0 print("[fr] pure-workspace omission was accepted:\n%\n", refused);
     expect(refused_result.exit_code != 0);
@@ -1378,7 +1378,7 @@ final_review_pure_workspace_still_needs_explicit_selection :: () {
     // proves the refusal above is the omission rule and not a broken fixture.
     expect(dr_write_app(app_a, "    executables = .[.{name = \"alpha\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"beta\", source = .{kind = .WORKSPACE}, modules = .[.{path = \"apps/beta\", alias = \"Beta\"}]},\n    ],\n",
         "#import \"Basic\";\n#import \"Beta\";\n\nmain :: () { print(\"beta=%\\n\", Beta_Value); }\n"));
-    build_result, build_output, build_errors := dr_run(app_a, string.["build"]);
+    build_result, build_output, build_errors := run_otter_child_at(app_a, string.["build"]);
     if build_result.exit_code != 0 print("[fr] pure-workspace explicit build:\n%\n%\n", build_output, build_errors);
     expect(expect_exit("pure-workspace explicit build", build_result, 0));
     run_result, run_output, run_errors := run_command(dr_path(dr_path(app_a, "target"), "alpha.exe"), capture_and_return_output = true);

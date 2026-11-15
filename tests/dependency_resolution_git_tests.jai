@@ -75,7 +75,7 @@ dependency_resolution_git_reuse_and_update :: () {
     expect(exit_code == 0 && contains(run_output, "value=100"));
 
     // An explicit update refreshes the graph, and the new content compiles.
-    update_result, update_output, update_errors := dr_run(app, string.["update"]);
+    update_result, update_output, update_errors := run_otter_child_at(app, string.["update"]);
     expect(expect_exit("update", update_result, 0, "dependency resolution"));
     expect(contains(dr_state_text(scratch), second_commit));
     expect(dr_build_app(app) == 0);
@@ -83,7 +83,7 @@ dependency_resolution_git_reuse_and_update :: () {
     expect(exit_code == 0 && contains(run_output, "value=200"));
 
     // update and offline are mutually exclusive.
-    offline_update, offline_output, offline_errors := dr_run(app, string.["update", "--offline"]);
+    offline_update, offline_output, offline_errors := run_otter_child_at(app, string.["update", "--offline"]);
     expect(offline_update.exit_code != 0);
     offline_combined := tprint("%\n%", offline_output, offline_errors);
     expect(contains(offline_combined, "update cannot run offline"));
@@ -112,7 +112,7 @@ dependency_resolution_git_content_restore :: () {
     expect(contains(dr_state_text(scratch), first_commit));
 
     // Offline cannot restore missing content.
-    offline_result, offline_output, offline_errors := dr_run(app, string.["build", "--offline"]);
+    offline_result, offline_output, offline_errors := run_otter_child_at(app, string.["build", "--offline"]);
     expect(offline_result.exit_code != 0);
     offline_combined := tprint("%\n%", offline_output, offline_errors);
     expect(contains(offline_combined, "Offline resolution needs cached content"));
@@ -140,7 +140,7 @@ dependency_resolution_offline_matrix :: () {
     // No record: a floating branch is rejected offline.
     app := dr_path(scratch, "app");
     expect(dr_write_git_app(app, repository, "Lib", ", branch = \"main\""));
-    floating_result, floating_output, floating_errors := dr_run(app, string.["build", "--offline"]);
+    floating_result, floating_output, floating_errors := run_otter_child_at(app, string.["build", "--offline"]);
     expect(floating_result.exit_code != 0);
     floating_combined := tprint("%\n%", floating_output, floating_errors);
     expect(contains(floating_combined, "no recorded selection"));
@@ -148,7 +148,7 @@ dependency_resolution_offline_matrix :: () {
     // A short revision does not establish a record offline.
     short_app := dr_path(scratch, "short-app");
     expect(dr_write_git_app(short_app, repository, "Lib", ", rev = \"abcdef1\""));
-    short_result, short_output, short_errors := dr_run(short_app, string.["build", "--offline"]);
+    short_result, short_output, short_errors := run_otter_child_at(short_app, string.["build", "--offline"]);
     expect(short_result.exit_code != 0);
 
     // Establish content online, then a full commit id without a record works
@@ -156,20 +156,20 @@ dependency_resolution_offline_matrix :: () {
     expect(dr_build_app(app) == 0);
     pinned_app := dr_path(scratch, "pinned-app");
     expect(dr_write_git_app(pinned_app, repository, "Lib", copy_string(tprint(", rev = \"%1\"", first_commit))));
-    pinned_result, pinned_output, pinned_errors := dr_run(pinned_app, string.["build", "--offline"]);
+    pinned_result, pinned_output, pinned_errors := run_otter_child_at(pinned_app, string.["build", "--offline"]);
     expect(expect_exit("pinned offline", pinned_result, 0, "dependency resolution"));
     pinned_exit, pinned_run := dr_run_app(pinned_app);
     expect(pinned_exit == 0 && contains(pinned_run, "value=100"));
 
     // A record plus complete content reuses offline.
-    offline_result, offline_output, offline_errors := dr_run(app, string.["build", "--offline"]);
+    offline_result, offline_output, offline_errors := run_otter_child_at(app, string.["build", "--offline"]);
     expect(expect_exit("offline reuse", offline_result, 0, "dependency resolution"));
 
     // A full commit id whose content is absent cannot be established offline.
     unknown_commit := "0123456789abcdef0123456789abcdef01234567";
     unknown_app := dr_path(scratch, "unknown-app");
     expect(dr_write_git_app(unknown_app, repository, "Lib", copy_string(tprint(", rev = \"%1\"", unknown_commit))));
-    unknown_result, unknown_output, unknown_errors := dr_run(unknown_app, string.["build", "--offline"]);
+    unknown_result, unknown_output, unknown_errors := run_otter_child_at(unknown_app, string.["build", "--offline"]);
     expect(unknown_result.exit_code != 0);
     unknown_combined := tprint("%\n%", unknown_output, unknown_errors);
     expect(contains(unknown_combined, "no recorded selection") || contains(unknown_combined, "Offline resolution needs cached content"));
@@ -258,7 +258,7 @@ dependency_resolution_corrupt_state_fails :: () {
         corrupted += 1;
     }
     expect(corrupted > 0);
-    corrupt_result, corrupt_output, corrupt_errors := dr_run(app, string.["build"]);
+    corrupt_result, corrupt_output, corrupt_errors := run_otter_child_at(app, string.["build"]);
     expect(corrupt_result.exit_code != 0);
     corrupt_combined := tprint("%\n%", corrupt_output, corrupt_errors);
     expect(contains(corrupt_combined, "corrupt"));
@@ -285,7 +285,7 @@ dependency_resolution_failure_preserves_old_state :: () {
     expect(dr_write_git_app(broken, repository, "Lib", ", branch = \"main\""));
     broken_body := copy_string(tprint("    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"gitlib\", source = .{kind = .GIT, git = .{url = \"%1\", branch = \"main\"}}, modules = .[.{name = \"Missing\"}]},\n    ],\n", repository));
     expect(dr_write_file(broken, "package.jai", dr_package_source("app", broken_body)));
-    broken_result, broken_output, broken_errors := dr_run(broken, string.["build"]);
+    broken_result, broken_output, broken_errors := run_otter_child_at(broken, string.["build"]);
     expect(broken_result.exit_code != 0);
     broken_combined := tprint("%\n%", broken_output, broken_errors);
     expect(contains(broken_combined, "does not export"));
@@ -298,11 +298,11 @@ dependency_resolution_failure_preserves_old_state :: () {
     // new selection stays recorded (a compile failure does not roll back).
     expect(dr_git_provider_value(repository, 200));
     second_commit := copy_string(dr_git_commit_all(repository, "second"));
-    update_result, update_output, update_errors := dr_run(app, string.["update"]);
+    update_result, update_output, update_errors := run_otter_child_at(app, string.["update"]);
     expect(expect_exit("update", update_result, 0, "dependency resolution"));
     expect(contains(dr_state_text(scratch), second_commit));
     expect(dr_write_file(app, "src/main.jai", "#import \"Basic\";\n\nmain :: () { this is not Jai }\n"));
-    compile_result, compile_output, compile_errors := dr_run(app, string.["build"]);
+    compile_result, compile_output, compile_errors := run_otter_child_at(app, string.["build"]);
     expect(compile_result.exit_code != 0);
     expect(contains(dr_state_text(scratch), second_commit));
 } @test
@@ -348,7 +348,7 @@ dependency_resolution_git_checkout_boundary :: () {
     expect(escape_commit.count == 40);
     escape_app := dr_path(scratch, "escape-app");
     expect(dr_write_git_app_module(escape_app, repository, "Prov", "provider"));
-    escape_result, escape_output, escape_errors := dr_run(escape_app, string.["build"]);
+    escape_result, escape_output, escape_errors := run_otter_child_at(escape_app, string.["build"]);
     expect(escape_result.exit_code != 0);
     escape_combined := tprint("%\n%", escape_output, escape_errors);
     if !contains(escape_combined, "escapes its Git checkout") print("[checkout-boundary] unexpected escape rejection:\n%\n", escape_combined);

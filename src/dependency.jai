@@ -384,7 +384,10 @@ shim_scan_visitor :: (info: *File_Visit_Info, ctx: *Shim_Scan_Context) {
     array_add(*ctx.names, copy_string(slice(info.short_name, 0, info.short_name.count - 4)));
 }
 
-sort_shim_names :: (names: [] string) {
+// Lexicographic order for a string list, in place. One implementation owns the
+// insertion sort both the shim enumeration and the resolution source list use,
+// so the two enumerations cannot drift apart.
+sort_strings_lexicographically :: (names: [] string) {
     for i: 1..names.count-1 {
         if i >= names.count break;
         key := names[i];
@@ -401,7 +404,7 @@ collect_shim_names :: (packages_dir: string) -> [..] string, bool {
     ctx: Shim_Scan_Context;
     visited := visit_files(packages_dir, false, *ctx, shim_scan_visitor, visit_directories = false);
     if !visited return ctx.names, false;
-    sort_shim_names(ctx.names);
+    sort_strings_lexicographically(ctx.names);
     return ctx.names, true;
 }
 

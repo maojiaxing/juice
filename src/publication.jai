@@ -515,19 +515,6 @@ install_relative_path_is_valid :: (relative_path: string) -> bool {
     return true;
 }
 
-// FNV-1a 64 over the artifact text, rendered as 16 lowercase hex characters
-// (the same digest primitive the view cache uses; it is an integrity check
-// against mixing releases, not a cryptographic signature).
-install_artifact_digest :: (text: string) -> string {
-    hash := fnv1a_hash(text.data, text.count);
-    digest_bytes: [16] u8;
-    for digit_index: 0..15 {
-        nibble := cast(s64) ((hash >> cast(u64) (4 * (15 - digit_index))) & 0xf);
-        digest_bytes[digit_index] = cast(u8) ifx nibble < 10 then #char "0" + nibble else #char "a" + (nibble - 10);
-    }
-    return copy_string(to_string(digest_bytes.data, 16));
-}
-
 // The integer value of a constant declaration line (`NAME :: VALUE;`, the
 // extract_constant_line shape). Anything else — a near-miss name, a missing or
 // non-numeric value, trailing text — fails, so a marker can never be generated
@@ -604,7 +591,7 @@ publish_install_manifest :: (modules_dir: string, plugin_abi_line: string, texts
     print_to_builder(*builder, "artifacts %1\n", paths.count);
     for path, index: paths {
         if !install_relative_path_is_valid(path.relative_path) return "", false;
-        print_to_builder(*builder, "%1 %2\n", path.relative_path, install_artifact_digest(texts[index]));
+        print_to_builder(*builder, "%1 %2\n", path.relative_path, hash_hex(texts[index]));
     }
     return builder_to_string(*builder), true;
 }
@@ -699,7 +686,7 @@ verify_install :: (modules_dir: string, expected_plugin_abi: s64) -> Install_Che
             check.reason = tprint("the installed artifact %1 is missing", path.relative_path);
             return check;
         }
-        if install_artifact_digest(content) != manifest.artifacts[index].digest {
+        if hash_hex(content) != manifest.artifacts[index].digest {
             check.reason = tprint("the installed artifact %1 does not match the published release (content digest mismatch)", path.relative_path);
             return check;
         }

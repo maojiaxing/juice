@@ -140,12 +140,12 @@ ic_publish_real_set :: (modules_directory: string) -> bool {
 // ===========================================================================
 
 publication_install_digest_vectors :: () {
-    // Independent known-good FNV-1a 64 vectors: the artifact digest is that
-    // function rendered as 16 lowercase hex characters.
-    expect(install_artifact_digest("") == "cbf29ce484222325");
-    expect(install_artifact_digest("a") == "af63dc4c8601ec8c");
-    expect(install_artifact_digest("abc") == "e71fa2190541574b");
-    expect(install_artifact_digest("foobar") == "85944171f73967e8");
+    // Independent known-good FNV-1a 64 vectors for the shared hash_hex
+    // primitive that both the artifact digest and the view cache use.
+    expect(hash_hex("") == "cbf29ce484222325");
+    expect(hash_hex("a") == "af63dc4c8601ec8c");
+    expect(hash_hex("abc") == "e71fa2190541574b");
+    expect(hash_hex("foobar") == "85944171f73967e8");
 } @test
 
 publication_install_artifact_paths :: () {
