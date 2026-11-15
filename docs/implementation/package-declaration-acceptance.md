@@ -35,13 +35,13 @@ A01–A16、10 个示例 E01–E10 的覆盖映射，三条发布路径的实际
 | A05 普通引用与插件 | 不自动导入或启用；同插件模块双重选择失败；独立 API 合法 | `plugin_derived_duplicate_enablement_cli`；`plugin_derived_ordinary_dependency_roles_cli`；E09 两个负例（插件模块兼作普通依赖、同模块二次启用） | 已覆盖 |
 | A06 插件默认与配置 | 省略/空/显式不同、缺项不补默认、坏 options 在 hook 前失败 | `plugin_derived_options_errors_cli`（未知键/必填缺失/重复键，均 exit 1 且无派生输出）；`plugin_derived_builtin_triad_cli`、`_resolver`、`_test_cli`；`plugin_host_tests.jai` 内联 E2E “member plugin options rejection fails the build through the host”（`OK=0`、无产物） | 已覆盖 |
 | A07 多程序与批量插件 | 包级准备一次、各包隔离、run 只编译目标、依赖插件不自动执行 | `plugin_derived_prepare_once`（同包第二次准备返回同一上下文、`prepare_count == 1`，另一包得到独立私有派生区）；`plugin_derived_unselected_member_isolation_cli`；`run_selection_only_selected_program_cli`；`command_selection_test_batch_cli` | 已覆盖 |
-| A08 派生输出 | 只读取本次注册内容、逻辑路径稳定、输出冲突失败、源码只读 | `plugin_derived_view_rules`（substitute/drop/generated 的冲突矩阵、保留源码不可被覆盖、“本轮注册表即视图”使上一轮磁盘文件不可见、无私有派生区即插件错误）；`plugin_derived_legacy_stage`；`plugin_host_tests.jai` 内联 E2E（真实 CLI：替换后的入口被编译、drop 的失败测试不进入测试程序、`original = "src/main.jai"` 逻辑路径保留、host 记录 `SUBSTITUTE=`/`DROP=`/`OK=1`）；`plugin_derived_git_source_read_only_cli`（hook 后 `git status --porcelain` 为空） | 已覆盖 |
+| A08 派生输出 | 只读取本次注册内容、逻辑路径稳定、输出冲突失败、源码只读 | `plugin_derived_view_rules`（substitute/drop/generated 的冲突矩阵、保留源码不可被覆盖、“本轮注册表即视图”使上一轮磁盘文件不可见、无私有派生区即插件错误）；`plugin_derived_view_legacy_stage`；`plugin_host_tests.jai` 内联 E2E（真实 CLI：替换后的入口被编译、drop 的失败测试不进入测试程序、`original = "src/main.jai"` 逻辑路径保留、host 记录 `SUBSTITUTE=`/`DROP=`/`OK=1`）；`plugin_derived_git_source_read_only_cli`（hook 后 `git status --porcelain` 为空） | 已覆盖 |
 | A09 离线解析 | 有记录复用、完整提交无记录例外、浮动/短修订/缺内容拒绝 | `dependency_resolution_offline_matrix`（浮动无记录拒绝、短修订拒绝、完整 commit 且内容已在缓存可建立选择、记录+完整内容离线复用、完整 commit 但内容缺失拒绝）；`dependency_resolution_git_content_restore`（离线缺内容失败） | 已覆盖 |
 | A10 更新与失败 | 全图刷新、上下文隔离、失败保旧、成员不回滚、离线更新冲突 | `dependency_resolution_git_reuse_and_update`（`update` 刷新、`update --offline` 被拒）；`dependency_resolution_context_isolation`（两工程、两成员各自选择，互不跟随）；`dependency_resolution_failure_preserves_old_state`（解析失败保旧记录、编译失败不回滚已选定修订）；`command_selection_update_scope_cli`（`update` 只刷新不编译、离线冲突在 discovery 前失败） | 已覆盖 |
 | A11 内容与状态 | 清缓存不清选择、损坏报错、移根新上下文、cwd 不改上下文、XDG 回退 | `dependency_resolution_git_content_restore`（删内容缓存后记录仍在、离线失败、在线只恢复记录提交）；`dependency_resolution_corrupt_state_fails`（状态损坏 exit 1 且报 corrupt）；**新增** `acceptance_a11_moved_root_is_new_context`（新根重新解析到分支新 tip，原根保持旧提交，包内子目录调用不改上下文）、`acceptance_a11_xdg_relative_falls_back`（相对 XDG 两条 WARNING + 平台默认回退 + 不产生 cwd 相对目录） | 已覆盖 |
 | A12 提供方内部来源 | Git 内工作区不借消费者、非成员内部 path 可用、检出越界失败 | `dependency_resolution_git_checkout_boundary`（检出内兄弟包可用、`../../outside` 报 `escapes its Git checkout`、共享检出 `git status` 为空且检出内无 `target/`）；**新增** `acceptance_a12_git_provider_workspace_boundary`（提供方在检出内的工作区解析到 5×2=10，而非消费者同名成员的 500×2；指向消费者成员目录的 WORKSPACE 选择失败） | 已覆盖 |
 | A13 成员校验与扫描 | 未选声明错误阻止操作、无关远程图不获取、下级包测试不混入 | `workspace_products_child_scan_boundary_cli`（未登记子包的 `package.jai` 不被求值、其测试不运行）；`workspace_tests.jai` 内联 discovery E2E（非法成员清单/越界成员/缺失目录/无清单）；**新增** `acceptance_a13_unselected_invalid_member_blocks`（`build`/`run`/`test -p good` 都 exit 1，且无 `good` 产物）；无关远程图不获取见 `command_selection_update_scope_cli` | 已覆盖 |
-| A14 命令选择与零集合 | 默认/显式集合、歧义/零包失败、零程序与零测试区别、参数透传 | `command_selection_`（7/0：纯工作区默认、flag 矩阵、拒绝矩阵、`run` 基数、测试批量、首个失败停止并报告未执行、update 范围）；`run_selection_`（12/0：程序选择矩阵、`--` 原样透传、启动失败传播、不安全/缺失产物、只编译被选程序） | 已覆盖 |
+| A14 命令选择与零集合 | 默认/显式集合、歧义/零包失败、零程序与零测试区别、参数透传 | `command_selection_`（12/0：纯工作区默认、flag 矩阵、拒绝矩阵、`run` 基数、测试批量、首个失败停止并报告未执行、update 范围）；`run_selection_`（12/0：程序选择矩阵、`--` 原样透传、启动失败传播、不安全/缺失产物、只编译被选程序；显式名按 §2.4 的统一规则 ASCII 大小写不敏感——`Alpha` 选中 `alpha` 并报告声明拼写，本行原先写的“命令行列名精确匹配”是错的口径，对应断言在 0098 S18 之前一直失败） | 已覆盖 |
 | A15 跨文件系统路径 | 名称 ASCII 判重、物理大小写身份、链接拒绝、跨类别规则不同 | `declaration_paths_tests.jai`（包名/标识符语法、ASCII 大小写比较不折叠 Unicode、链接祖先拒绝、XDG 绝对路径规则）；`test_command_tests.jai` 的链接目录/junction/文件链接扫描夹具；**新增** `acceptance_a15_entry_through_link_is_rejected`（经 junction 进入的 `entry` → `Product entry is not a regular link-free file: via_link/main.jai`，无产物）、`acceptance_a15_case_identity_and_cross_category_names`（`entry = "SRC/main.jai"` 在 Windows 上同一物理文件可构建；同包 module 与 executable 同名 `tool` 合法并各自可用） | 已覆盖（除下方大小写敏感项） |
 | A16 完整安装 | 同版本配套在仓库外使用、缺模块/错配明确失败、无其他安装回退 | `publication_install`（15/0：marker 文本与解析矩阵、完整单元校验、缺 marker/epoch/ABI/缺件/改件/集合不符、真实 CLI 无旁路源码、仓库外项目 build/run/test/update/offline）；`bootstrap_publication_unit_marker`（自举产物与生成的 marker 逐字节一致、替换 `Testing.jai` 后该产物失败）；**本次另跑** §4 路径 3（仓库外安装单元 + 无回退负例） | 已覆盖 |
 
@@ -75,6 +75,32 @@ scratch 根 `C:/Users/maojiaxing/DevTools/msys/tmp/juice-096-examples`，独立 
 | E08 lint | `test` | 0 |
 | E09 jaix + 普通 API | `build` / `run` / 插件当依赖负例 / 重复启用负例 | 0 / 0 / 1 / 1 |
 | E10 零产物 | `build` / `run` / `test` | 0 / 1 / 0 |
+
+### 3.1 E04–E07 的可重放输入（不依赖易失脚本）
+
+`target/evidence/reproduce-examples.sh` 是易失区，`clean` 之后不再存在，所以 E04–E07 的重放
+只依赖本文件的文字与仓库里的迁移指南：每棵树、每个文件的完整内容见
+`docs/migrations/package-declarations.md` 的同名小节（`## E04 纯工作区`、`## E05 根包 + 工作区`、
+`## E06 PATH + WORKSPACE 依赖`、`## E07 Git 上下文`）。重放步骤：
+
+1. **安装单元**（三条发布路径里的任意一条，推荐路径 2 的 release 产物）：
+   `jai.exe build.jai - release` → `target/juice.exe`；把它与相邻的 `target/modules/` 一起复制到
+   仓库外的一个空目录，得到 `<unit>/juice.exe` + `<unit>/modules/`。安装单元只在这个目录里，
+   不写 PATH、不改全局配置。
+2. **隔离 XDG**：每次重放前导出独立的 `XDG_CACHE_HOME`、`XDG_STATE_HOME`（两个空目录），
+   这样 E07 的“首次解析”与“复用记录”才是真的首次；同一棵树内的后续命令共用这两个目录。
+3. **按指南建树**：E04 两个成员、E05 根包 + `libs/api`、E06 `app` + 兄弟 `sibling-lib` +
+   `app/libs/units`、E07 `provider` + `consumer`。E05 的“删掉 `default_members`”分支是把同一棵树
+   复制成第二份再去掉该字段，不是原地改。
+4. **E07 的提供方仓库**是普通本地 Git 仓库，重放时用三个提交复刻：
+   `git init` → 提交一（`greeting()` 返回 `from-commit-one`）→ 提交二（`from-commit-two`）→
+   再提交三（`from-commit-three`）。`consumer/package.jai` 的 `git.url` 写该目录的绝对路径。
+   顺序要求：先让提供方停在提交二时跑「首次 `run`」，再推进到提交三跑复用与 `update`。
+5. **命令**：上表的每条命令都在其“CWD”列给出的目录里执行（E05 的成员内调用例外，见上表），
+   逐条核对退出码；本记录只钉退出码与 E07/E06 的输出文本（`greeting=`、`path=`/`git=`），
+   其余输出不参与判定。
+
+E04–E07 之外的 E01–E03、E05b、E08–E10 同样只需要迁移指南的同名小节，步骤一致。
 
 合计 33 次调用：25 次 exit 0，8 次 exit 1（全部是上表列的预期失败）。与 0095 记录的矩阵一致。
 
