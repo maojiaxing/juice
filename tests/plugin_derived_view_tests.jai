@@ -466,13 +466,20 @@ pdv_plugins_external :: (options: string, id := "my_plugin") -> string {
 
 PDV_OPTIONS_ENTRY_HELPER :: ".{key = \"entry\", value = \"src/main.jai\"}, .{key = \"helper\", value = \"src/aux.jai\"}";
 
+// The provider modules every provider shape in this file carries: the plugin
+// module itself, a module without a plugin entry, and the API module the
+// dependency-role case imports. Each shape still writes its own declaration (and
+// any extra module) itself, so a case reads as the declaration it is about.
+pdv_write_provider_modules :: (root: string, plugin_module_source: string) -> bool {
+    if !build_seam_write(root, "packages/my-plugin/plugin.jai", plugin_module_source) return false;
+    if !build_seam_write(root, "packages/my-plugin/plain.jai", PDV_NO_ENTRY_MODULE_SOURCE) return false;
+    return build_seam_write(root, "packages/my-plugin/api.jai", PDV_API_MODULE_SOURCE);
+}
+
 // Write the provider package under <root>/packages/my-plugin.
 pdv_write_provider :: (root: string, plugin_module_source: string) -> bool {
     if !build_seam_write(root, "packages/my-plugin/package.jai", PDV_PROVIDER_PACKAGE) return false;
-    if !build_seam_write(root, "packages/my-plugin/plugin.jai", plugin_module_source) return false;
-    if !build_seam_write(root, "packages/my-plugin/plain.jai", PDV_NO_ENTRY_MODULE_SOURCE) return false;
-    if !build_seam_write(root, "packages/my-plugin/api.jai", PDV_API_MODULE_SOURCE) return false;
-    return true;
+    return pdv_write_provider_modules(root, plugin_module_source);
 }
 
 // Write the app package (root) with the given plugins/dependencies fields and
@@ -641,11 +648,8 @@ PDV_END
 
 pdv_write_provider_with_noop :: (root: string) -> bool {
     if !build_seam_write(root, "packages/my-plugin/package.jai", PDV_PROVIDER_PACKAGE_WITH_NOOP) return false;
-    if !build_seam_write(root, "packages/my-plugin/plugin.jai", PDV_PLUGIN_MODULE_SOURCE) return false;
     if !build_seam_write(root, "packages/my-plugin/noop_plugin.jai", PDV_NOOP_PLUGIN_SOURCE) return false;
-    if !build_seam_write(root, "packages/my-plugin/plain.jai", PDV_NO_ENTRY_MODULE_SOURCE) return false;
-    if !build_seam_write(root, "packages/my-plugin/api.jai", PDV_API_MODULE_SOURCE) return false;
-    return true;
+    return pdv_write_provider_modules(root, PDV_PLUGIN_MODULE_SOURCE);
 }
 
 // One dependency entry selecting a module of the provider.
@@ -690,8 +694,7 @@ plugin_derived_ordinary_dependency_roles_cli :: () {
     api_root := pdv_scratch("cli-api-beside-plugin");
     defer delete_directory_full(api_root);
     expect(pdv_write_provider_with_noop(api_root));
-    noop_plugins := "    plugins = Plugin_Declaration.[. {id = \"noop_plugin\", source = .{kind = .WORKSPACE}, module = .{path = \"packages/my-plugin\", name = \"noop_plugin_module\"}}],\n";
-    noop_plugins = tprint("    plugins = Plugin_Declaration.[.{id = \"noop_plugin\", source = .{kind = .WORKSPACE}, module = .{path = \"packages/my-plugin\", name = \"noop_plugin_module\"}}],\n");
+    noop_plugins := "    plugins = Plugin_Declaration.[.{id = \"noop_plugin\", source = .{kind = .WORKSPACE}, module = .{path = \"packages/my-plugin\", name = \"noop_plugin_module\"}}],\n";
     api_main := #string PDV_END
 #import "Basic";
 #import "api";

@@ -34,12 +34,10 @@
 // fixture text assembled with it is copied before a path is built from it.
 // ---------------------------------------------------------------------------
 
-// A Git provider package that exports one named constant. The package name is
-// the caller's choice so a case can give two sources the same package name.
-acceptance_write_git_package :: (directory: string, package_name: string, module_source: string) -> bool {
-    if !dr_write_file(directory, "package.jai", dr_package_source(package_name, "")) return false;
-    return dr_write_file(directory, "module.jai", module_source);
-}
+// A Git provider package that exports one named constant is exactly the shared
+// `dr_write_module_provider` shape (the package declaration plus `module.jai`),
+// so the Git cases call that helper directly; the caller still owns the Git
+// initialisation and the commit, which the helper deliberately does not do.
 
 // A consumer whose only dependency is a Git provider selected by `selector`
 // (for example `, branch = "main"` or `, rev = "<40 hex>"`) and imported as
@@ -75,7 +73,7 @@ acceptance_a02_member_does_not_override_git_source :: () {
 
     repository := dr_path(scratch, "repo");
     expect(dr_git_init(repository));
-    expect(acceptance_write_git_package(repository, "gitlib", "Git_Value :: 100;\n"));
+    expect(dr_write_module_provider(repository, "gitlib", "Git_Value :: 100;\n"));
     expect(dr_git_commit_all(repository, "provider").count == 40);
 
     workspace := dr_path(scratch, "ws");
@@ -114,8 +112,8 @@ acceptance_a03_same_name_sources_coexist :: () {
     second_repository := dr_path(scratch, "second-repo");
     expect(dr_git_init(first_repository));
     expect(dr_git_init(second_repository));
-    expect(acceptance_write_git_package(first_repository, "dupe", "From_First :: 10;\n"));
-    expect(acceptance_write_git_package(second_repository, "dupe", "From_Second :: 20;\n"));
+    expect(dr_write_module_provider(first_repository, "dupe", "From_First :: 10;\n"));
+    expect(dr_write_module_provider(second_repository, "dupe", "From_Second :: 20;\n"));
     expect(dr_git_commit_all(first_repository, "first source").count == 40);
     expect(dr_git_commit_all(second_repository, "second source").count == 40);
 
@@ -140,10 +138,10 @@ acceptance_a03_same_name_revisions_coexist :: () {
 
     repository := dr_path(scratch, "repo");
     expect(dr_git_init(repository));
-    expect(acceptance_write_git_package(repository, "dupe", "Old_Value :: 10;\n"));
+    expect(dr_write_module_provider(repository, "dupe", "Old_Value :: 10;\n"));
     older := copy_string(dr_git_commit_all(repository, "older"));
     expect(older.count == 40);
-    expect(acceptance_write_git_package(repository, "dupe", "New_Value :: 20;\n"));
+    expect(dr_write_module_provider(repository, "dupe", "New_Value :: 20;\n"));
     expect(dr_git_commit_all(repository, "newer").count == 40);
 
     app := dr_path(scratch, "app");

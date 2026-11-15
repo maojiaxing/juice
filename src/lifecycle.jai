@@ -568,20 +568,36 @@ prestep_write_derived :: (lifecycle_context: *Lifecycle_Context, logical_path: s
 //   is for);
 // - a logical path that is substituted or dropped is a conflict (the same
 //   input would have two providers).
-prestep_add_generated :: (lifecycle_context: *Lifecycle_Context, logical_path: string, contents: string) -> bool {
+// The stage and path-shape precondition both auxiliary-source registrations
+// share (spec 0087 decision 24's `generated` channel): the pre-step slot must
+// exist, its private derived area must be active, and the logical path must be
+// a normal package-relative ".jai" input. Records the ERROR diagnostic and
+// returns null on failure. The two entries differ only below this point — one
+// queues a write, the other validates a physical path the plugin already wrote.
+prestep_auxiliary_stage :: (lifecycle_context: *Lifecycle_Context, logical_path: string) -> *Prestep_Stage {
     if lifecycle_context.prestep == null {
         array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = "derived source registration without prestep state"});
-        return false;
+        return null;
     }
     stage := cast(*Prestep_Stage) lifecycle_context.prestep;
     if stage.derived_root.count == 0 {
         array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("no private derived area for the auxiliary source: %", logical_path)});
-        return false;
+        return null;
     }
     if !derived_logical_path_ok(logical_path, true) {
         array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("auxiliary source path is not a package-relative .jai path: %", logical_path)});
-        return false;
+        return null;
     }
+    return stage;
+}
+
+// The cross-table conflict rules for one auxiliary logical path: it must not be
+// registered twice (two plugins must not silently agree on one output), cover a
+// retained package source, or be a substituted or dropped input (the same input
+// would then have two providers). Returns false having recorded the ERROR
+// diagnostic when any rule rejects the path. Adding a new conflict condition is
+// one edit here, so the two registration entries cannot diverge.
+prestep_auxiliary_path_is_free :: (lifecycle_context: *Lifecycle_Context, stage: *Prestep_Stage, logical_path: string) -> bool {
     for generated: stage.generated {
         if generated.logical_path != logical_path continue;
         array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("duplicate auxiliary source path: %", logical_path)});
@@ -601,6 +617,13 @@ prestep_add_generated :: (lifecycle_context: *Lifecycle_Context, logical_path: s
         array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("auxiliary source conflicts with a drop: %", logical_path)});
         return false;
     }
+    return true;
+}
+
+prestep_add_generated :: (lifecycle_context: *Lifecycle_Context, logical_path: string, contents: string) -> bool {
+    stage := prestep_auxiliary_stage(lifecycle_context, logical_path);
+    if stage == null return false;
+    if !prestep_auxiliary_path_is_free(lifecycle_context, stage, logical_path) return false;
     physical, written := prestep_write_derived(lifecycle_context, logical_path, contents);
     if !written return false;
     array_add(*stage.generated, .{logical_path = logical_path, physical_path = physical});
@@ -634,42 +657,13 @@ prestep_is_dropped :: (stage: *Prestep_Stage, original: string) -> bool {
 // reports a file elsewhere is the read-only violation (spec 0087 decision 24:
 // 源与共享检出只读).
 prestep_register_generated :: (lifecycle_context: *Lifecycle_Context, logical_path: string, physical_path: string) -> bool {
-    if lifecycle_context.prestep == null {
-        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = "derived source registration without prestep state"});
-        return false;
-    }
-    stage := cast(*Prestep_Stage) lifecycle_context.prestep;
-    if stage.derived_root.count == 0 {
-        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("no private derived area for the auxiliary source: %", logical_path)});
-        return false;
-    }
-    if !derived_logical_path_ok(logical_path, true) {
-        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("auxiliary source path is not a package-relative .jai path: %", logical_path)});
-        return false;
-    }
+    stage := prestep_auxiliary_stage(lifecycle_context, logical_path);
+    if stage == null return false;
     if !derived_path_within_root(stage.derived_root, physical_path) {
         array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("auxiliary source is outside the package's private derived area: %", physical_path)});
         return false;
     }
-    for generated: stage.generated {
-        if generated.logical_path != logical_path continue;
-        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("duplicate auxiliary source path: %", logical_path)});
-        return false;
-    }
-    if derived_covers_retained_source(stage, logical_path) {
-        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("auxiliary source would cover a retained package source: %", logical_path)});
-        return false;
-    }
-    for substitution: stage.substitutions {
-        if substitution.original != logical_path continue;
-        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("auxiliary source conflicts with a source substitution: %", logical_path)});
-        return false;
-    }
-    for dropped: stage.drops {
-        if dropped != logical_path continue;
-        array_add(lifecycle_context.diagnostics, .{level = .ERROR, message = tprint("auxiliary source conflicts with a drop: %", logical_path)});
-        return false;
-    }
+    if !prestep_auxiliary_path_is_free(lifecycle_context, stage, logical_path) return false;
     array_add(*stage.generated, .{logical_path = logical_path, physical_path = physical_path});
     return true;
 }
