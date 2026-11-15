@@ -4,7 +4,7 @@ status: open
 labels: [ready-for-agent]
 assignee: maojiaxing
 parent: "0087"
-blocked-by: ["0094", "0095", "0097"]
+blocked-by: ["0094", "0095", "0097", "0098"]
 ---
 
 ## Goal and contract
@@ -26,3 +26,11 @@ blocked-by: ["0094", "0095", "0097"]
 ## Integration
 
 自己的独立worktree/branch从 integration/package-declaration-semantics 最新tip开始；路径与执行纪律见 C:/Users/maojiaxing/DevTools/msys/tmp/juice-package-implementation/README.md。不要写主checkout或其它agent文件。完成前merge最新integration、验证并commit，返回精确命令/exit/计数/限制和接口说明；由merger核对合入并写Resolution关闭。前置票未完成前不要使用假接口声称验证通过。
+
+## Final review checkpoint
+
+实现与验收补充已通过 `e1743fb` 合入，但本票仍开放。固定 tip 的独立完整套件第一轮为 380/0、EXIT 0；第二轮卡在本地 MSYS Git 自动维护相关等待中，尚无退出码，不能计为通过。
+
+最终双轴审查及独立 Windows/Linux CLI 揭示了此前测试未覆盖的规格缺口，包括成员归属、包级导入隔离、同包模块测试重复加载、插件派生源码消费、名称/XDG校验等。Linux 的真实 debug/release 自举和部分路径检查已成功，不再将其概括为平台不可用；安装测试另有复制丢失执行权限的夹具缺陷。
+
+全部修复由 [0098](0098-fix-package-declaration-final-review.md) 的同一实施者承担，逐项回归并补证后才能关闭本票。既往绿灯不豁免这些失败，也不反向改写当时的验收记录。
