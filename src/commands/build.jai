@@ -215,17 +215,45 @@ build_plan_entry :: (
         print("[juice ERROR] The pre-step dropped the build entry: %\n", entry_rel);
         return "", false;
     }
-    // This round's registered derived source (a substitution OR an auxiliary
-    // registration) is the compile input; the logical path stays the entry's
-    // (spec 0087 decision 24: 源替换保留逻辑路径，物理路径仅用于读取).
-    replacement, derived := prestep_derived_source_for(prestep, entry_rel);
-    if derived {
-        return path_slashes(replacement), true;
-    }
 
-    closure, ok := probe_package_closure(package_root, entry_rel, pipeline = pipeline, pipeline_omitted = false);
+    // The closure probe is derived-aware: a logical input this round substituted
+    // or generated is read from its derived file, and its own relative `#load`s
+    // are followed from there. The logical path stays the input's identity
+    // (spec 0087 decision 24: 源替换保留逻辑路径，物理路径仅用于读取), so one
+    // substitution deep inside a closure reaches the compile exactly like a
+    // substitution of the entry.
+    derived_probe :: (state: *void, logical_path: string) -> (string, bool) {
+        physical, is_derived := prestep_derived_probe(cast(*Prestep_Stage) state, logical_path);
+        return physical, is_derived;
+    }
+    closure, ok := probe_package_closure(package_root, entry_rel, pipeline = pipeline, pipeline_omitted = false, derived = derived_probe, derived_state = cast(*void) prestep);
     if !ok return "", false;
-    if !closure_has_tests(closure) return path_slashes(plan.target.source_path), true;
+
+    // A dropped input that a retained file still loads is a contradiction the
+    // compile could only report as a missing file; the drop is validated here, by
+    // the same logical paths the closure uses.
+    for file: closure {
+        for load: file.loads {
+            if !prestep_is_dropped(prestep, load) continue;
+            print("[juice ERROR] The pre-step dropped a source that is still loaded: %1 (loaded by %2)%\n", load, file.file.rel_path);
+            return "", false;
+        }
+    }
+    if !closure_has_tests(closure) {
+        // A test-free closure compiles its sources verbatim, so a derived input
+        // anywhere in it must be materialized at its own logical path inside the
+        // private derived root — then the derived entry's relative loads resolve
+        // beside it. Nothing derived means the package's own entry, unchanged.
+        closure_paths: [..] string;
+        for file: closure array_add(*closure_paths, file.file.rel_path);
+        derived_entry, materialize_error, materialized := prestep_materialize_closure(prestep, entry_rel, closure_paths, build_closure_read_text, *closure);
+        if !materialized {
+            print("[juice ERROR] %\n", materialize_error);
+            return "", false;
+        }
+        if derived_entry != "" return path_slashes(derived_entry), true;
+        return path_slashes(plan.target.source_path), true;
+    }
 
     state: Strip_View_State;
     state.transpile_dir = transpile_tree_dir(prepared.discovery.root_dir);
@@ -242,6 +270,18 @@ build_plan_entry :: (
     if !found return "", false;
     entry_path, view_ok := view_of_file(*state, entry_index);
     return entry_path, view_ok;
+}
+
+// Read one closure file's text exactly as the probe did (a derived input comes
+// from its derived physical file, everything else from the package).
+build_closure_read_text :: (state: *void, logical_path: string) -> (string, bool) {
+    closure := cast(*[..] Build_Closure_File) state;
+    for file: closure.* {
+        if file.file.rel_path != logical_path continue;
+        text, read_ok := read_entire_file(source_read_path(file.file));
+        return text, read_ok;
+    }
+    return "", false;
 }
 
 // Production spawn of the compile child: jai compiles the generated

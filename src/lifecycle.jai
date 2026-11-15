@@ -697,6 +697,72 @@ prestep_derived_source_for :: (stage: *Prestep_Stage, logical_path: string) -> (
     return "", false;
 }
 
+// Whether any file of the closure is a derived input of THIS round.
+prestep_closure_is_derived :: (stage: *Prestep_Stage, closure_paths: [] string) -> bool {
+    if stage == null return false;
+    for path: closure_paths {
+        _, derived := prestep_derived_source_for(stage, path);
+        if derived return true;
+    }
+    return false;
+}
+
+// Materialize one closure's derived inputs into the private derived root at their
+// OWN logical paths, so a verbatim (test-free) compile reads the derived text and
+// every relative `#load` beside it still resolves. Returns the derived entry path,
+// or "" when nothing in the closure is derived (the caller then compiles the
+// package's own entry, byte-for-byte as before).
+//
+// This is what makes one substitution anywhere in the closure reach the compile:
+// the closure is the logical input graph of the run, not just its entry.
+prestep_materialize_closure :: (
+    stage: *Prestep_Stage,
+    entry_logical: string,
+    closure_paths: [] string,
+    read_text: #type (state: *void, logical_path: string) -> (string, bool),
+    read_state: *void
+) -> (string, string, bool) {
+    // (derived entry path, error message, ok). The second result is "" unless the
+    // materialization failed; the caller reports it through its own stage sink, so
+    // this procedure stays usable from the command front and from the host.
+    if stage == null return "", "", true;
+    if stage.derived_root.count == 0 return "", "", true;
+    if !prestep_closure_is_derived(stage, closure_paths) return "", "", true;
+    for path: closure_paths {
+        text, read_ok := read_text(read_state, path);
+        if !read_ok return "", tprint("could not read the closure input: %", path), false;
+        physical := derived_physical_path(stage.derived_root, path);
+        if physical == "" || !derived_path_within_root(stage.derived_root, physical) {
+            return "", tprint("could not derive a private landing path for: %", path), false;
+        }
+        last_slash := -1;
+        for i: 0..physical.count-1 {
+            if physical[i] == #char "/" last_slash = i;
+        }
+        if last_slash > 0 {
+            parent := slice(physical, 0, last_slash);
+            if !make_directory_if_it_does_not_exist(parent, recursive = true) {
+                return "", tprint("could not create the private derived directory: %", parent), false;
+            }
+        }
+        if !write_entire_file(physical, text) {
+            return "", tprint("could not write the derived closure input: %", physical), false;
+        }
+    }
+    entry_physical := derived_physical_path(stage.derived_root, entry_logical);
+    if entry_physical == "" return "", tprint("could not derive the entry path: %", entry_logical), false;
+    return entry_physical, "", true;
+}
+
+// The derived-source probe as a plain procedure over an explicit stage, so a
+// caller can pass it to a closure probe (Jai has no closures, so the stage
+// travels as the argument instead of being captured).
+prestep_derived_probe :: (stage: *Prestep_Stage, logical_path: string) -> (string, bool) {
+    replacement, derived := prestep_derived_source_for(stage, logical_path);
+    if !derived return "", false;
+    return replacement, true;
+}
+
 // ---------------------------------------------------------------------------
 // Hook table: registration and merge
 // ---------------------------------------------------------------------------
