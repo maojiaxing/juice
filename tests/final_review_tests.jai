@@ -395,6 +395,16 @@ fr_write_value_provider :: (provider: string, name: string, value: s64) -> bool 
     return dr_write_module_provider(provider, name, tprint("Get_Value :: () -> s64 { return %; }\n", value));
 }
 
+// A plugin module that ALSO exports `Get_Value` returning 99. The review
+// probes needed this: the pre-fix shim was named after the declaration id and
+// re-exported the provider module, so `#import "Tool"` reached 99 whether the
+// plugin overwrote a business alias or stood alone.
+fr_write_value_plugin :: (provider: string, plugin_id: string) -> bool {
+    source := tprint("Get_Value :: () -> s64 { return 99; }\n%1", fr_plugin_source(plugin_id));
+    if !fr_write_package(provider, "fr_plugin_provider", "    modules = .[.{name = \"plugin_module\", entry = \"plugin.jai\"}],\n") return false;
+    return dr_write_file(provider, "plugin.jai", source);
+}
+
 final_review_plugin_id_cannot_overwrite_business_alias :: () {
     scratch := dr_scratch("fr-plugin-alias");
     dr_isolate(scratch);
@@ -402,7 +412,7 @@ final_review_plugin_id_cannot_overwrite_business_alias :: () {
     business := dr_path(scratch, "business");
     expect(fr_write_value_provider(business, "business", 7));
     plugin_provider := dr_path(scratch, "plugin_provider");
-    expect(fr_write_plugin_provider(plugin_provider, fr_plugin_no_hooks_source("Tool")));
+    expect(fr_write_value_plugin(plugin_provider, "Tool"));
 
     // Control: the ordinary alias resolves to the business provider (7).
     app_body := tprint("%1    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", fr_path_dependency("business", business, "Tool"));
@@ -429,7 +439,7 @@ final_review_plugin_alone_exposes_no_ordinary_import :: () {
     dr_isolate(scratch);
     defer dr_restore_env();
     plugin_provider := dr_path(scratch, "plugin_provider");
-    expect(fr_write_plugin_provider(plugin_provider, fr_plugin_no_hooks_source("Tool")));
+    expect(fr_write_value_plugin(plugin_provider, "Tool"));
     app := dr_path(scratch, "app");
     // No ordinary dependency at all: only the plugin enablement names `Tool`.
     plugins := copy_string(tprint("    plugins = Plugin_Declaration.[.{id = \"Tool\", source = .{kind = .PATH, path = %1}, module = .{name = \"plugin_module\"}}],\n", quote_jai_string(plugin_provider)));
@@ -442,4 +452,135 @@ final_review_plugin_alone_exposes_no_ordinary_import :: () {
     // Nothing was compiled by accident; the enablement itself is valid.
     expect(!file_exists(tprint("%1/Tool.jai", dependency_imports_dir(app))));
     expect(!file_exists(tprint("%1/Tool.jai", packages_dir(app))));
+} @test
+
+// ---------------------------------------------------------------------------
+// S09: the generated test program belongs to the package being tested. Review
+// probes 03/04/09 recorded the pre-fix behavior: a member's test program ran
+// with the WORKSPACE ROOT's plugin configs and diagnostic paths, so the member
+// declaration was silently ignored and the member's own lint never ran.
+//
+// The fixture plugin below carries one lint rule and one option row. Its
+// validator ACCEPTS marker "member" and REJECTS marker "root", so a run that
+// resolved the root's declaration fails loudly; its lint rule reports an ERROR
+// naming the test, so a run that skipped the member's lint cannot exit nonzero
+// with that message.
+// ---------------------------------------------------------------------------
+
+S09_PLUGIN_SOURCE :: #string S09_END
+#import "Basic";
+#import "Compiler";
+#import "juice_core";
+
+S09_Plugin :: struct {
+    using base: Juice_Plugin;
+    marker: string;
+}
+
+S09_DEFAULT_MARKER: string = "";
+
+s09_apply_option :: (options: *void, key: string, value: string) -> string {
+    plugin := cast(*S09_Plugin) options;
+    if key == "marker" {
+        plugin.marker = value;
+        return "";
+    }
+    return tprint("unknown option '%'", key);
+}
+
+s09_validate_options :: (options: *void) -> string {
+    plugin := cast(*S09_Plugin) options;
+    if plugin.marker == "root" return "S09 root config used";
+    return "";
+}
+
+s09_inspect :: (header: *Code_Procedure_Header, subexpressions: [] *Code_Node) -> [..] Lint_Finding {
+    findings: [..] Lint_Finding;
+    if header.name != "BadTestOne" return findings;
+    array_add(*findings, .{
+        line    = cast(s64) header.l0,
+        column  = cast(s64) header.c0,
+        message = tprint("S09 member lint ran: %", header.name),
+        level   = .ERROR,
+    });
+    return findings;
+}
+
+get_juice_plugin :: () -> *S09_Plugin {
+    plugin := New(S09_Plugin);
+    plugin.id = "s09_lint";
+    plugin.version = "1.0.0";
+    plugin.options = cast(*void) plugin;
+    lint := New(Lint_Plugin);
+    lint.name = "s09_lint_rule";
+    lint.version = "1.0.0";
+    lint.inspect_test_header = s09_inspect;
+    plugin.lint = lint;
+    array_add(*plugin.options_schema, config_option("marker", *S09_DEFAULT_MARKER, s09_apply_option, s09_validate_options));
+    return plugin;
+} @juice_plugin
+S09_END
+
+// One S09 workspace: a provider package, a root that declares the plugin with
+// marker "root", and one member that declares it with marker "member".
+s09_write_workspace :: (scratch: string) -> (string, string) {
+    provider := dr_path(scratch, "provider");
+    if !fr_write_package(provider, "s09_provider", "    modules = .[.{name = \"plugin\", entry = \"plugin.jai\"}],\n") return "", "";
+    if !dr_write_file(provider, "plugin.jai", S09_PLUGIN_SOURCE) return "", "";
+    root := dr_path(scratch, "workspace");
+    root_plugins := copy_string(tprint("    plugins = Plugin_Declaration.[.{id = \"s09_lint\", source = .{kind = .PATH, path = %1}, module = .{name = \"plugin\"}, options = Plugin_Option.[.{key = \"marker\", value = \"root\"}]}],\n", quote_jai_string(provider)));
+    if !fr_write_package(root, "s09_root", tprint("    workspace = .{members = .[\"members/*\"]},\n%1", root_plugins)) return "", "";
+    return root, provider;
+}
+
+s09_member_plugins :: (provider: string) -> string {
+    return copy_string(tprint("    modules = .[.{name = \"member_module\", entry = \"module.jai\"}],\n    plugins = Plugin_Declaration.[.{id = \"s09_lint\", source = .{kind = .PATH, path = %1}, module = .{name = \"plugin\"}, options = Plugin_Option.[.{key = \"marker\", value = \"member\"}]}],\n", quote_jai_string(provider)));
+}
+
+// The member's own declaration is the one in force: marker "member" passes its
+// validator while the root's marker "root" would be rejected, so a test run
+// that exits 0 proves the configs came from the package being tested.
+final_review_member_test_uses_member_config :: () {
+    scratch := dr_scratch("fr-member-config");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    root, provider := s09_write_workspace(scratch);
+    expect(root != "");
+    member := dr_path(root, "members/alpha");
+    expect(fr_write_package(member, "alpha", s09_member_plugins(provider)));
+    expect(dr_write_file(member, "module.jai", "alpha_value :: () -> s64 { return 3; }\n"));
+    expect(dr_write_file(dr_path(member, "tests"), "alpha_tests.jai", "alpha_good_name :: () {\n    expect(alpha_value() == 3);\n} @test\n"));
+
+    result, output, errors := dr_run(member, string.["test"]);
+    combined := tprint("%\n%", output, errors);
+    if result.exit_code != 0 print("[fr] member-config child:\n%\n", combined);
+    expect(expect_exit("member-config", result, 0));
+    // The member's config was applied, never the root's.
+    expect(!contains(combined, "S09 root config used"));
+    expect(contains(combined, "1 passed, 0 failed"));
+} @test
+
+// The member's lint rule actually runs, and it reports against the MEMBER's own
+// coordinate: `tests/alpha_tests.jai`, not the workspace-relative
+// `members/alpha/tests/alpha_tests.jai`.
+final_review_member_lint_runs_with_member_paths :: () {
+    scratch := dr_scratch("fr-member-lint");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    root, provider := s09_write_workspace(scratch);
+    expect(root != "");
+    member := dr_path(root, "members/beta");
+    expect(fr_write_package(member, "beta", s09_member_plugins(provider)));
+    expect(dr_write_file(member, "module.jai", "beta_value :: () -> s64 { return 4; }\n"));
+    expect(dr_write_file(dr_path(member, "tests"), "beta_tests.jai", "BadTestOne :: () {\n    expect(beta_value() == 4);\n} @test\n"));
+
+    result, output, errors := dr_run(member, string.["test"]);
+    combined := tprint("%\n%", output, errors);
+    if result.exit_code == 0 print("[fr] member-lint child:\n%\n", combined);
+    // Probe 09: pre-fix the member's lint never ran, so the run exited 0.
+    expect(result.exit_code != 0);
+    expect(contains(combined, "S09 member lint ran: BadTestOne"));
+    // Diagnostic ownership: the finding is reported at the member's own path.
+    expect(contains(combined, "tests/beta_tests.jai"));
+    expect(!contains(combined, "members/beta/tests/beta_tests.jai"));
 } @test
