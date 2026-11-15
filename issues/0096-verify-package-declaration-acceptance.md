@@ -1,6 +1,6 @@
 ---
 title: 验收：全链路示例与发布覆盖
-status: open
+status: closed
 labels: [ready-for-agent]
 assignee: maojiaxing
 parent: "0087"
@@ -34,3 +34,38 @@ blocked-by: ["0094", "0095", "0097", "0098"]
 最终双轴审查及独立 Windows/Linux CLI 揭示了此前测试未覆盖的规格缺口，包括成员归属、包级导入隔离、同包模块测试重复加载、插件派生源码消费、名称/XDG校验等。Linux 的真实 debug/release 自举和部分路径检查已成功，不再将其概括为平台不可用；安装测试另有复制丢失执行权限的夹具缺陷。
 
 全部修复由 [0098](0098-fix-package-declaration-final-review.md) 的同一实施者承担，逐项回归并补证后才能关闭本票。既往绿灯不豁免这些失败，也不反向改写当时的验收记录。
+
+## Resolution
+
+关闭本票：0087 全链路验收已在**本轮约定的 Windows 范围**内完成并通过；Linux 显式未验证。
+
+### 覆盖依据
+
+0087 的 29 项决策、A01–A16 验收组、E01–E10 示例均由前置票与本票覆盖：
+
+- 0088–0095、0097 覆盖声明路径/XDG、包 schema、工作区与产品、依赖解析、插件与派生视图、命令选择、发布兼容、迁移文档、本包模块导入。
+- 0096 补齐验收执行：`tests/package_declaration_acceptance_tests.jai` 与 `docs/implementation/package-declaration-acceptance.md`（历史记录保留）。
+- **0098** 修复最终双轴审查发现的全部规格违反。逐项处置见 0098 Resolution。
+
+### 最终验证（合并后 `3f848e3`，独立 worktree）
+
+| 门禁 | Windows | Linux |
+|---|---|---|
+| debug 自举 | exit 0 | 未验证 |
+| release 自举 | exit 0，`target/juice.exe` 1051136 B | 未验证 |
+| 完整套件 | 380 passed / 0 failed，exit 0，913 s | 未验证 |
+| `final_review_` 按名称 | 32/0 exit 0 | 未验证 |
+| `publication_install_` | 15/0 exit 0 | 未验证 |
+| S01 按名称 | 2/0 exit 0 | 未验证 |
+
+实现分支另记录：完整套件连续两轮 380/0 exit 0（960 s / 1012 s）。
+
+**独立探针复验**：主审用原始审查脚本（非实现者测试）对合并后的发布安装重放，13 项 no-Git 探针 + S01 + S16a + S16b 全部符合期望，0 处不匹配（`final-review/independent-reverification.md`）。
+
+**计数口径**：380 不含 S16b 新增两项（去掉 `@test` 标记仍报 380，双向实测）；其证据是按名称运行与 `final_review_` 30/0→32/0。
+
+### 平台与遗留
+
+- 本轮验收**只在 Windows**。此前 e1743fb 时代的 Linux 证据（debug/release 自举成功、S01 失败、安装复制权限缺陷）作为历史记录保留，不代表当前状态；不得用 Windows 结果推断 POSIX 行为。
+- 未验证项：Linux/POSIX 全部；L01 的 POSIX 分支（从未在任何平台执行）；大小写敏感文件系统上的入口大小写契约；MAX_PATH 与深层路径。
+- 主检出遗留的挂起 Windows 测试/Git 进程未处置（无用户许可），未作为证据，也未在其上构建。

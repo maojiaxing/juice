@@ -1,6 +1,6 @@
 ---
 title: 修复：0087 最终双轴审查与跨平台验收缺口
-status: open
+status: closed
 labels: [ready-for-agent]
 assignee: maojiaxing
 parent: "0087"
@@ -122,3 +122,75 @@ Linux 历史记录（仅对 `e1743fb` 及其修复前状态有效，不得读作
 WORKSPACE 分支给出不合并的具体技术反证（祖先工作区发现 vs 消费方 discovery 根）；J2a–g 逐项
 或抽取或给出反证；J3 两处转发包装已内联。逐项记录见
 `target/evidence/final-review-fixes/ledger.md`。
+
+## Resolution
+
+关闭本票：0087 最终双轴审查确认的全部缺口已修复，并经合并后独立验证。**平台边界：本轮只在 Windows 验收；Linux 显式未验证。**
+
+### 合并与提交范围
+
+- 实现分支 `implement/final-review-fixes`（起点 `92ff745`，即集成 tip），最终 HEAD `2c27e3f`。
+- 经 `3f848e3`（`--no-ff`，父 `3de8bd9` + `2c27e3f`）合入 `integration/package-declaration-semantics`，无冲突。
+- 主要提交：`382e9b2`（S02/S17）、`b317ba1`（S07 预检）、`4230cd5`（S03/S04/S05/S08/S16）、`a766170`（S13）、`d6e765b`（S12）、`91f5400`（S09）、`b38f3e2`（S06/S07 事务）、`ff4293c`（S14）、`9377698`（S15）、`b5fef04`（S11）、`02232b0`（S10）、`d6f0a1b`（S01）、`d52fcee`（S18）、`2634f5a`（断言迁移 + 静默丢弃修复）、`0355fe0`（S16b）、`48b606e`（H1）、`8aba06c`（H3/H4）、`b2d377f`（H2）、`ea4e033`/`d46d006`（J2/J1）、`2c27e3f`（门禁记录）。
+
+### 逐项处置
+
+| ID | 处置 | 说明 |
+|---|---|---|
+| S01 | fixed | 每个已声明模块单一实例，模块自有测试保留。仅在另一收集文件确实 `#import` 该模块时才把导入 shim 重指到同一展开视图并停止直接 load，因此无人导入的模块仍编译并运行其测试。无文件排除、无强制 `modules/` 布局、未拆分 Testing register |
+| S02 | fixed | 成员子目录定位所属工作区；未选成员的非法声明不再因 cwd 被忽略 |
+| S03 | fixed | 每消费包私有导入区 `target/imports`；批量选择不再合并命名空间 |
+| S04 | fixed | 解析状态以发起消费包为 key，共享提供方的传递 Git 选择不再互相影响 |
+| S05 | fixed | Git 内部 PATH 边保留仓库/提交 provenance 与检出边界 |
+| S06 | fixed | 插件 Git 来源走同一 typed 解析/状态；插件提供方自身依赖图在同一事务内解析；update 刷新且不跑 hooks |
+| S07 | fixed | 声明/选择/命令基数预检先于任何获取；插件角色/ABI/options 校验先于状态发布 |
+| S08 | fixed | provider 作用域强制与消费者一致的模块身份/名称冲突校验 |
+| S09 | fixed | `Test_Compile_Stage.package` 携带被测包，测试 cwd、插件配置、lint 诊断归属成员 |
+| S10 | fixed | 单一逻辑输入图覆盖整个 `#load` 闭包；生成/替换/丢弃作用于当前轮；诊断与相对 load 保留逻辑路径 |
+| S11 | fixed | 重复替换拒绝；物理注册规范化并限制在真实派生根内；清理/注册/写入失败致命 |
+| S12 | fixed | 插件私有导入命名空间（`<id>__plugin_<hash>`，落在 `target/plugins/imports`），不覆盖业务别名，单独启用插件不暴露普通导入 |
+| S13 | fixed | 按所选模块 `#load` 闭包计数入口锚点；所有启用插件无条件校验 ABI/options，与是否存在 hook 无关 |
+| S14 | fixed | 名称语法校验贯通（依赖引用名等）；公开名 ASCII 大小写不敏感比较，拼写保留 |
+| S15 | fixed | typed XDG 根在入口校验并传播失败；评估缓存使用同一已验证根，无旧 `get_cache_home` 回退 |
+| S16a | fixed | 撤销无授权的消费根父目录上限；Git 检出边界与链接拒绝保留 |
+| S16b | fixed | WORKSPACE 根包唯一导出简写生效；视图目录改为与消费者 shim 所在目录一致，且 `modules/` 不再被排除导致入口漏拷；纯工作区仍要求显式成员 |
+| S17 | fixed | `default_members`、根 `exclude` 在声明期校验，显式选包不能掩盖 |
+| S18 | fixed | 删除 `docs/spec.md` 旧默认表述；A 表改为真实测试名与计数；E04–E07 补为可独立重放的完整输入 |
+| H1 | fixed | 13 处冗余结构体类型字面量改为推断 `.{}`；显式类型数组字面量按审查结论不动 |
+| H2 | fixed | 100 处缩写声明改全词；全程未使用 Jai 保留字 `context`（用 `lifecycle_context`/`test_context`/`command_context`） |
+| H3 | fixed | 3 处单调用点单行包装内联 |
+| H4 | fixed | 5 行新增 emoji 移除；非 BMP 覆盖由 U+10400/U+10428 测试保留 |
+| J1 | fixed + 反证 | 抽出 `git_resolve_source`（record→offline→selector→content）与 `source_path_root`。两处**故意不合并**并给出理由：离线判定策略 `REQUIRE_CACHED_CONTENT` vs `TRUST_PINNED_COMMIT`（合并即行为变更）；WORKSPACE 分支为祖先工作区发现 + 前置全量校验，与插件的 `has_workspace` + 单选择事后校验不同。角色/能力校验未动（决策 21） |
+| J2a–g | fixed / 逐项反证 | J2a 抽出 `prestep_auxiliary_stage`/`prestep_auxiliary_path_is_free`（保留各自物理输出步骤顺序）；J2b `sort_strings_lexicographically` 共用，`sort_test_names` 拒绝合并（用 `test_name_less` 而非 `compare`）；J2c 摘要去重，`manifest_hash_hex` 拒绝（`manifest.jai` 第 40 个 load 早于 `transpile_cache.jai` 第 54 个，作用域不可见）；J2d 树内本就只有一处 `target_root` 赋值；J2e/J2f fixture 复用共享写入器；J2g 删除被立即覆盖的死赋值与非插值 `tprint` |
+| J3 | fixed | `plugin_prepare_once_for` 直接成为实现，删除 `prepare_plugins_once` 转发；`dr_run` 删除，81 处调用改 `run_otter_child_at`；`dr_run_app` 按审查豁免保留（附加子进程输出） |
+| L01 | fixed（POSIX 分支未执行） | `ic_create_install` 用 `POSIX.stat`/`chmod` 复刻源文件模式，避免 Unix 上 0755→0644；六项安装断言原样保留。**该分支在任何平台都未执行过**，Windows 走早返回 |
+
+### 五项低置信项
+
+书面裁定见 `docs/implementation/final-review-dispositions.md`：Windows 物理身份（大小写不敏感卷上视为同一文件，大小写敏感分支未执行）；默认分支/缓存完整性（三条规则构成可判定矩阵且均有测试，远端前进不是缺陷）；安装兼容纪元 vs 构建身份（同契约的完整安装来自不同构建不构成缺陷）；提供方反向可见性；非 PRESTEP 生命周期贡献。每项均标注未验证边界。
+
+### 验证
+
+**合并后（`3f848e3`，独立 worktree `juice-verify-0098`，`target/evidence/merger-0098/`）**
+
+| 门禁 | 结果 |
+|---|---|
+| debug 自举 | exit 0 |
+| 完整套件 | 380 passed / 0 failed，exit 0，913 s |
+| `final_review_` 按名称 | 32/0，exit 0 |
+| `publication_install_` | 15/0，exit 0 |
+| S01 按名称（`final_review_module_owned_tests_run_once`） | 2/0，exit 0 |
+
+**实现分支（`2c27e3f`）**：debug 自举 ×2、release 自举（`target/juice.exe` 1051136 B）均 exit 0；完整套件连续两轮各 380/0 exit 0（960 s / 1012 s）。
+
+**独立探针复验（主审，非实现者测试）**：用原始审查脚本对发布安装重放，13 项 no-Git 探针（S02/S03/S14/S15/S17）+ S01 + S16a + S16b **全部符合期望，0 处不匹配**；见 `final-review/independent-reverification.md`。
+
+**计数口径（不得改写）**：完整套件的 380 **不含** S16b 新增两项。去掉其 `@test` 标记后套件同样报 380（`CNT-withNew.log` / `CNT-noNew.log` 双向实测）。它们的证据是按名称运行与 `final_review_` 30/0→32/0，不是这 380。
+
+### 已知限制与未验证项
+
+- **Linux/POSIX 全部未验证**（用户本轮决定）。此前 e1743fb 时代获得的 Linux 证据（debug/release 自举成功、S01 失败、`publication_install` 复制权限缺陷）保留为历史记录，不代表当前状态。不得据 Windows 结果推断 POSIX 行为。
+- L01 的 POSIX 分支从未在任何平台执行。
+- 大小写敏感文件系统上的入口大小写契约未执行。
+- MAX_PATH 与深层路径未额外验证。
+- 主检出遗留的挂起 Windows 测试/Git 进程未被处置（无用户许可），未作为本票证据，也未在其上构建。
