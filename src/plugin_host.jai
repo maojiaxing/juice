@@ -103,6 +103,9 @@ Prepared_Package_Plugins :: struct {
     diagnostics:       [..] Plugin_Scan_Diagnostic;
     ok:                bool;
     git_selections:    [..] Resolved_Selection;
+    // One private import directory per enablement whose provider declares its own
+    // dependencies. The host compiler needs them on its module search path.
+    provider_import_dirs: [..] string;
     // How many times this package's plugin sources were resolved. The
     // command layer only ever reads a prepared context (prepare_once_for),
     // so a build front, a second program or a re-entered phase never
@@ -148,9 +151,31 @@ prepare_plugins_once :: (preparation: *Plugin_Preparation, prepared: *Prepared_W
     request.environment = ifx preparation.environment.state_root != "" || preparation.environment.content_cache_root != "" then preparation.environment else prepared.environment;
     resolved := resolve_plugin_sources(request);
     entry.sources = resolved.sources;
-    entry.git_selections = plugin_resolution_selections(prepared.discovery.root_dir, package, resolved.sources);
-    entry.ok = resolved.ok;
+    // The source diagnostics come first: they name the declaration that failed
+    // (a duplicate enablement, a module with no plugin entry, an escaping module
+    // path), and the provider pass must never replace them with a summary.
     for diagnostic: resolved.diagnostics array_add(*entry.diagnostics, diagnostic);
+
+    // Resolve every enablement's PROVIDER graph in this same transaction: a
+    // plugin module may import a module its own provider declares, and the
+    // consumer never repeats that declaration (decision 21). A failure here is
+    // fatal before any publication and before any hook.
+    if resolved.ok {
+        for source: resolved.sources {
+            provider_graph, provider_ok := resolve_plugin_provider_dependencies(request, source);
+            if !provider_ok {
+                array_add(*entry.diagnostics, .{rel_path = source.id, message = tprint("Plugin '%' provider dependencies: %", source.id, provider_graph.error), fatal = true});
+                resolved.ok = false;
+                break;
+            }
+            if provider_graph.consumer_shim_directory != "" array_add(*entry.provider_import_dirs, provider_graph.consumer_shim_directory);
+            for selection_record: provider_graph.selections array_add(*entry.git_selections, selection_record);
+        }
+    }
+    // A plugin Git record and a provider record are the same kind of thing, so
+    // both land in the one publication the command commits.
+    for selection_record: plugin_resolution_selections(prepared.discovery.root_dir, package, resolved.sources) array_add(*entry.git_selections, selection_record);
+    entry.ok = resolved.ok;
 
     scan := plugin_scan_result_from_sources(prepared.discovery, resolved);
     for diagnostic: scan.diagnostics {
@@ -186,6 +211,7 @@ prepare_plugins_once :: (preparation: *Plugin_Preparation, prepared: *Prepared_W
     for diagnostic: entry.diagnostics if diagnostic.fatal preparation.ok = false;
     return *preparation.packages[preparation.packages.count - 1];
 }
+
 
 // The registration landing point of one package: <target>/plugins/<package>/
 // registration.jai for a package with external plugins, "" when it has none
@@ -308,6 +334,9 @@ Plugin_Host_Options :: struct {
     package_root:      string;
     derived_root:      string;
     target_root:       string;
+    // One private import directory per enablement whose provider declares its own
+    // dependencies (the provider graph resolved on this package's behalf).
+    provider_import_dirs: [] string;
 }
 
 plugin_host_dir :: (target_dir: string) -> string {
@@ -360,7 +389,7 @@ package_host_options :: (
     options.package_root = path_slashes(package_view.package_root);
     options.derived_root = path_slashes(package_view.derived_root);
     options.target_root = path_slashes(package_target_dir(prepared.discovery.root_dir));
-    options.target_root = path_slashes(package_target_dir(prepared.discovery.root_dir));
+    options.provider_import_dirs = package_view.provider_import_dirs;
     member_dirs: [..] string;
     for dir: stage.member_dirs array_add(*member_dirs, copy_string(dir));
     options.member_dirs = member_dirs;
@@ -541,11 +570,14 @@ generate_plugin_host :: (options: Plugin_Host_Options) -> string {
 // enablement never turns a plugin module into an ordinary import name. The
 // scan already linked every declared member, so the zone exists when a plugin
 // is enabled.
-plugin_host_import_dirs :: (root_dir: string, package_root: string) -> [..] string {
+plugin_host_import_dirs :: (root_dir: string, package_root: string, provider_imports: [] string = .[]) -> [..] string {
     dirs: [..] string;
     array_add(*dirs, path_slashes(juice_modules_dir()));
     for dir: compiler_import_directories(dependency_imports_dir(ifx package_root != "" then package_root else root_dir), packages_dir(ifx package_root != "" then package_root else root_dir)) array_add(*dirs, dir);
     array_add(*dirs, path_slashes(plugin_imports_dir(root_dir)));
+    // Each enablement's provider graph names live in their own private
+    // directories (the provider may be a read-only checkout).
+    for dir: provider_imports array_add(*dirs, path_slashes(dir));
     return dirs;
 }
 
@@ -738,7 +770,7 @@ run_plugin_host :: (
         }
     }
 
-    import_dirs := plugin_host_import_dirs(options.root_dir, options.package_root);
+    import_dirs := plugin_host_import_dirs(options.root_dir, options.package_root, options.provider_import_dirs);
     result := spawn(options.host_path, import_dirs);
     if result.exit_code != 0 {
         // The child's stderr was inherited (passthrough); the summary is the

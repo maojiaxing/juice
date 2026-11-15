@@ -301,6 +301,9 @@ Resolved_Plugin_Source :: struct {
     // A plugin Git source is a resolution like any other: the command records
     // it in the same state transaction as the package's dependency selections
     // (decision 9/13-15), so a later offline run reuses the same commit.
+    // The provider package's own declaration, so the caller can resolve the
+    // provider's dependency graph (decision 21: the consumer does not repeat it).
+    provider_package:  Normalized_Package;
     git_url:           string;
     git_branch:        string;
     git_tag:           string;
@@ -594,6 +597,45 @@ plugin_resolution_selections :: (consumer_root: string, consumer: Normalized_Pac
     return selections;
 }
 
+// Resolve one enablement's PROVIDER graph. The provider is a package like any
+// other, so its own dependency declarations must resolve before its module can
+// compile; the consumer never repeats them (decision 21). The import names land
+// in this enablement's private directory, because the provider may be a
+// read-only Git checkout and every derived name belongs to the consuming project
+// (decision 24). Publication is deferred to the caller's single transaction.
+resolve_plugin_provider_dependencies :: (
+    request: Plugin_Source_Request,
+    source: Resolved_Plugin_Source,
+    pending: *Prepared_Workspace = null
+) -> (Resolution_Graph, bool) {
+    graph: Resolution_Graph;
+    package := source.provider_package;
+    selected_on_behalf: Package_Selection;
+    declared_any := false;
+    for dependency: package.dependencies {
+        declared_any = true;
+    }
+    if !declared_any return graph, true;
+
+    preparation: Dependency_Preparation_Request;
+    preparation.discovery = request.discovery;
+    preparation.environment = request.environment;
+    // The manifest evaluator's scratch area: the same per-workspace path the
+    // provider manifest load above already uses, so the provider graph needs no
+    // extra cache plumbing through the plugin layer.
+    preparation.cache_dir = tprint("%1/manifest", package_target_dir(request.discovery.root_dir));
+    preparation.invocation_dir = request.consumer.dir;
+    preparation.selection = .{success = true, packages = .[package], paths = .[""]};
+    preparation.shim_root_override = target_plugin_provider_imports_dir(package_target_dir(request.discovery.root_dir), source.import_name);
+    graph = resolution_resolve_consumer(preparation, package, defer_publication = true);
+    if !graph.success return graph, false;
+    if !resolution_write_shims(*graph) return graph, false;
+    if pending != null {
+        for selection_record: graph.selections array_add(*pending.pending_selections, selection_record);
+    }
+    return graph, true;
+}
+
 resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Resolution {
     out: Plugin_Source_Resolution;
     out.ok = true;
@@ -644,6 +686,7 @@ resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Reso
         candidate.import_name = plugin_import_name(declaration.id, resolved.identity);
         candidate.identity = resolved.identity;
         candidate.anchor_rel_path = scan_rel_path(resolved.entry_path, resolved.provider_dir);
+        candidate.provider_package = resolved.package;
         candidate.git_url = resolved.url;
         candidate.git_branch = resolved.branch;
         candidate.git_tag = resolved.tag;

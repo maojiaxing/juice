@@ -923,10 +923,17 @@ resolution_resolve_consumer :: (
     // The dependency import directory is always regenerated; the package's own
     // one only when it declares modules, or when an earlier run left it behind
     // (a declaration that lost its module list must still stop resolving).
-    graph.consumer_shim_directory = dependency_imports_dir(consumer_package.dir);
+    if request.shim_root_override != "" {
+        // A provider resolved on a consumer's behalf: one private directory holds
+        // this provider's import names, and its own modules stay out of it (the
+        // provider's own module is linked by the plugin shim, not by a name here).
+        graph.consumer_shim_directory = request.shim_root_override;
+    } else {
+        graph.consumer_shim_directory = dependency_imports_dir(consumer_package.dir);
+        own_directory := packages_dir(consumer_package.dir);
+        if consumer_exports.targets.count > 0 || is_directory(own_directory) resolution_add_shim_directory(*graph, own_directory);
+    }
     resolution_add_shim_directory(*graph, graph.consumer_shim_directory);
-    own_directory := packages_dir(consumer_package.dir);
-    if consumer_exports.targets.count > 0 || is_directory(own_directory) resolution_add_shim_directory(*graph, own_directory);
 
     node: Resolved_Node;
     node.name = consumer_package.name;

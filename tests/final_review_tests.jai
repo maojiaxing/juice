@@ -869,3 +869,78 @@ final_review_evaluator_cache_uses_typed_root :: () {
     // And no legacy cwd-relative cache appeared beside the package.
     expect(!is_directory(dr_path(app, "juice")));
 } @test
+
+// ---------------------------------------------------------------------------
+// S06 tail: a plugin provider is a package like any other, so the plugin module
+// may `#import` a dependency its OWN declaration selects. The consumer never
+// repeats that declaration (decision 21: reuse the provider's graph), yet the
+// plugin must compile. Review trajectory B: the provider legally declared
+// `Helper`, the plugin module imported it, and the host could not find it.
+// ---------------------------------------------------------------------------
+
+// The plugin module imports `Helper`, a module the PROVIDER declares as its own
+// dependency; the consumer declares no dependency at all.
+S06_PROVIDER_PLUGIN_SOURCE :: #string S06_P_END
+#import "Basic";
+#import "Helper";
+#import "juice_core";
+
+S06_Provider_Plugin :: struct {
+    using base: Juice_Plugin;
+}
+
+get_juice_plugin :: () -> *S06_Provider_Plugin {
+    plugin := New(S06_Provider_Plugin);
+    plugin.id = "s06_provider_plugin";
+    plugin.version = "1.0.0";
+    plugin.options = cast(*void) plugin;
+    // The imported value is part of the plugin's own state, so a host that
+    // cannot resolve `Helper` fails to compile instead of silently ignoring it.
+    plugin.version = tprint("1.0.0+%", HELPER_VALUE);
+    return plugin;
+} @juice_plugin
+S06_P_END
+
+final_review_plugin_provider_dependencies_resolve :: () {
+    scratch := dr_scratch("fr-plugin-provider-deps");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    helper := dr_path(scratch, "helper");
+    expect(dr_write_module_provider(helper, "helper", "HELPER_VALUE :: \"7\";\n"));
+    repo := dr_path(scratch, "repo");
+    expect(dr_git_init(repo));
+    // The provider: one public plugin module plus its OWN dependency on Helper.
+    provider_body := tprint("    modules = .[.{name = \"plugin_module\", entry = \"plugin.jai\"}],\n    dependencies = Dependency.[.{name = \"helper\", source = .{kind = .PATH, path = %1}, modules = .[.{alias = \"Helper\"}]}],\n", quote_jai_string(helper));
+    expect(fr_write_package(repo, "s06-provider", provider_body));
+    expect(dr_write_file(repo, "plugin.jai", S06_PROVIDER_PLUGIN_SOURCE));
+    commit_hash := copy_string(dr_git_commit_all(repo, "provider with a dependency"));
+    expect(commit_hash.count == 40);
+
+    app := dr_path(scratch, "app");
+    plugins := copy_string(tprint("    plugins = Plugin_Declaration.[.{id = \"s06_provider_plugin\", source = .{kind = .GIT, git = .{url = %1}}, module = .{name = \"plugin_module\"}}],\n", quote_jai_string(repo)));
+    expect(fr_write_program(app, "s06_app", plugins, "#import \"Basic\";\n\nmain :: () { print(\"S06_PROVIDER_OK\\n\"); }\n"));
+
+    built, built_output, built_errors := dr_run(app, string.["build"]);
+    combined := tprint("%\n%", built_output, built_errors);
+    if built.exit_code != 0 print("[fr] plugin-provider-deps child:\n%\n", combined);
+    // Pre-fix: `Undeclared identifier 'HELPER_VALUE'` (or an unresolvable
+    // `#import "Helper"`) because the provider's graph was never resolved.
+    expect(expect_exit("plugin-provider-deps", built, 0));
+    expect(!contains(combined, "Helper"));
+
+    // The provider's graph is recorded by the same transaction, and update
+    // refreshes it without running any hook.
+    artifact := target_artifact_path(package_target_dir(app), "s06_app");
+    expect(file_delete(artifact));
+    updated, updated_output, updated_errors := dr_run(app, string.["update"]);
+    updated_text := tprint("%\n%", updated_output, updated_errors);
+    if updated.exit_code != 0 print("[fr] plugin-provider-deps update:\n%\n", updated_text);
+    expect(expect_exit("plugin-provider-deps-update", updated, 0));
+    expect(!file_exists(artifact));
+
+    // Nothing was written into the provider's Git checkout: every derived
+    // import name lives in the consumer's private area.
+    status_result, status := dr_git(string.["-C", repo, "status", "--porcelain"]);
+    expect(status_result.exit_code == 0);
+    expect(status == "");
+} @test

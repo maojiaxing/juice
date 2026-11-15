@@ -104,6 +104,19 @@ target_plugin_imports_dir :: (target_dir: string) -> string {
     return target_zone_dir(target_plugins_dir(target_dir), "imports");
 }
 
+// One plugin enablement's private provider-import directory. A provider's own
+// dependency names must never land in a shared zone (two plugins may pick the
+// same alias for different modules) and never in the provider's checkout (a Git
+// provider is read-only), so each enablement owns a directory of its own.
+//
+// It is a SIBLING of the shim zone, never a child: the shim zone holds
+// `<import name>.jai` files, and a directory named after the same import name
+// would shadow that file — the compiler resolves a directory before a same-named
+// file and then demands a module.jai inside it.
+target_plugin_provider_imports_dir :: (target_dir: string, import_name: string) -> string {
+    return tprint("%1/%2", target_zone_dir(target_plugins_dir(target_dir), "provider_imports"), import_name);
+}
+
 // The consuming package's private dependency import zone (target/imports).
 // Dependency import names belong to the package that declared them, so two
 // packages of one workspace never share this compiler search path.

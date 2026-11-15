@@ -53,6 +53,11 @@ Dependency_Preparation_Request :: struct {
     // (zero) selection keeps the location default, which is what the workspace
     // seam and the function-level tests use.
     selection:      Package_Selection;
+    // When set, the consumer's import names are written here instead of into the
+    // consumer package's own target/imports. A plugin provider is resolved
+    // through this override: the provider may be a read-only Git checkout, and
+    // every derived output belongs to the CONSUMING project (decision 24).
+    shim_root_override: string = "";
 }
 
 // One recorded Git selection. declaring_key identifies the declaring package
