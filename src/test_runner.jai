@@ -544,8 +544,9 @@ test_compile_front :: (stage: *Test_Compile_Stage, spawn: #type (runner_path: st
     // tested package's own target/packages so its own declared modules are
     // importable by their public name (story 37).
     own_packages_dir := ifx stage.package_root != "" then packages_dir(stage.package_root) else "";
+    dependency_directory := ifx stage.package_root != "" then dependency_imports_dir(stage.package_root) else packages_dir(root_dir);
     import_dirs: [..] string;
-    for dir: compiler_import_directories(packages_dir(root_dir), own_packages_dir) array_add(*import_dirs, dir);
+    for dir: compiler_import_directories(dependency_directory, own_packages_dir) array_add(*import_dirs, dir);
     metaprogram_options.import_dirs        = import_dirs;
     metaprogram_options.driver_source      = driver_source;
     metaprogram_options.package_view_paths = stage.view_paths;

@@ -271,8 +271,12 @@ dr_state_text :: (scratch: string) -> string {
     return text;
 }
 
+// Import shims are package-private: the package's own modules land in its
+// target/packages, its dependency import names in target/imports. No other
+// package searches either directory.
 dr_has_shim :: (package_dir: string, shim_name: string) -> bool {
-    return file_exists(dr_path(dr_path(package_dir, "target/packages"), tprint("%.jai", shim_name)));
+    name := tprint("%.jai", shim_name);
+    return file_exists(dr_path(packages_dir(package_dir), name)) || file_exists(dr_path(dependency_imports_dir(package_dir), name));
 }
 
 // One build of the fixture app. A failure prints the child's own stdout/stderr

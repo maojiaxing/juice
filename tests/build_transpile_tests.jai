@@ -311,10 +311,10 @@ test "Dependency strip: a test-free dependency keeps its shim untouched" {
     expect(build_seam_write(dep, "src/extra.jai", "extra_decl :: () -> s32 { return 2; }\n"));
     expect(build_seam_write(root, "target/packages/depx.jai", dependency_shim_content("depx", tprint("%1/src/module.jai", dep))));
 
-    expect(prepare_dependency_strip_views(root));
+    expect(prepare_dependency_strip_views(root, dependency_imports_dir(root)));
     // The shim stays byte-identical (no strip, no rewrite) and no transpile
     // tree was created.
-    shim, ok := read_entire_file(tprint("%1/depx.jai", packages_dir(root)));
+    shim, ok := read_entire_file(tprint("%1/depx.jai", dependency_imports_dir(root)));
     expect(ok && shim == dependency_shim_content("depx", tprint("%1/src/module.jai", dep)));
     expect(!file_exists(transpile_tree_dir(root)));
 }
@@ -327,13 +327,13 @@ test "Dependency strip: a test-bearing dependency is viewed and its shim rewritt
     expect(build_seam_write(dep, "src/extra.jai", "extra_decl :: () -> s32 { return 2; }\n\ntest \"dep test\" {\n    assert(extra_decl() == 2);\n}\n"));
     expect(build_seam_write(root, "target/packages/depx.jai", dependency_shim_content("depx", tprint("%1/src/module.jai", dep))));
 
-    expect(prepare_dependency_strip_views(root));
+    expect(prepare_dependency_strip_views(root, dependency_imports_dir(root)));
 
     // The shim now #loads the entry's strip view under the dependency
     // subtree; the entry view's in-package load rewrites to the child view;
     // the dependency's test block is stripped — no @test, no juice_test_N
     // (the dependency-tests-neither-discovered-nor-executed face).
-    shim, ok := read_entire_file(tprint("%1/depx.jai", packages_dir(root)));
+    shim, ok := read_entire_file(tprint("%1/depx.jai", dependency_imports_dir(root)));
     expect(ok);
     entry_view, parsed := shim_load_target(shim);
     expect(parsed && find_index_from_left(entry_view, "/deps/depx/") >= 0);
@@ -353,8 +353,8 @@ test "Dependency strip: a hand-written shim is left to the compiler" {
     defer delete_directory_full(root);
     expect(build_seam_write(root, "target/packages/depx.jai", "// hand-written\nsome_decl :: 1;\n"));
 
-    expect(prepare_dependency_strip_views(root));
-    shim, ok := read_entire_file(tprint("%1/depx.jai", packages_dir(root)));
+    expect(prepare_dependency_strip_views(root, dependency_imports_dir(root)));
+    shim, ok := read_entire_file(tprint("%1/depx.jai", dependency_imports_dir(root)));
     expect(ok && shim == "// hand-written\nsome_decl :: 1;\n");
     expect(!file_exists(transpile_tree_dir(root)));
 }
@@ -364,8 +364,8 @@ test "Dependency strip: a missing entry is skipped" {
     defer delete_directory_full(root);
     expect(build_seam_write(root, "target/packages/depx.jai", dependency_shim_content("depx", tprint("%1/no-such/src/module.jai", root))));
 
-    expect(prepare_dependency_strip_views(root));
-    shim, ok := read_entire_file(tprint("%1/depx.jai", packages_dir(root)));
+    expect(prepare_dependency_strip_views(root, dependency_imports_dir(root)));
+    shim, ok := read_entire_file(tprint("%1/depx.jai", dependency_imports_dir(root)));
     expect(ok && shim == dependency_shim_content("depx", tprint("%1/no-such/src/module.jai", root)));
     expect(!file_exists(transpile_tree_dir(root)));
 }

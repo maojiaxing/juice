@@ -81,6 +81,21 @@ packages_dir :: (root_dir: string) -> string {
     return target_packages_dir(package_target_dir(root_dir));
 }
 
+// The consuming package's private dependency import directory
+// (<package root>/target/imports): the only place this package's dependency
+// import names are written, so no sibling package can resolve them.
+dependency_imports_dir :: (package_root: string) -> string {
+    return target_imports_dir(package_target_dir(package_root));
+}
+
+// The package root a resolved plan's target directory belongs to
+// (package_target_dir appends exactly one "/target").
+package_root_of_target_dir :: (target_dir: string) -> string {
+    suffix :: "/target";
+    if ends_with(target_dir, suffix) return slice(target_dir, 0, target_dir.count - suffix.count);
+    return target_dir;
+}
+
 // Import directories every compile gets beyond jai's own defaults: the
 // juice module directory (adjacent to the running executable, holds
 // Testing.jai/Juice.jai), the compiled package's own module shims and the
@@ -93,20 +108,19 @@ packages_dir :: (root_dir: string) -> string {
 // modules (target/packages of that package): importing names are
 // package-scoped, so a workspace member's own modules never become another
 // package's import names.
-compiler_import_directories :: (packages_dir: string, own_packages_dir: string = "") -> [..] string {
+compiler_import_directories :: (dependency_import_dir: string, own_packages_dir: string = "") -> [..] string {
     dirs: [..] string;
 
     global_modules_dir := juice_modules_dir();
     if is_directory(global_modules_dir) array_add(*dirs, global_modules_dir);
 
-    // The package's own import names come before the consumer root's: the
-    // package that declares a module name owns it (decision 11). For the root
-    // package the two directories are the same, so the name is added once.
-    if own_packages_dir != "" && !paths_equal(own_packages_dir, packages_dir) && is_directory(own_packages_dir) {
+    // The package's own import names come before its dependency imports: the
+    // package that declares a module name owns it (decision 11).
+    if own_packages_dir != "" && !paths_equal(own_packages_dir, dependency_import_dir) && is_directory(own_packages_dir) {
         array_add(*dirs, path_slashes(own_packages_dir));
     }
-    if is_directory(packages_dir) {
-        array_add(*dirs, path_slashes(packages_dir));
+    if is_directory(dependency_import_dir) {
+        array_add(*dirs, path_slashes(dependency_import_dir));
     }
     return dirs;
 }
@@ -423,8 +437,8 @@ shim_load_target :: (source: string) -> string, bool {
 // transpile_build_file: the transpile seam is the TRANSPILE at mount's
 // replacement surface at the stage level (ticket 027), not a parameter
 // here.
-prepare_dependency_strip_views :: (root_dir: string) -> bool {
-    packages := packages_dir(root_dir);
+prepare_dependency_strip_views :: (root_dir: string, import_directory: string) -> bool {
+    packages := import_directory;
     if !is_directory(packages) return true;
 
     shims, ok := collect_shim_names(packages);

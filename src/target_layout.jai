@@ -97,6 +97,13 @@ target_packages_dir :: (target_dir: string) -> string {
     return target_zone_dir(target_dir, "packages");
 }
 
+// The consuming package's private dependency import zone (target/imports).
+// Dependency import names belong to the package that declared them, so two
+// packages of one workspace never share this compiler search path.
+target_imports_dir :: (target_dir: string) -> string {
+    return target_zone_dir(target_dir, "imports");
+}
+
 // Test scratch (target/tests): the test command prunes the whole zone at the
 // start of every run; every test's scratch root lives here.
 target_tests_dir :: (target_dir: string) -> string {

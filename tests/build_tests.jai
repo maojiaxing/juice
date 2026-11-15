@@ -352,7 +352,7 @@ test "Compile writes the generated metaprogram, spawns jai and checks the artifa
         output_path       = package_target_dir(root),
         intermediate_path = target_build_dir(package_target_dir(root)),
         pdb_path          = tprint("%1/app.pdb", target_build_dir(package_target_dir(root))),
-        import_dirs       = compiler_import_directories(packages_dir(root)),
+        import_dirs       = compiler_import_directories(dependency_imports_dir(root)),
         build_file        = path_slashes(plan.target.source_path),
         testing_view_dir  = juice_modules_dir(),
     });

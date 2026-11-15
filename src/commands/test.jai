@@ -525,7 +525,7 @@ test_transpile_front :: (stage: *Test_Transpile_Stage) -> bool {
     // 027). Dependency tests are neither discovered nor executed — the
     // discovery scan never enters dependency packages — this step only
     // makes them compilable.
-    return prepare_dependency_strip_views(root_dir);
+    return prepare_dependency_strip_views(root_dir, dependency_imports_dir(stage.package_root));
 }
 
 // The test orchestration over a prepared workspace. The PRESTEP, TRANSPILE

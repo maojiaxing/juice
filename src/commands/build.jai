@@ -153,7 +153,7 @@ Build_Transpile_Stage :: struct {
 // entry strip views) then the b7 per-plan entry selection.
 build_transpile_front :: (stage: *Build_Transpile_Stage) -> bool {
     prepared := stage.prepared;
-    if !prepare_dependency_strip_views(prepared.discovery.root_dir) return false;
+    if !prepare_dependency_strip_views(prepared.discovery.root_dir, dependency_imports_dir(stage.package_root)) return false;
     for plan: stage.plans {
         entry, ok := build_plan_entry(prepared, stage.package_root, plan, stage.pipeline, stage.prestep);
         if !ok return false;
@@ -294,10 +294,10 @@ compile_artifact_plan :: (root_dir: string, plan: Artifact_Plan, entry: string,
     options.output_path       = path_slashes(plan.target_dir);
     options.intermediate_path = path_slashes(target_build_dir(plan.target_dir));
     options.pdb_path          = path_slashes(tprint("%1/%2.pdb", target_build_dir(plan.target_dir), plan.target.name));
-    // The package's own module shims precede the consumer root's dependency
-    // shims: this package's declared modules are import names of this package,
-    // which its program and its own module sources both use (story 37).
-    options.import_dirs       = compiler_import_directories(packages_dir(root_dir), target_packages_dir(plan.target_dir));
+    // This package's own module shims and its private dependency imports: both
+    // belong to the package being built, so a sibling package's names never
+    // resolve here (decisions 11-12).
+    options.import_dirs       = compiler_import_directories(dependency_imports_dir(package_root_of_target_dir(plan.target_dir)), target_packages_dir(plan.target_dir));
     options.build_file        = source_file;
     options.testing_view_dir  = testing_dir;
     if !write_entire_file(metaprogram_path, generate_compiler_metaprogram(options)) {
