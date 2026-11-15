@@ -1084,3 +1084,147 @@ final_review_stale_derived_area_failure_is_fatal :: () {
     expect(prepare_package_derived_view(*package_view, *stage_ok, delete_directory_full));
     expect(stage_ok.derived_root == derived && stage_ok.package_root == root);
 } @test
+
+// ---------------------------------------------------------------------------
+// S10: one logical input graph. The pre-step's substitute/generated channels act
+// on the whole `#load` closure of the run, not only on the build entry, and the
+// logical paths stay the identity used for relative loads and for loading edges.
+// Review probes: a hook registered `generated("src/helper.jai", ...)` for a file
+// the retained main `#load`s and the compile never saw it; a substitution of a
+// nested helper was ignored; a substitution of the entry moved its relative
+// load base.
+// ---------------------------------------------------------------------------
+
+// PRESTEP plugin: substitutes one nested helper, generates another, and refuses
+// anything the options do not name. The two option rows keep the fixture honest —
+// the hook only ever touches the paths it was told to.
+S10_PLUGIN_SOURCE :: #string S10_END
+#import "Basic";
+#import "juice_core";
+
+S10_Plugin :: struct {
+    using base: Juice_Plugin;
+    replace: string;
+    generate: string;
+}
+
+S10_DEFAULT_REPLACE: string = "";
+S10_DEFAULT_GENERATE: string = "";
+
+// The replacement keeps the LOGICAL name its caller already uses: substitute
+// replaces a file's text, it never renames the input. The value changes, which is
+// what the assertion observes.
+S10_REPLACED_HELPER :: "Value_From_Deep :: () -> s64 {\n    return 42;\n}\n";
+S10_GENERATED_HELPER :: "#import \"Basic\";\n\nGenerated_Helper :: () -> s64 {\n    return 7;\n}\n";
+
+s10_apply :: (options: *void, key: string, value: string) -> string {
+    plugin := cast(*S10_Plugin) options;
+    if key == "replace" {
+        plugin.replace = value;
+        return "";
+    }
+    if key == "generate" {
+        plugin.generate = value;
+        return "";
+    }
+    return tprint("unknown option '%'", key);
+}
+
+s10_hook :: (ctx: *Lifecycle_Context, state: *void) -> bool {
+    plugin := cast(*S10_Plugin) state;
+    if plugin.replace != "" {
+        physical, written := prestep_write_derived(ctx, plugin.replace, S10_REPLACED_HELPER);
+        if !written return false;
+        if !prestep_add_substitution(ctx, plugin.replace, physical) return false;
+    }
+    if plugin.generate != "" {
+        if !prestep_add_generated(ctx, plugin.generate, S10_GENERATED_HELPER) return false;
+    }
+    return true;
+}
+
+get_juice_plugin :: () -> *S10_Plugin {
+    plugin := New(S10_Plugin);
+    plugin.id = "s10_derived";
+    plugin.version = "1.0.0";
+    plugin.options = cast(*void) plugin;
+    array_add(*plugin.hooks, .{stage = .PRESTEP, position = .before, hook = s10_hook});
+    array_add(*plugin.options_schema, config_option("replace", *S10_DEFAULT_REPLACE, s10_apply, null));
+    array_add(*plugin.options_schema, config_option("generate", *S10_DEFAULT_GENERATE, s10_apply, null));
+    return plugin;
+} @juice_plugin
+S10_END
+
+// One app shaped for the S10 cases: main `#load`s a retained helper, which in turn
+// `#load`s a second helper. The substitutions/generations the plugin is told to
+// make all land BELOW the entry, so an entry-only implementation sees none of
+// them.
+s10_write_app :: (app: string, replace_path: string, generate_path: string) -> bool {
+    rows: [..] string;
+    if replace_path != "" array_add(*rows, tprint(".{key = \"replace\", value = %1}", quote_jai_string(replace_path)));
+    if generate_path != "" array_add(*rows, tprint(".{key = \"generate\", value = %1}", quote_jai_string(generate_path)));
+    plugin_options := "";
+    if rows.count > 0 {
+        builder: String_Builder;
+        for row, index: rows {
+            if index > 0 print_to_builder(*builder, ", ");
+            print_to_builder(*builder, "%", row);
+        }
+        plugin_options = tprint(", options = Plugin_Option.[%]", builder_to_string(*builder));
+    }
+    plugins := copy_string(tprint("    plugins = Plugin_Declaration.[.{builtin = \"load\"}, .{builtin = \"test-block\"}, .{id = \"s10_derived\", source = .{kind = .WORKSPACE}, module = .{path = \"packages/s10-plugin\", name = \"s10_plugin\"}%1}],\n", plugin_options));
+    // The provider is a workspace member, so the WORKSPACE source kind resolves it
+    // without a second declaration surface.
+    if !fr_write_package(app, "s10_app", tprint("%1    workspace = .{members = .[\"packages/s10-plugin\"]},\n    executables = .[.{name = \"app\", entry = \"src/main.jai\"}],\n", plugins)) return false;
+    if !dr_write_file(dr_path(app, "src"), "main.jai", "#import \"Basic\";\n\n#load \"helper.jai\";\n\nmain :: () {\n    print(\"S10_VALUE=%\\n\", Value_From_Helper());\n}\n") return false;
+    if !dr_write_file(dr_path(app, "src"), "helper.jai", "#import \"Basic\";\n\n#load \"deep.jai\";\n\nValue_From_Helper :: () -> s64 {\n    return Value_From_Deep() + 1;\n}\n") return false;
+    return dr_write_file(dr_path(app, "src"), "deep.jai", "Value_From_Deep :: () -> s64 {\n    return 1;\n}\n");
+}
+
+s10_write_provider :: (app: string) -> bool {
+    provider := dr_path(app, "packages/s10-plugin");
+    if !fr_write_package(provider, "s10_plugin_provider", "    modules = .[.{name = \"s10_plugin\", entry = \"plugin.jai\"}],\n") return false;
+    return dr_write_file(provider, "plugin.jai", S10_PLUGIN_SOURCE);
+}
+
+// A generated helper that the retained main `#load`s and the package does not
+// have: the compile input must come from the pre-step's registration.
+final_review_generated_helper_joins_the_closure :: () {
+    scratch := dr_scratch("fr-derived-generated-closure");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    app := dr_path(scratch, "app");
+    expect(s10_write_app(app, "", "src/gen_helper.jai"));
+    expect(s10_write_provider(app));
+    // The retained main loads the generated name instead of the shipped helper.
+    expect(dr_write_file(dr_path(app, "src"), "main.jai", "#import \"Basic\";\n\n#load \"gen_helper.jai\";\n\nmain :: () {\n    print(\"S10_GEN=%\\n\", Generated_Helper());\n}\n"));
+
+    built, built_output, built_errors := dr_run(app, string.["build"]);
+    combined := tprint("%\n%", built_output, built_errors);
+    if built.exit_code != 0 print("[fr] generated-closure child:\n%\n", combined);
+    expect(expect_exit("generated-closure", built, 0));
+    run_result, run_output, _, _ := run_command(target_artifact_path(package_target_dir(app), "app"), capture_and_return_output = true);
+    expect(expect_exit("generated-closure-run", run_result, 0));
+    expect(contains(run_output, "S10_GEN=7"));
+} @test
+
+// A substitution of a NESTED helper (two `#load` edges below the entry): the
+// compile must read the derived text, and the logical path stays the helper's.
+final_review_nested_substitution_reaches_the_compile :: () {
+    scratch := dr_scratch("fr-derived-nested");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+    app := dr_path(scratch, "app");
+    expect(s10_write_app(app, "src/deep.jai", ""));
+    expect(s10_write_provider(app));
+
+    built, built_output, built_errors := dr_run(app, string.["build"]);
+    combined := tprint("%\n%", built_output, built_errors);
+    if built.exit_code != 0 print("[fr] nested-substitution child:\n%\n", combined);
+    expect(expect_exit("nested-substitution", built, 0));
+    run_result, run_output, _, _ := run_command(target_artifact_path(package_target_dir(app), "app"), capture_and_return_output = true);
+    expect(expect_exit("nested-substitution-run", run_result, 0));
+    // 42 (the substituted deep helper) + 1, never the retained 1 + 1.
+    expect(contains(run_output, "S10_VALUE=43"));
+    expect(!contains(run_output, "S10_VALUE=2"));
+} @test
