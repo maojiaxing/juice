@@ -50,8 +50,12 @@ RESOLUTION_STANDARD_MODULE_NAMES :: string.[
 ];
 
 // The directories a provider source view never copies: build outputs, Git
-// internals and locally generated import shims.
-RESOLUTION_VIEW_EXCLUDED_DIRECTORIES :: string.["target", ".git", ".build", "modules"];
+// internals and locally generated import shims. `modules` is NOT excluded: a
+// declared product entry may live under `modules/` (an S01 review fixture and the
+// S16b workspace-root provider both do), and the view must contain every file the
+// exported entry's shim will load. Skipping it copied the provider without its
+// entry and the compile failed with "Unable to open file ... modules/root.jai".
+RESOLUTION_VIEW_EXCLUDED_DIRECTORIES :: string.["target", ".git", ".build"];
 
 Resolved_Node :: struct {
     name:           string;
@@ -750,7 +754,13 @@ resolution_create_view :: (graph: *Resolution_Graph, request: Dependency_Prepara
     }
     if !used return "", true;
 
-    view_dir := tprint("%1/deps/%2", package_target_dir(graph.consumer_root), resolution_sanitized_key(node.identity));
+    // Decision 12: the view is the CONSUMER package's private copy, so it lands in
+    // that package's own target/ — the same tree its dependency shims use
+    // (dependency_imports_dir(consumer_package.dir)). Using the discovery root put
+    // a member's view under the workspace root while the shim pointed at the view's
+    // path from the provider's side, so path and content disagreed.
+    consumer_dir := graph.nodes[graph.consumer_index].dir;
+    view_dir := tprint("%1/deps/%2", package_target_dir(consumer_dir), resolution_sanitized_key(node.identity));
     delete_directory_full(view_dir);
     for file: files {
         source, read_ok := read_entire_file(file);

@@ -1303,3 +1303,86 @@ final_review_module_owned_tests_run_once :: () {
     expect(rejected_result.exit_code != 0);
     expect(contains(rejected_combined, "Product name must be a Jai identifier"));
 } @test
+
+// ---------------------------------------------------------------------------
+// S16b: a WORKSPACE source that resolves to the ROOT package.
+//
+// The root package exports exactly one module, so a member's dependency may omit
+// `modules` and take the uniform sole-export shorthand. Selection then passes, but
+// the generated shim pointed at the provider's own target/deps/... while the
+// consumer-private view was materialized under the CONSUMER's target, so the
+// compile failed with "Unable to open file ... for reading". The shim path and the
+// real content directory must agree, for a root provider and for a member one.
+// ---------------------------------------------------------------------------
+
+final_review_workspace_root_provider_shorthand :: () {
+    scratch := dr_scratch("fr-ws-root-provider");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+
+    workspace := dr_path(scratch, "ws");
+    // The root package's single public export lives at an explicit entry, so this
+    // is the root-as-provider shape rather than auto-discovery.
+    expect(dr_write_file(workspace, "package.jai",
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"0.1.0\",\n    name    = \"ws_root\",\n\n    modules = .[.{name = \"RootApi\", entry = \"modules/root.jai\"}],\n\n    workspace = .{\n        members = string.[\"apps/child\"],\n    },\n};\n"));
+    child_dir := dr_path(dr_path(workspace, "apps"), "child");
+    if !make_directory_if_it_does_not_exist(dr_path(workspace, "modules"), recursive = true) return;
+    expect(write_entire_file(dr_path(dr_path(workspace, "modules"), "root.jai"), "Root_Value :: () -> s64 {\n    return 41;\n}\n"));
+
+    // `modules` omitted: the root package has exactly one export.
+    expect(dr_write_app(child_dir, "    executables = .[.{name = \"child\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"root_api\", source = .{kind = .WORKSPACE}, modules = .[.{alias = \"RootApi\"}]},\n    ],\n",
+        "#import \"Basic\";\n#import \"RootApi\";\n\nmain :: () { print(\"root=%\\n\", Root_Value()); }\n"));
+
+    build_result, build_output, build_errors := dr_run(child_dir, string.["build"]);
+    if build_result.exit_code != 0 {
+        print("[fr] ws-root-provider build failed:\n%\n%\n", build_output, build_errors);
+    }
+    expect(expect_exit("ws-root-provider build", build_result, 0));
+
+    run_result, run_output, run_errors := run_command(dr_path(dr_path(child_dir, "target"), "child.exe"), capture_and_return_output = true);
+    combined := tprint("%\n%", run_output, run_errors);
+    if run_result.exit_code != 0 print("[fr] ws-root-provider run:\n%\n", combined);
+    expect(expect_exit("ws-root-provider run", run_result, 0));
+    expect(contains(combined, "root=41"));
+} @test
+
+// The S16b fix must not weaken the neighbouring rule: a PURE workspace (the root
+// declares no package at all) cannot answer an omitted module list with "the sole
+// export", because there is no root package to export anything. Several members
+// make the ambiguity explicit, so the dependency must name its member module.
+final_review_pure_workspace_still_needs_explicit_selection :: () {
+    scratch := dr_scratch("fr-pure-ws-explicit");
+    dr_isolate(scratch);
+    defer dr_restore_env();
+
+    workspace := dr_path(scratch, "ws");
+    expect(dr_write_file(workspace, "package.jai",
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    workspace = .{\n        members = string.[\"apps/*\"],\n    },\n};\n"));
+    app_a := dr_path(dr_path(workspace, "apps"), "alpha");
+    app_b := dr_path(dr_path(workspace, "apps"), "beta");
+    expect(make_directory_if_it_does_not_exist(app_a, recursive = true));
+    expect(make_directory_if_it_does_not_exist(app_b, recursive = true));
+    expect(dr_write_module_provider(app_a, "alpha", "Alpha_Value :: 1;\n"));
+    expect(dr_write_module_provider(app_b, "beta", "Beta_Value :: 2;\n"));
+
+    // Omitted `modules` with no root package: refused, not guessed.
+    expect(dr_write_app(app_a, "    executables = .[.{name = \"alpha\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"beta\", source = .{kind = .WORKSPACE}},\n    ],\n",
+        "#import \"Basic\";\n\nmain :: () {}\n"));
+    refused_result, refused_output, refused_errors := dr_run(app_a, string.["build"]);
+    refused := tprint("%\n%", refused_output, refused_errors);
+    if refused_result.exit_code == 0 print("[fr] pure-workspace omission was accepted:\n%\n", refused);
+    expect(refused_result.exit_code != 0);
+    expect(contains(refused, "WORKSPACE source root has no package; select a member module explicitly"));
+
+    // The same dependency with the member named explicitly builds and runs, which
+    // proves the refusal above is the omission rule and not a broken fixture.
+    expect(dr_write_app(app_a, "    executables = .[.{name = \"alpha\", entry = \"src/main.jai\"}],\n    dependencies = Dependency.[\n        .{name = \"beta\", source = .{kind = .WORKSPACE}, modules = .[.{path = \"apps/beta\", alias = \"Beta\"}]},\n    ],\n",
+        "#import \"Basic\";\n#import \"Beta\";\n\nmain :: () { print(\"beta=%\\n\", Beta_Value); }\n"));
+    build_result, build_output, build_errors := dr_run(app_a, string.["build"]);
+    if build_result.exit_code != 0 print("[fr] pure-workspace explicit build:\n%\n%\n", build_output, build_errors);
+    expect(expect_exit("pure-workspace explicit build", build_result, 0));
+    run_result, run_output, run_errors := run_command(dr_path(dr_path(app_a, "target"), "alpha.exe"), capture_and_return_output = true);
+    combined := tprint("%\n%", run_output, run_errors);
+    expect(expect_exit("pure-workspace explicit run", run_result, 0));
+    expect(contains(combined, "beta=2"));
+} @test
