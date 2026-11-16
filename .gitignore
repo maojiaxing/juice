@@ -7,3 +7,8 @@ target/
 !tests/data/scan-package/src/target/
 !tests/data/scan-package/src/target/shadow.jai
 .claude/
+
+# Local design documents and issue records
+/docs/
+/issues/
+/GLOSSARY.md
