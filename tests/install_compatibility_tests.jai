@@ -93,11 +93,16 @@ ic_real_published_texts :: () -> ([..] string, bool) {
     texts: [..] string;
     source, source_ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
     if !source_ok return texts, false;
+    // The Juice face and the built-in id constants come from the declaration
+    // vocabulary's own file (packages/juice/module.jai); Testing is still cut
+    // out of src/module.jai.
+    declaration, declaration_ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
+    if !declaration_ok return texts, false;
     discovery, discovery_ok := read_entire_file(tprint("%1/src/test_discovery.jai", otter_root()));
     if !discovery_ok return texts, false;
-    juice, juice_ok := publish_juice_module(source);
+    juice, juice_ok := publish_juice_module(declaration);
     testing, testing_ok := publish_testing_module(source);
-    core, core_ok := publish_juice_core(source);
+    core, core_ok := publish_juice_core(declaration);
     if !juice_ok || !testing_ok || !core_ok return texts, false;
     array_add(*texts, juice);
     array_add(*texts, testing);

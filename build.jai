@@ -200,6 +200,14 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
         print("[Build System] Error: 无法读取定义源 src/module.jai（发布步骤）\n");
         exit(1);
     }
+    // The package declaration vocabulary has its own file now, so the published
+    // Juice face and the built-in id constants come from there. Testing stays in
+    // src/module.jai: its published form is a token-level strip, not a copy.
+    declaration_source, declaration_read_ok := read_entire_file(tprint("%1/packages/juice/module.jai", root));
+    if !declaration_read_ok {
+        print("[Build System] Error: 无法读取声明词汇源 packages/juice/module.jai（发布步骤）\n");
+        exit(1);
+    }
     discovery_source, discovery_read_ok := read_entire_file(tprint("%1/src/test_discovery.jai", root));
     if !discovery_read_ok {
         print("[Build System] Error: 无法读取发现面源 src/test_discovery.jai（发布步骤）\n");
@@ -224,7 +232,7 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
         print("[Build System] Error: 未找到 JUICE_PLUGIN_ABI_VERSION 常量声明（安装标记）\n");
         exit(1);
     }
-    juice_text, juice_ok := publish_juice_module(module_source);
+    juice_text, juice_ok := publish_juice_module(declaration_source);
     if !juice_ok {
         print("[Build System] Error: 发布 Juice 模块失败（段标记契约破坏）\n");
         exit(1);
@@ -234,7 +242,7 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
         print("[Build System] Error: 发布 Testing 模块失败（段标记契约破坏）\n");
         exit(1);
     }
-    core_text, core_ok := publish_juice_core(module_source);
+    core_text, core_ok := publish_juice_core(declaration_source);
     if !core_ok {
         print("[Build System] Error: 发布 juice_core 模块失败（内置 id 常量缺失）\n");
         exit(1);

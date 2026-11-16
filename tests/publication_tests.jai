@@ -106,54 +106,57 @@ publication_smoke_driver_code :: (driver_path: string) -> string {
 // Fake-source matrix
 // ===========================================================================
 
-FAKE_SOURCE :: "#import \"Basic\";\n\n// file header prose\n// [PUBLICATION-SECTION package]\n\nP1 :: struct {\n    a: string;\n}\n\n// [PUBLICATION-SECTION testing]\n\nT1 :: struct {\n    b: string;\n}\n\n// [PUBLICATION-CUT testing-self-tests]\n\ntest \"kept\" {\n    x := 1;\n}\n";
+DECLARATION_SOURCE :: "#import \"Basic\";\n\n// The declaration vocabulary.\nProduct :: struct {\n    name: string;\n}\n";
+TESTING_SOURCE :: "#import \"Basic\";\n\n// [PUBLICATION-SECTION testing]\n\nT1 :: struct {\n    b: string;\n}\n\n// [PUBLICATION-CUT testing-self-tests]\n\ntest \"kept\" {\n    x := 1;\n}\n";
 
-test "Section cut: both sections extract with blank edges trimmed and self-tests cut" {
-    section, ok := extract_package_section(FAKE_SOURCE);
+test "Juice face: the declaration source publishes whole behind the standard import" {
+    published, ok := publish_juice_module(DECLARATION_SOURCE);
     expect(ok);
-    expect(section == "P1 :: struct {\n    a: string;\n}");
-    section, ok = extract_testing_section(FAKE_SOURCE);
+    // Exactly one import line: the source own copy is dropped, not doubled.
+    // (A second occurrence would show up as an import line inside the body.)
+    expect(starts_with(published, "#import \"Basic\";\n\n"));
+    body := slice(published, 18, published.count - 18);
+    expect(!contains(body, "#import"));
+    expect(contains(published, "Product :: struct {"));
+    expect(!contains(published, "PUBLICATION-SECTION"));
+    // An empty source is a loud failure, not an empty module.
+    _, empty_ok := publish_juice_module("");
+    expect(!empty_ok);
+}
+
+test "Section cut: the testing section extracts with blank edges trimmed and self-tests cut" {
+    section, ok := extract_testing_section(TESTING_SOURCE);
     expect(ok);
     expect(section == "T1 :: struct {\n    b: string;\n}");
 }
 
-test "Section cut: missing markers fail loudly" {
-    _, ok := extract_package_section("#import \"Basic\";\n\nP1 :: struct {}\n\nT1 :: struct {}\n");
-    expect(!ok);
-    _, ok = extract_testing_section("#import \"Basic\";\n\nP1 :: struct {}\n\nT1 :: struct {}\n");
-    expect(!ok);
-    // One marker alone is not enough — both must be present.
-    _, ok = extract_package_section("#import \"Basic\";\n\n// [PUBLICATION-SECTION package]\n\nP1 :: struct {}\n");
-    expect(!ok);
-    _, ok = extract_testing_section("#import \"Basic\";\n\n// [PUBLICATION-SECTION testing]\n\nT1 :: struct {}\n");
+test "Section cut: a missing testing marker fails loudly" {
+    _, ok := extract_testing_section("#import \"Basic\";\n\nT1 :: struct {}\n");
     expect(!ok);
 }
 
-test "Section cut: duplicated markers fail loudly" {
-    _, ok := extract_package_section("// [PUBLICATION-SECTION package]\n// [PUBLICATION-SECTION package]\nP1 :: struct {}\n// [PUBLICATION-SECTION testing]\nT1 :: struct {}\n");
-    expect(!ok);
-    _, ok = extract_testing_section("// [PUBLICATION-SECTION package]\nP1 :: struct {}\n// [PUBLICATION-SECTION testing]\n// [PUBLICATION-SECTION testing]\nT1 :: struct {}\n");
+test "Section cut: a duplicated testing marker fails loudly" {
+    _, ok := extract_testing_section("// [PUBLICATION-SECTION testing]\nT1 :: struct {}\n// [PUBLICATION-SECTION testing]\nT2 :: struct {}\n\n// [PUBLICATION-CUT testing-self-tests]\n");
     expect(!ok);
 }
 
 test "Section cut: missing or duplicated self-test cut marker fails loudly" {
     // No cut marker: the published face would include the self-tests.
-    _, ok := extract_testing_section("// [PUBLICATION-SECTION package]\nP1 :: 1;\n// [PUBLICATION-SECTION testing]\nT1 :: 1;\n");
+    _, ok := extract_testing_section("// [PUBLICATION-SECTION testing]\nT1 :: 1;\n");
     expect(!ok);
     // Two cut markers: the published face's end is ambiguous.
-    _, ok = extract_testing_section("// [PUBLICATION-SECTION package]\nP1 :: 1;\n// [PUBLICATION-SECTION testing]\nT1 :: 1;\n// [PUBLICATION-CUT testing-self-tests]\n// [PUBLICATION-CUT testing-self-tests]\nT2 :: 1;\n");
+    _, ok = extract_testing_section("// [PUBLICATION-SECTION testing]\nT1 :: 1;\n// [PUBLICATION-CUT testing-self-tests]\n// [PUBLICATION-CUT testing-self-tests]\nT2 :: 1;\n");
     expect(!ok);
 }
 
-test "Section cut: unknown marker names and misorder fail loudly" {
+test "Section cut: unknown marker names fail loudly" {
     // A typo'd marker name must never publish silently.
-    _, ok := extract_package_section("// [PUBLICATION-SECTION package]\nP1 :: struct {}\n// [PUBLICATION-SECTION typo]\nT1 :: struct {}\n// [PUBLICATION-SECTION testing]\nT2 :: struct {}\n");
+    _, ok := extract_testing_section("// [PUBLICATION-SECTION typo]\nT1 :: struct {}\n");
     expect(!ok);
-    _, ok = extract_testing_section("// [PUBLICATION-SECTION package]\nP1 :: struct {}\n// [PUBLICATION-SECTION typo]\nT1 :: struct {}\n");
-    expect(!ok);
-    // The testing marker before the package marker is a misorder.
-    _, ok = extract_package_section("// [PUBLICATION-SECTION testing]\nT1 :: struct {}\n// [PUBLICATION-SECTION package]\nP1 :: struct {}\n");
-    expect(!ok);
+    // The retired package marker is now an unknown name: the Juice face is read
+    // whole, so a leftover marker would mean a caller still expects a cut.
+    _, retired_ok := extract_testing_section("// [PUBLICATION-SECTION package]\nP1 :: struct {}\n// [PUBLICATION-SECTION testing]\nT1 :: struct {}\n// [PUBLICATION-CUT testing-self-tests]\n");
+    expect(!retired_ok);
 }
 
 test "Prefix strip: the public-name matrix strips to the bare published names" {
@@ -183,20 +186,20 @@ test "Prefix strip: line fidelity holds line for line" {
 }
 
 test "Publish Juice module: byte shape" {
-    text, ok := publish_juice_module(FAKE_SOURCE);
+    text, ok := publish_juice_module(DECLARATION_SOURCE);
     expect(ok);
-    expect(text == "#import \"Basic\";\n\nP1 :: struct {\n    a: string;\n}\n");
+    expect(text == "#import \"Basic\";\n\n// The declaration vocabulary.\nProduct :: struct {\n    name: string;\n}\n");
     // The failure channel carries the empty text.
-    text, ok = publish_juice_module("no markers here\n");
+    text, ok = publish_juice_module("");
     expect(!ok && text == "");
 }
 
 test "Publish Testing module: byte shape with prefixes stripped and self-tests cut" {
-    source := "#import \"Basic\";\n// [PUBLICATION-SECTION package]\nP1 :: 1;\n// [PUBLICATION-SECTION testing]\nTesting_expect(true);\n// [PUBLICATION-CUT testing-self-tests]\ntest \"kept\" {\n    Testing_expect(true);\n}\n";
+    source := "#import \"Basic\";\n// [PUBLICATION-SECTION testing]\nTesting_expect(true);\n// [PUBLICATION-CUT testing-self-tests]\ntest \"kept\" {\n    Testing_expect(true);\n}\n";
     text, ok := publish_testing_module(source);
     expect(ok);
     expect(text == "#import \"Basic\";\n\nexpect(true);\n");
-    text, ok = publish_testing_module(FAKE_SOURCE);
+    text, ok = publish_testing_module(TESTING_SOURCE);
     expect(ok);
     expect(text == "#import \"Basic\";\n\nT1 :: struct {\n    b: string;\n}\n");
 }
@@ -259,13 +262,25 @@ test "Landing paths: the target/modules artifacts and the internal source artifa
 // Real-source byte pins
 // ===========================================================================
 
-// The published Juice directory module, line for line (the definition
-// source's package section verbatim behind the Basic import). Any change to
-// src/module.jai's package section must update this pin — publication drift
-// fails loudly here.
+// The published Juice module, line for line: packages/juice/module.jai
+// verbatim behind the Basic import. Any change to that file must update this
+// pin — publication drift fails loudly here.
 EXPECTED_JUICE_MODULE_LINES :: string.[
     "#import \"Basic\";",
     "",
+    "// The Juice package declaration vocabulary: the exact declarations a package",
+    "// author writes against in package.jai (`PACKAGE :: Package.{...}`).",
+    "//",
+    "// This is a publication source directory, not a package: it has no package.jai,",
+    "// is not a workspace member, and is never imported by name as a package. The",
+    "// publish step reads this file and emits it verbatim behind the standard import",
+    "// line as the installed \"Juice\" module. juice's own compilation unit reaches it",
+    "// through src/module.jai, which loads it for the bare declaration names",
+    "// (src/manifest.jai evaluates a Package value directly).",
+    "//",
+    "// Declaration input only. Runtime models live in src/package_model.jai.",
+    "// The control-character defaults are reserved implementation values; ordinary",
+    "// empty strings and empty lists remain explicit input.",
     "Product :: struct {",
     "    name: string = \"\\x01juice-omitted\";",
     "    entry: string = \"\\x01juice-omitted\";",
@@ -463,7 +478,7 @@ EXPECTED_TESTING_MODULE_LINES :: string.[
 ];
 
 test "Real source: Juice module publication byte pin" {
-    source, ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
+    source, ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
     expect(ok);
     text, pub_ok := publish_juice_module(source);
     expect(pub_ok);
@@ -481,7 +496,7 @@ test "Real source: Testing module publication byte pin" {
 }
 
 test "Real source: juice_core publication byte pin" {
-    source, ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
+    source, ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
     expect(ok);
     text, pub_ok := publish_juice_core(source);
     expect(pub_ok);
@@ -579,10 +594,12 @@ test "Publish: a missing plugin face closure source fails the test-side publicat
 test "E2E: published modules compile and run under bare imports" {
     source, ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
     expect(ok);
+    declaration, declaration_ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
+    expect(declaration_ok);
 
-    juice, ok1 := publish_juice_module(source);
+    juice, ok1 := publish_juice_module(declaration);
     testing, ok2 := publish_testing_module(source);
-    core, ok3 := publish_juice_core(source);
+    core, ok3 := publish_juice_core(declaration);
     expect(ok1 && ok2 && ok3);
 
     // The ticket 049 layout: the modules root holds juice_core.jai and the
@@ -623,4 +640,28 @@ test "E2E: published modules compile and run under bare imports" {
         ]);
         expect(ok);
     }
+}
+
+// The declaration vocabulary has physical files of its own: packages/juice/ is
+// a publication source directory (no package.jai, not a workspace member, not
+// importable), and the published Juice module is read from it rather than
+// carved out of src/module.jai by a section marker.
+test "Real source: the declaration vocabulary lives in packages/juice" {
+    declaration_path := tprint("%1/packages/juice/module.jai", otter_root());
+    expect(file_exists(declaration_path));
+    declaration_source, read_ok := read_entire_file(declaration_path);
+    expect(read_ok);
+    expect(contains(declaration_source, "Package :: struct"));
+    expect(contains(declaration_source, "Plugin_Declaration :: struct"));
+    expect(contains(declaration_source, "Workspace_Config :: struct"));
+    // A publication source directory is not a package: no manifest, so no
+    // workspace member, no Package.name, nothing to #import as a package.
+    expect(!file_exists(tprint("%1/packages/juice/package.jai", otter_root())));
+
+    // The published face is that file verbatim behind the standard import line,
+    // with no section marker involved.
+    published, published_ok := publish_juice_module(declaration_source);
+    expect(published_ok);
+    expect(contains(published, "Package :: struct"));
+    expect(!contains(published, "PUBLICATION-SECTION"));
 }

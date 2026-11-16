@@ -1,65 +1,14 @@
 #import "Basic";
 
+// The package declaration vocabulary moved to packages/juice/module.jai (a
+// publication source directory). This load keeps the bare declaration names —
+// Package, Product, Source, ... — in juice's own compilation unit, where
+// src/manifest.jai evaluates a Package value directly.
+#load "../packages/juice/module.jai";
+
 // Declaration input only. Runtime models live in package_model.jai.
 // The control-character defaults are reserved implementation values; ordinary
 // empty strings and empty lists remain explicit input.
-// [PUBLICATION-SECTION package]
-Product :: struct {
-    name: string = "\x01juice-omitted";
-    entry: string = "\x01juice-omitted";
-}
-Source_Kind :: enum { UNSPECIFIED; PATH; GIT; WORKSPACE; }
-Git_Source :: struct {
-    url: string = "\x01juice-omitted";
-    branch: string = "\x01juice-omitted";
-    tag: string = "\x01juice-omitted";
-    rev: string = "\x01juice-omitted";
-}
-Source :: struct {
-    kind: Source_Kind;
-    path: string = "\x01juice-omitted";
-    git: Git_Source;
-}
-Module_Selection :: struct {
-    path: string = "\x01juice-omitted";
-    name: string = "\x01juice-omitted";
-    alias: string = "\x01juice-omitted";
-}
-Dependency :: struct {
-    name: string = "\x01juice-omitted";
-    source: Source;
-    modules: [] Module_Selection = .[.{}];
-}
-Workspace_Config :: struct {
-    members: [] string = .["\x01juice-omitted"];
-    exclude: [] string = .["\x01juice-omitted"];
-    default_members: [] string = .["\x01juice-omitted"];
-}
-Plugin_Option :: struct {
-    key: string;
-    value: string;
-}
-Plugin_Declaration :: struct {
-    id: string = "\x01juice-omitted";
-    builtin: string = "\x01juice-omitted";
-    source: Source;
-    module: Module_Selection;
-    options: [] Plugin_Option;
-}
-TRANSPILE_PLUGIN_LOAD_ID :: "load";
-TRANSPILE_PLUGIN_TEST_BLOCK_ID :: "test-block";
-Package :: struct {
-    name: string = "\x01juice-omitted";
-    version: string = "\x01juice-omitted";
-    description: string = "\x01juice-omitted";
-    modules: [] Product = .[.{}];
-    executables: [] Product = .[.{}];
-    dependencies: [] Dependency = .[.{}];
-    plugins: [] Plugin_Declaration = .[.{}];
-    workspace: Workspace_Config = .{members = .["\x01juice-workspace-omitted"]};
-    default_run: string = "\x01juice-omitted";
-}
-
 // [PUBLICATION-SECTION testing]
 
 // ---------------------------------------------------------------------------

@@ -146,6 +146,10 @@ ensure_published_modules :: () -> bool {
     modules_dir := target_modules_dir(target_dir);
     source, read_ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
     if !read_ok return false;
+    // The declaration vocabulary has its own file (packages/juice/module.jai);
+    // the published Juice face is read from there, not cut out of src/module.jai.
+    declaration_source, declaration_read_ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
+    if !declaration_read_ok return false;
     discovery_source, discovery_read_ok := read_entire_file(tprint("%1/src/test_discovery.jai", otter_root()));
     if !discovery_read_ok return false;
     // The plugin face closure sources join the same pre-write batch (ticket
@@ -164,11 +168,11 @@ ensure_published_modules :: () -> bool {
     if !plugin_read_ok return false;
     plugin_abi_line, plugin_abi_ok := extract_constant_line(plugin_source, "JUICE_PLUGIN_ABI_VERSION");
     if !plugin_abi_ok return false;
-    juice_text, juice_ok := publish_juice_module(source);
+    juice_text, juice_ok := publish_juice_module(declaration_source);
     if !juice_ok return false;
     testing_text, testing_ok := publish_testing_module(source);
     if !testing_ok return false;
-    core_text, core_ok := publish_juice_core(source);
+    core_text, core_ok := publish_juice_core(declaration_source);
     if !core_ok return false;
     // One writer for the whole installation unit — every artifact plus the
     // compatibility marker — so the test scaffolding and the bootstrap

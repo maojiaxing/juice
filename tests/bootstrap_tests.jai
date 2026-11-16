@@ -205,9 +205,13 @@ test "E2E: jai build.jai self-builds a test-free root in debug and publishes the
     // loudly); the fourth is the verbatim discovery source (ticket 037).
     source, source_ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
     expect(source_ok);
-    expected_juice, _ := publish_juice_module(source);
+    // The Juice face and the built-in id constants come from the declaration
+    // vocabulary's own file; Testing is still cut out of src/module.jai.
+    declaration, declaration_ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
+    expect(declaration_ok);
+    expected_juice, _ := publish_juice_module(declaration);
     expected_testing, _ := publish_testing_module(source);
-    expected_core, _ := publish_juice_core(source);
+    expected_core, _ := publish_juice_core(declaration);
     juice_path, testing_path, core_path, discovery_path := bootstrap_published_paths();
     actual_juice, juice_read_ok := read_entire_file(juice_path);
     actual_testing, testing_read_ok := read_entire_file(testing_path);
@@ -490,9 +494,11 @@ bootstrap_publication_unit_marker :: () {
     // verifies against the plugin ABI its own source declares.
     source, source_ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
     expect(source_ok);
-    juice_text, juice_ok := publish_juice_module(source);
+    declaration_text, declaration_read_ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
+    expect(declaration_read_ok);
+    juice_text, juice_ok := publish_juice_module(declaration_text);
     testing_text, testing_ok := publish_testing_module(source);
-    core_text, core_ok := publish_juice_core(source);
+    core_text, core_ok := publish_juice_core(declaration_text);
     expect(juice_ok && testing_ok && core_ok);
     discovery_text, discovery_ok := read_entire_file(tprint("%1/src/test_discovery.jai", otter_root()));
     expect(discovery_ok);

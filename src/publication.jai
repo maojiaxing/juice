@@ -68,7 +68,6 @@
 #import "File_Utilities";
 #import "String";
 
-PUBLICATION_SECTION_PACKAGE :: "package";
 PUBLICATION_SECTION_TESTING :: "testing";
 
 MARKER_PREFIX :: "// [PUBLICATION-SECTION ";
@@ -117,24 +116,22 @@ is_blank_line :: (line: string) -> bool {
     return line_trimmed(line).count == 0;
 }
 
-// One marker-contract scan outcome: the two section spans as 0-based line
-// ranges (exclusive ends), or a failure.
+// One marker-contract scan outcome: the testing section span as a 0-based
+// line range (exclusive end), or a failure.
 Section_Spans :: struct {
-    package_start: s64;  // first line of the package section, -1 on failure
-    package_end:   s64;  // exclusive end (the testing marker's line)
     testing_start: s64;  // first line of the testing section
     testing_end:   s64;  // exclusive end (line count)
     ok:            bool;
 }
 
-// Walks the marker contract (the single scan both extractions share):
-// exactly one `package` marker and exactly one `testing` marker, in that
-// order. Any other `// [PUBLICATION-SECTION ...]` line — a duplicated
-// marker or a typo'd marker name — is a loud failure; a marker typo must
-// never publish silently (it would publish the wrong cut).
+// Walks the marker contract: exactly one `testing` marker. The declaration
+// vocabulary retired its `package` marker when that section became a real file
+// (packages/juice/module.jai), so the published Juice face is no longer cut —
+// it is read whole. Any other `// [PUBLICATION-SECTION ...]` line — a
+// duplicated marker, a typo, or the retired name — is a loud failure; a marker
+// typo must never publish silently (it would publish the wrong cut).
 scan_section_markers :: (lines: [] string) -> Section_Spans {
-    out: Section_Spans = .{ package_start = -1, package_end = -1, testing_start = -1, testing_end = -1, ok = false };
-    package_at := -1;
+    out: Section_Spans = .{ testing_start = -1, testing_end = -1, ok = false };
     testing_at := -1;
     for i: 0..lines.count - 1 {
         trimmed := line_trimmed(lines[i]);
@@ -142,19 +139,11 @@ scan_section_markers :: (lines: [] string) -> Section_Spans {
         if slice(trimmed, 0, MARKER_PREFIX.count) != MARKER_PREFIX continue;
         if slice(trimmed, trimmed.count - MARKER_SUFFIX.count, MARKER_SUFFIX.count) != MARKER_SUFFIX continue;
         name := slice(trimmed, MARKER_PREFIX.count, trimmed.count - MARKER_PREFIX.count - MARKER_SUFFIX.count);
-        if name == PUBLICATION_SECTION_PACKAGE {
-            if package_at >= 0 return out;  // duplicated package marker
-            package_at = i;
-        } else if name == PUBLICATION_SECTION_TESTING {
-            if testing_at >= 0 return out;  // duplicated testing marker
-            testing_at = i;
-        } else {
-            return out;  // unknown marker name
-        }
+        if name != PUBLICATION_SECTION_TESTING return out;  // retired or unknown marker name
+        if testing_at >= 0 return out;                      // duplicated testing marker
+        testing_at = i;
     }
-    if package_at < 0 || testing_at < 0 || testing_at < package_at return out;
-    out.package_start = package_at + 1;
-    out.package_end = testing_at;
+    if testing_at < 0 return out;
     out.testing_start = testing_at + 1;
     out.testing_end = lines.count;
     out.ok = true;
@@ -175,15 +164,6 @@ section_text :: (lines: [] string, start: s64, end: s64) -> string {
         print_to_builder(*builder, "%", lines[i]);
     }
     return builder_to_string(*builder);
-}
-
-// The package section cut: the lines between the package marker and the
-// next marker, blank edges trimmed.
-extract_package_section :: (source: string) -> (text: string, ok: bool) {
-    lines := split(source, "\n");
-    spans := scan_section_markers(lines);
-    if !spans.ok return "", false;
-    return section_text(lines, spans.package_start, spans.package_end), true;
 }
 
 // The testing section cut: the lines after the testing marker to the
@@ -217,12 +197,33 @@ find_self_test_cut_marker :: (lines: [] string, start: s64, end: s64) -> (index:
 // Publication
 // ---------------------------------------------------------------------------
 
-// The published Juice directory module content: the package section cut
-// verbatim behind the standard Basic import line.
+// The declaration source without its leading `#import "Basic";` line or
+// trailing newlines: the published face re-adds a single standard import line,
+// so the source own import must not appear twice.
+declaration_source_body :: (source: string) -> string {
+    body := source;
+    while body.count > 0 && (body[body.count - 1] == #char "\n" || body[body.count - 1] == #char "\r") {
+        body = slice(body, 0, body.count - 1);
+    }
+    line_end := 0;
+    while line_end < body.count && body[line_end] != #char "\n" line_end += 1;
+    if line_trimmed(slice(body, 0, line_end)) == "#import \"Basic\";" {
+        body = slice(body, line_end + 1, body.count - line_end - 1);
+        while body.count > 0 && body[0] == #char "\n" body = slice(body, 1, body.count - 1);
+    }
+    return body;
+}
+
+// The published Juice module content: the declaration source verbatim behind
+// the standard Basic import line. No section marker is involved - the
+// declaration vocabulary has its own file (packages/juice/module.jai), so the
+// publish step copies it whole. `source` is that file text; the caller reads
+// it (build.jai / tests/test_support.jai), which keeps this transform free of
+// path knowledge.
 publish_juice_module :: (source: string) -> (text: string, ok: bool) {
-    section, ok := extract_package_section(source);
-    if !ok return "", false;
-    return tprint("#import \"Basic\";\n\n%1\n", section), true;
+    if source.count == 0 return "", false;
+    body := declaration_source_body(source);
+    return tprint("#import \"Basic\";\n\n%1\n", body), true;
 }
 
 // Strips the Testing_ prefix from every IDENT token carrying it — the
