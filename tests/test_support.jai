@@ -150,6 +150,8 @@ ensure_published_modules :: () -> bool {
     // the published Juice face is read from there, not cut out of src/module.jai.
     declaration_source, declaration_read_ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
     if !declaration_read_ok return false;
+    testing_source, testing_read_ok := read_entire_file(tprint("%1/packages/juice/testing.jai", otter_root()));
+    if !testing_read_ok return false;
     discovery_source, discovery_read_ok := read_entire_file(tprint("%1/src/test_discovery.jai", otter_root()));
     if !discovery_read_ok return false;
     // The plugin face closure sources join the same pre-write batch (ticket
@@ -170,7 +172,7 @@ ensure_published_modules :: () -> bool {
     if !plugin_abi_ok return false;
     juice_text, juice_ok := publish_juice_module(declaration_source);
     if !juice_ok return false;
-    testing_text, testing_ok := publish_testing_module(source);
+    testing_text, testing_ok := publish_testing_module(testing_source);
     if !testing_ok return false;
     core_text, core_ok := publish_juice_core(declaration_source);
     if !core_ok return false;

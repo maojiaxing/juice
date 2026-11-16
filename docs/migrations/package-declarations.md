@@ -232,12 +232,18 @@
 （`src/publication.jai:718`）。缺失、混装、被替换的发布件都会在命令开始前失败；没有其他安装目录回退，也没有用户兼容开关。
 因此本指南的所有命令都要求 `juice.exe` 与 `modules/` 相邻；把 `target/juice.exe` 单独复制走不能运行。
 
-包声明词汇的源在 `packages/juice/module.jai`（发布源目录，不是包：没有 `package.jai`）。该文件整份发布为
-`modules/Juice/module.jai`，发布步骤不再按段标记切分。Testing 面的源仍在 `src/module.jai` 的 testing 段，
-因为它需要 token 级前缀剥离，不能整份复制。
+两个发布源目录：`packages/juice/module.jai`（包声明词汇）与 `packages/juice/testing.jai`（Testing API
+定义面）。两者都不是包：没有 `package.jai`，所以不进 `workspace.members`、没有 `Package.name`、不可被当作包
+`#import`。发布步骤对两者都是**整文件读取**——前者加标准导入头成为 `modules/Juice/module.jai`，后者剥掉
+`Testing_` 前缀成为 `modules/Testing.jai`。发布产物与旧段裁剪时代**逐字节相同**（发布测试的字节钉未修改即通过）。
 
-已知遗留（未处理）：`src/module.jai` 在 package 段迁出后只剩 Testing 面，文件名与内容已不匹配；改名会牵动
-`src/main.jai` 的 `#load` 顺序、`build.jai` 的发布输入与测试夹具，收益只是命名，故不动。
+段标记协议（`// [PUBLICATION-SECTION …]` / `// [PUBLICATION-CUT …]`、扫描器、段抽取）已整体退役：两个面各有
+实体文件后，不再存在"裁错段"这个失败模式。原来由裁剪标记守的契约改为结构性保证——`packages/juice/testing.jai`
+不含 `@test`，juice 自己的 Testing 面自测过程留在 `src/module.jai`，两边不可能同时携带。有测试钉住这两点。
+
+`src/module.jai` 保留原名，不是因为挪不动，而是因为 `src/module.jai` 是 spec §5.2 包入口探测的约定路径
+（`src/plugin_scan.jai`、`src/dependency.jai` 都按该字面量推导导入名）；改名会改变探测结果。它的内容现在只有：
+两行 `#load` + Testing 面的自测过程。
 
 ## 8. 证据规则
 

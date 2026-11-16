@@ -230,8 +230,12 @@ _Avoid_: first.jai（旧名）、driver.jai（旧两文件形态；driver 是嵌
 _Avoid_: build directory、输出目录（不区分区根与落点）
 
 **发布源目录（Publication source directory）**：
-只有 `.jai` 源、没有 `package.jai` 的目录，唯一用途是给发布步骤提供源文本。`packages/juice/` 是当前唯一实例：它存放包声明词汇（`Package` / `Product` / `Source` / `Dependency` / `Plugin_Declaration` / `Workspace_Config`），发布步骤整份读取并加上标准导入头，成为安装树里的 `Juice` 模块。它不进 `workspace.members`、没有 `Package.name`、不可被当作包 `#import`；juice 自身编译单元经 `src/module.jai` 的一行 `#load` 取得其中的裸声明名。
+只有 `.jai` 源、没有 `package.jai` 的目录，唯一用途是给发布步骤提供源文本。`packages/juice/` 下有两个实例：`module.jai`（包声明词汇——`Package` / `Product` / `Source` / `Dependency` / `Plugin_Declaration` / `Workspace_Config`）与 `testing.jai`（Testing API 定义面，prefixed 公开名，不含 `@test`）。发布步骤对两者都是**整文件读取**：前者加标准导入头成为安装树里的 `Juice` 模块，后者剥掉 `Testing_` 前缀成为 `Testing.jai`。两者都不进 `workspace.members`、没有 `Package.name`、不可被当作包 `#import`；juice 自身编译单元经 `src/module.jai` 的 `#load` 取得其中的裸名。
 _Avoid_: 把它当作包（加 `package.jai` 会立刻把它变成可依赖目标，破坏"插件包可整体复制、不带 juice 检出路径"的分发契约）、声明模块、schema 目录
+
+**段标记协议（Publication section markers）**：
+**已退役**。发布面曾经从 `src/module.jai` 里按 `// [PUBLICATION-SECTION …]` / `// [PUBLICATION-CUT …]` 标记裁出，并配一套"缺标/重复/改名/乱序即响亮失败"的守则。两个发布面各有实体文件后，不再存在"裁错段"这个失败模式，整套标记协议（扫描器、段抽取、裁剪标记）一并删除。保留的同类机制只有 `strip_testing_prefix`：它是 token 级重命名，不是裁剪。
+_Avoid_: 重新引入段标记（有独立源文件就不需要裁剪）、把 `strip_testing_prefix` 当作裁剪
 
 **测试临时区（Target scratch）**：
 测试在 `target/tests/` 下的临时根，经 `target_scratch_dir` 派生；每次 test 命令启动先整区 prune，运行期测试自行重建。

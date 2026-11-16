@@ -209,8 +209,10 @@ test "E2E: jai build.jai self-builds a test-free root in debug and publishes the
     // vocabulary's own file; Testing is still cut out of src/module.jai.
     declaration, declaration_ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
     expect(declaration_ok);
+    testing_source, testing_source_ok := read_entire_file(tprint("%1/packages/juice/testing.jai", otter_root()));
+    expect(testing_source_ok);
     expected_juice, _ := publish_juice_module(declaration);
-    expected_testing, _ := publish_testing_module(source);
+    expected_testing, _ := publish_testing_module(testing_source);
     expected_core, _ := publish_juice_core(declaration);
     juice_path, testing_path, core_path, discovery_path := bootstrap_published_paths();
     actual_juice, juice_read_ok := read_entire_file(juice_path);
@@ -496,8 +498,10 @@ bootstrap_publication_unit_marker :: () {
     expect(source_ok);
     declaration_text, declaration_read_ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
     expect(declaration_read_ok);
+    testing_marker_source, testing_marker_read_ok := read_entire_file(tprint("%1/packages/juice/testing.jai", otter_root()));
+    expect(testing_marker_read_ok);
     juice_text, juice_ok := publish_juice_module(declaration_text);
-    testing_text, testing_ok := publish_testing_module(source);
+    testing_text, testing_ok := publish_testing_module(testing_marker_source);
     core_text, core_ok := publish_juice_core(declaration_text);
     expect(juice_ok && testing_ok && core_ok);
     discovery_text, discovery_ok := read_entire_file(tprint("%1/src/test_discovery.jai", otter_root()));

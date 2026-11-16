@@ -107,7 +107,7 @@ publication_smoke_driver_code :: (driver_path: string) -> string {
 // ===========================================================================
 
 DECLARATION_SOURCE :: "#import \"Basic\";\n\n// The declaration vocabulary.\nProduct :: struct {\n    name: string;\n}\n";
-TESTING_SOURCE :: "#import \"Basic\";\n\n// [PUBLICATION-SECTION testing]\n\nT1 :: struct {\n    b: string;\n}\n\n// [PUBLICATION-CUT testing-self-tests]\n\ntest \"kept\" {\n    x := 1;\n}\n";
+TESTING_SOURCE :: "#import \"Basic\";\n\n// The Testing face.\nTesting_expect(true);\n";
 
 test "Juice face: the declaration source publishes whole behind the standard import" {
     published, ok := publish_juice_module(DECLARATION_SOURCE);
@@ -124,39 +124,32 @@ test "Juice face: the declaration source publishes whole behind the standard imp
     expect(!empty_ok);
 }
 
-test "Section cut: the testing section extracts with blank edges trimmed and self-tests cut" {
-    section, ok := extract_testing_section(TESTING_SOURCE);
+test "Testing face: the testing source publishes whole behind the standard import" {
+    published, ok := publish_testing_module(TESTING_SOURCE);
     expect(ok);
-    expect(section == "T1 :: struct {\n    b: string;\n}");
+    // Exactly one import line: the source own copy is dropped, not doubled.
+    expect(starts_with(published, "#import \"Basic\";\n\n"));
+    expect(contains(published, "// The Testing face."));
+    expect(contains(published, "expect(true);"));
+    expect(!contains(published, "Testing_expect"));
+    // An empty source is a loud failure, not an empty module.
+    _, empty_ok := publish_testing_module("");
+    expect(!empty_ok);
 }
 
-test "Section cut: a missing testing marker fails loudly" {
-    _, ok := extract_testing_section("#import \"Basic\";\n\nT1 :: struct {}\n");
-    expect(!ok);
+test "Testing face: a source carrying only the import line fails loudly" {
+    // Nothing follows the header, so the published module would be empty. This
+    // is the case the retired cut marker used to catch from the other side.
+    text, ok := publish_testing_module("#import \"Basic\";\n");
+    expect(!ok && text == "");
 }
 
-test "Section cut: a duplicated testing marker fails loudly" {
-    _, ok := extract_testing_section("// [PUBLICATION-SECTION testing]\nT1 :: struct {}\n// [PUBLICATION-SECTION testing]\nT2 :: struct {}\n\n// [PUBLICATION-CUT testing-self-tests]\n");
-    expect(!ok);
-}
-
-test "Section cut: missing or duplicated self-test cut marker fails loudly" {
-    // No cut marker: the published face would include the self-tests.
-    _, ok := extract_testing_section("// [PUBLICATION-SECTION testing]\nT1 :: 1;\n");
-    expect(!ok);
-    // Two cut markers: the published face's end is ambiguous.
-    _, ok = extract_testing_section("// [PUBLICATION-SECTION testing]\nT1 :: 1;\n// [PUBLICATION-CUT testing-self-tests]\n// [PUBLICATION-CUT testing-self-tests]\nT2 :: 1;\n");
-    expect(!ok);
-}
-
-test "Section cut: unknown marker names fail loudly" {
-    // A typo'd marker name must never publish silently.
-    _, ok := extract_testing_section("// [PUBLICATION-SECTION typo]\nT1 :: struct {}\n");
-    expect(!ok);
-    // The retired package marker is now an unknown name: the Juice face is read
-    // whole, so a leftover marker would mean a caller still expects a cut.
-    _, retired_ok := extract_testing_section("// [PUBLICATION-SECTION package]\nP1 :: struct {}\n// [PUBLICATION-SECTION testing]\nT1 :: struct {}\n// [PUBLICATION-CUT testing-self-tests]\n");
-    expect(!retired_ok);
+test "Testing face: a source with no import line is published as-is" {
+    // The header is optional input, not a required marker: the body is kept and
+    // the standard import line is still prepended exactly once.
+    published, ok := publish_testing_module("Testing_fail(\"x\");\n");
+    expect(ok);
+    expect(published == "#import \"Basic\";\n\nfail(\"x\");\n");
 }
 
 test "Prefix strip: the public-name matrix strips to the bare published names" {
@@ -194,14 +187,17 @@ test "Publish Juice module: byte shape" {
     expect(!ok && text == "");
 }
 
-test "Publish Testing module: byte shape with prefixes stripped and self-tests cut" {
-    source := "#import \"Basic\";\n// [PUBLICATION-SECTION testing]\nTesting_expect(true);\n// [PUBLICATION-CUT testing-self-tests]\ntest \"kept\" {\n    Testing_expect(true);\n}\n";
+test "Publish Testing module: byte shape with prefixes stripped" {
+    source := "#import \"Basic\";\nTesting_expect(true);\n";
     text, ok := publish_testing_module(source);
     expect(ok);
     expect(text == "#import \"Basic\";\n\nexpect(true);\n");
     text, ok = publish_testing_module(TESTING_SOURCE);
     expect(ok);
-    expect(text == "#import \"Basic\";\n\nT1 :: struct {\n    b: string;\n}\n");
+    expect(text == "#import \"Basic\";\n\n// The Testing face.\nexpect(true);\n");
+    // The failure channel carries the empty text.
+    text, ok = publish_testing_module("");
+    expect(!ok && text == "");
 }
 
 test "Publish juice_core: verbatim constants and the module-relative closure list" {
@@ -487,7 +483,7 @@ test "Real source: Juice module publication byte pin" {
 }
 
 test "Real source: Testing module publication byte pin" {
-    source, ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
+    source, ok := read_entire_file(tprint("%1/packages/juice/testing.jai", otter_root()));
     expect(ok);
     text, pub_ok := publish_testing_module(source);
     expect(pub_ok);
@@ -592,13 +588,13 @@ test "Publish: a missing plugin face closure source fails the test-side publicat
 // ===========================================================================
 
 test "E2E: published modules compile and run under bare imports" {
-    source, ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
-    expect(ok);
     declaration, declaration_ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
     expect(declaration_ok);
+    testing_source, testing_read_ok := read_entire_file(tprint("%1/packages/juice/testing.jai", otter_root()));
+    expect(testing_read_ok);
 
     juice, ok1 := publish_juice_module(declaration);
-    testing, ok2 := publish_testing_module(source);
+    testing, ok2 := publish_testing_module(testing_source);
     core, ok3 := publish_juice_core(declaration);
     expect(ok1 && ok2 && ok3);
 
@@ -642,10 +638,10 @@ test "E2E: published modules compile and run under bare imports" {
     }
 }
 
-// The declaration vocabulary has physical files of its own: packages/juice/ is
-// a publication source directory (no package.jai, not a workspace member, not
-// importable), and the published Juice module is read from it rather than
-// carved out of src/module.jai by a section marker.
+// The declaration vocabulary and the Testing face each have physical files of
+// their own: packages/juice/ is a publication source directory (no package.jai,
+// not a workspace member, not importable), and each published module is read
+// from its file rather than carved out of src/module.jai by a section marker.
 test "Real source: the declaration vocabulary lives in packages/juice" {
     declaration_path := tprint("%1/packages/juice/module.jai", otter_root());
     expect(file_exists(declaration_path));
@@ -664,4 +660,25 @@ test "Real source: the declaration vocabulary lives in packages/juice" {
     expect(published_ok);
     expect(contains(published, "Package :: struct"));
     expect(!contains(published, "PUBLICATION-SECTION"));
+}
+
+// The contract the retired self-test cut marker used to enforce: the consumer
+// face never contributes @test procedures to a consumer's program. It is now
+// structural — the testing source is a separate file, and its own tests live in
+// src/module.jai — so this pins the structure instead of a marker's position.
+test "Real source: the Testing face source carries no @test procedures" {
+    testing_path := tprint("%1/packages/juice/testing.jai", otter_root());
+    expect(file_exists(testing_path));
+    testing_source, read_ok := read_entire_file(testing_path);
+    expect(read_ok);
+    expect(contains(testing_source, "Testing_expect :: "));
+    expect(!contains(testing_source, "@test"));
+    // Not a package either: same publication source directory rule.
+    expect(!file_exists(tprint("%1/packages/juice/package.jai", otter_root())));
+
+    // The definition source keeps the self-tests, so the published face and the
+    // source can never both carry them.
+    self_test_source, self_test_ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
+    expect(self_test_ok);
+    expect(contains(self_test_source, "@test"));
 }

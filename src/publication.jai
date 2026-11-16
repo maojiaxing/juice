@@ -1,19 +1,23 @@
 // Publication transforms (ticket 030, spec §9): the pure text-to-text
-// generators producing the three published module artifacts from the single
-// definition source src/module.jai, plus the target/modules landing path
+// generators producing the three published module artifacts from two
+// publication source directories, plus the target/modules landing path
 // helpers:
 //
-// - Juice directory module (target/modules/Juice/module.jai): the package
-//   section cut verbatim (the Package compatibility face — the field shapes
-//   old juice modules/Juice.jai declares);
-// - Testing.jai (target/modules/Testing.jai): the testing section with the
-//   Testing_ public-name prefixes stripped — flat module, bare exports, the
-//   old juice Testing.jai API-compatible face;
+// - Juice directory module (target/modules/Juice/module.jai): the declaration
+//   vocabulary copied whole from packages/juice/module.jai (the Package
+//   compatibility face — the field shapes old juice modules/Juice.jai
+//   declares);
+// - Testing.jai (target/modules/Testing.jai): packages/juice/testing.jai with
+//   the Testing_ public-name prefixes stripped — flat module, bare exports,
+//   the old juice Testing.jai API-compatible face;
 // - juice_core.jai (target/modules/juice_core.jai): a generated module that
 //   #loads the plugin face closure by module-relative paths (ticket 049) and
-//   re-declares the two built-in id constants extracted verbatim from the
-//   definition source (module.jai itself is not #loaded: its testing section
-//   carries self-test blocks that only the transpile pipeline can compile).
+//   re-declares the two built-in id constants extracted verbatim from
+//   packages/juice/module.jai.
+//
+// Neither published face is cut out of a larger file any more, so the section
+// marker protocol that used to guard those cuts is gone: a bad marker can no
+// longer publish the wrong cut because there is no cut.
 //
 // Ticket 037 adds a fourth publication that is not a module face: the
 // discovery source (juice_internal/test_discovery.jai under the modules
@@ -32,23 +36,19 @@
 // spike fact). The published modules/ tree therefore relocates unchanged;
 // no build-machine src path crosses the publication boundary.
 //
-// Section boundary contract (the single source — src/module.jai's header
-// comment): the definition source carries exactly two marker comments,
-// `// [PUBLICATION-SECTION package]` and `// [PUBLICATION-SECTION testing]`
-// (a line matches when its trimmed content equals the marker text), plus
-// exactly one self-test cut `// [PUBLICATION-CUT testing-self-tests]` inside
-// the testing section. The package section is the lines between the package
-// marker and the next marker; the testing section is the lines after the
-// testing marker up to the cut marker (the self-test procedures and state
-// below it are juice's own suite, never published). Leading and trailing
-// blank lines are trimmed from both sections. A missing, duplicated,
-// misordered or unknown-named marker fails the publication loudly
-// (ok = false) — drift in the marker contract must never publish silently.
+// Section boundary contract: there is none any more. Both published faces are
+// read whole from their own file — packages/juice/module.jai and
+// packages/juice/testing.jai — so nothing in this module cuts a larger file
+// into a published face. The declaration vocabulary and the Testing face each
+// own a file, and juice's own @test procedures live in src/module.jai, which is
+// never published. A publication source that is empty fails loudly
+// (ok = false); there is no marker whose absence or duplication could
+// silently publish the wrong cut, because there is no cut.
 //
 // Line fidelity (the transpile discipline): the prefix strip rewrites IDENT
 // tokens only, so the published Testing.jai is line-for-line identical to
-// its source section (published line N = section line N) — diagnostics and
-// path_mapping stay verifiable against the definition source.
+// packages/juice/testing.jai (published line N = source line N) — diagnostics
+// and path_mapping stay verifiable against the definition source.
 //
 // Pure functions only — the caller (the build.jai metaprogram, ticket 031)
 // reads the definition source and writes the artifacts. This module is a
@@ -68,27 +68,14 @@
 #import "File_Utilities";
 #import "String";
 
-PUBLICATION_SECTION_TESTING :: "testing";
-
-MARKER_PREFIX :: "// [PUBLICATION-SECTION ";
-MARKER_SUFFIX :: "]";
-
 TESTING_PREFIX :: "Testing_";
-
-// The testing-section cut marker: the published Testing.jai ends before this
-// line. The definition source keeps its self-test procedures and state below
-// the marker (juice's own suite), while the consumer face stays test-free —
-// the published module must compile as standard Jai without contributing
-// @test procedures to a consumer's program. Exactly one marker is required;
-// missing or duplicated markers fail the publication loudly.
-PUBLICATION_CUT_TESTING_SELF_TESTS :: "// [PUBLICATION-CUT testing-self-tests]";
 
 // The plugin face closure the generated juice_core module #loads (module-
 // relative paths under the plugin face landing directory — ticket 049) and
 // the single file list the publication copy step consumes: one list drives
 // both the generated #load lines and the landing of the verbatim copies.
-// module.jai is deliberately absent: its testing section carries the
-// definition source's own @test procedures (cut from the published face at
+// module.jai is deliberately absent: it carries the definition source's own
+// @test procedures, which never enter a published face (
 // the self-test marker), so the two built-in id constants it declares are
 // extracted verbatim into the generated module instead (the single source
 // preserved textually).
@@ -112,95 +99,14 @@ line_trimmed :: (line: string) -> string {
     return slice(line, start, end - start);
 }
 
-is_blank_line :: (line: string) -> bool {
-    return line_trimmed(line).count == 0;
-}
-
-// One marker-contract scan outcome: the testing section span as a 0-based
-// line range (exclusive end), or a failure.
-Section_Spans :: struct {
-    testing_start: s64;  // first line of the testing section
-    testing_end:   s64;  // exclusive end (line count)
-    ok:            bool;
-}
-
-// Walks the marker contract: exactly one `testing` marker. The declaration
-// vocabulary retired its `package` marker when that section became a real file
-// (packages/juice/module.jai), so the published Juice face is no longer cut —
-// it is read whole. Any other `// [PUBLICATION-SECTION ...]` line — a
-// duplicated marker, a typo, or the retired name — is a loud failure; a marker
-// typo must never publish silently (it would publish the wrong cut).
-scan_section_markers :: (lines: [] string) -> Section_Spans {
-    out: Section_Spans = .{ testing_start = -1, testing_end = -1, ok = false };
-    testing_at := -1;
-    for i: 0..lines.count - 1 {
-        trimmed := line_trimmed(lines[i]);
-        if trimmed.count < MARKER_PREFIX.count + MARKER_SUFFIX.count + 1 continue;
-        if slice(trimmed, 0, MARKER_PREFIX.count) != MARKER_PREFIX continue;
-        if slice(trimmed, trimmed.count - MARKER_SUFFIX.count, MARKER_SUFFIX.count) != MARKER_SUFFIX continue;
-        name := slice(trimmed, MARKER_PREFIX.count, trimmed.count - MARKER_PREFIX.count - MARKER_SUFFIX.count);
-        if name != PUBLICATION_SECTION_TESTING return out;  // retired or unknown marker name
-        if testing_at >= 0 return out;                      // duplicated testing marker
-        testing_at = i;
-    }
-    if testing_at < 0 return out;
-    out.testing_start = testing_at + 1;
-    out.testing_end = lines.count;
-    out.ok = true;
-    return out;
-}
-
-// The section text: the lines in [start, end) with leading and trailing
-// blank lines trimmed, joined with "\n". Empty when the span is empty or
-// blank-only.
-section_text :: (lines: [] string, start: s64, end: s64) -> string {
-    first := start;
-    while first < end && is_blank_line(lines[first]) first += 1;
-    last := end;
-    while last > first && is_blank_line(lines[last - 1]) last -= 1;
-    builder: String_Builder;
-    for i: first..last - 1 {
-        if i > first print_to_builder(*builder, "\n");
-        print_to_builder(*builder, "%", lines[i]);
-    }
-    return builder_to_string(*builder);
-}
-
-// The testing section cut: the lines after the testing marker to the
-// self-test cut marker, blank edges trimmed. The published face therefore
-// carries the Testing API and internals but none of the definition source's
-// own @test procedures.
-extract_testing_section :: (source: string) -> (text: string, ok: bool) {
-    lines := split(source, "\n");
-    spans := scan_section_markers(lines);
-    if !spans.ok return "", false;
-    cut, cut_ok := find_self_test_cut_marker(lines, spans.testing_start, spans.testing_end);
-    if !cut_ok return "", false;
-    return section_text(lines, spans.testing_start, cut), true;
-}
-
-// The self-test cut marker scan: exactly one line whose trimmed content is
-// the cut marker. Missing or duplicated markers fail (the publication must
-// never silently include or exclude the wrong segment).
-find_self_test_cut_marker :: (lines: [] string, start: s64, end: s64) -> (index: s64, ok: bool) {
-    found := -1;
-    for i: start..end - 1 {
-        if line_trimmed(lines[i]) != PUBLICATION_CUT_TESTING_SELF_TESTS continue;
-        if found >= 0 return -1, false;
-        found = i;
-    }
-    if found < 0 return -1, false;
-    return found, true;
-}
-
 // ---------------------------------------------------------------------------
 // Publication
 // ---------------------------------------------------------------------------
 
-// The declaration source without its leading `#import "Basic";` line or
-// trailing newlines: the published face re-adds a single standard import line,
-// so the source own import must not appear twice.
-declaration_source_body :: (source: string) -> string {
+// A publication source without its leading `#import "Basic";` line or
+// trailing newlines: each published face re-adds a single standard import
+// line, so the source own import must not appear twice.
+publication_source_body :: (source: string) -> string {
     body := source;
     while body.count > 0 && (body[body.count - 1] == #char "\n" || body[body.count - 1] == #char "\r") {
         body = slice(body, 0, body.count - 1);
@@ -208,8 +114,14 @@ declaration_source_body :: (source: string) -> string {
     line_end := 0;
     while line_end < body.count && body[line_end] != #char "\n" line_end += 1;
     if line_trimmed(slice(body, 0, line_end)) == "#import \"Basic\";" {
-        body = slice(body, line_end + 1, body.count - line_end - 1);
-        while body.count > 0 && body[0] == #char "\n" body = slice(body, 1, body.count - 1);
+        // A source that is nothing but the import line has no body to keep;
+        // slicing at line_end + 1 would run past the end (negative count).
+        if line_end >= body.count {
+            body = "";
+        } else {
+            body = slice(body, line_end + 1, body.count - line_end - 1);
+            while body.count > 0 && body[0] == #char "\n" body = slice(body, 1, body.count - 1);
+        }
     }
     return body;
 }
@@ -222,7 +134,7 @@ declaration_source_body :: (source: string) -> string {
 // path knowledge.
 publish_juice_module :: (source: string) -> (text: string, ok: bool) {
     if source.count == 0 return "", false;
-    body := declaration_source_body(source);
+    body := publication_source_body(source);
     return tprint("#import \"Basic\";\n\n%1\n", body), true;
 }
 
@@ -245,15 +157,15 @@ strip_testing_prefix :: (source: string) -> string {
     return apply_edits(source, edits);
 }
 
-// The published Testing module content: the testing section with the
+// The published Testing module content: packages/juice/testing.jai with the
 // Testing_ prefixes stripped, behind the standard Basic import line. The
-// section's self-test blocks are retained (their prefixed calls strip to
-// the bare published names) — the published module carries its own contract
-// tests, the Testing special case's consumption surface (ticket 031/032).
+// source carries no @test procedures — juice's own tests of this face live in
+// src/module.jai — so the published module is test-free and contributes no
+// procedures to a consumer's program.
 publish_testing_module :: (source: string) -> (text: string, ok: bool) {
-    section, ok := extract_testing_section(source);
-    if !ok return "", false;
-    return tprint("#import \"Basic\";\n\n%1\n", strip_testing_prefix(section)), true;
+    body := publication_source_body(source);
+    if body.count == 0 return "", false;
+    return tprint("#import \"Basic\";\n\n%1\n", strip_testing_prefix(body)), true;
 }
 
 // ---------------------------------------------------------------------------

@@ -98,10 +98,12 @@ ic_real_published_texts :: () -> ([..] string, bool) {
     // out of src/module.jai.
     declaration, declaration_ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
     if !declaration_ok return texts, false;
+    testing_source, testing_source_ok := read_entire_file(tprint("%1/packages/juice/testing.jai", otter_root()));
+    if !testing_source_ok return texts, false;
     discovery, discovery_ok := read_entire_file(tprint("%1/src/test_discovery.jai", otter_root()));
     if !discovery_ok return texts, false;
     juice, juice_ok := publish_juice_module(declaration);
-    testing, testing_ok := publish_testing_module(source);
+    testing, testing_ok := publish_testing_module(testing_source);
     core, core_ok := publish_juice_core(declaration);
     if !juice_ok || !testing_ok || !core_ok return texts, false;
     array_add(*texts, juice);

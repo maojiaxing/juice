@@ -208,6 +208,11 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
         print("[Build System] Error: 无法读取声明词汇源 packages/juice/module.jai（发布步骤）\n");
         exit(1);
     }
+    testing_source, testing_read_ok := read_entire_file(tprint("%1/packages/juice/testing.jai", root));
+    if !testing_read_ok {
+        print("[Build System] Error: 无法读取 Testing 面源 packages/juice/testing.jai（发布步骤）\n");
+        exit(1);
+    }
     discovery_source, discovery_read_ok := read_entire_file(tprint("%1/src/test_discovery.jai", root));
     if !discovery_read_ok {
         print("[Build System] Error: 无法读取发现面源 src/test_discovery.jai（发布步骤）\n");
@@ -237,9 +242,9 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
         print("[Build System] Error: 发布 Juice 模块失败（段标记契约破坏）\n");
         exit(1);
     }
-    testing_text, testing_ok := publish_testing_module(module_source);
+    testing_text, testing_ok := publish_testing_module(testing_source);
     if !testing_ok {
-        print("[Build System] Error: 发布 Testing 模块失败（段标记契约破坏）\n");
+        print("[Build System] Error: 发布 Testing 模块失败（Testing 面源为空）\n");
         exit(1);
     }
     core_text, core_ok := publish_juice_core(declaration_source);

@@ -22,8 +22,9 @@
 // old juice order) joins after dependency.jai — dependency.jai's strip
 // front consumes the view layer; lifecycle.jai (the hook mechanism) and
 // plugin.jai (the plugin surface + built-in registry) follow; module.jai
-// (the compatibility declaration face) joins before plugin.jai because the
-// built-in plugin ids are single-sourced there; transpile_config.jai
+// (the #load of the two publication source directories, plus the Testing
+// face's own self-tests) joins before plugin.jai because the built-in plugin
+// ids are single-sourced in packages/juice/module.jai; transpile_config.jai
 // (declared pipeline → pipeline assembly) follows; metaprogram.jai loads
 // after transpile.jai so its generated text uses the canonical quote pair
 // (ticket 022's retirement condition). Ticket 037 adds publication.jai
