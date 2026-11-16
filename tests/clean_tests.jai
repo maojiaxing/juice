@@ -18,10 +18,10 @@
 // ---------------------------------------------------------------------------
 
 test "Clean validates workspace scope before deletion" {
-    discovery: Juice.Workspace_Discovery;
+    discovery: Workspace_Discovery;
     discovery.has_package = true;
     discovery.root_dir = "root";
-    discovery.member_packages = Juice.Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
+    discovery.member_packages = Normalized_Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
     reset_clean_test(2);
     expect(clean_discovered_workspace("", discovery, test_validate_clean_path, test_delete_clean_path));
     expect(!test_clean_deleted_too_early && test_clean_deleted.count == 2);
@@ -29,7 +29,7 @@ test "Clean validates workspace scope before deletion" {
 }
 
 test "Clean without a manifest uses the current root" {
-    discovery: Juice.Workspace_Discovery;
+    discovery: Workspace_Discovery;
     reset_clean_test(1);
     expect(clean_discovered_workspace("root", discovery, test_validate_clean_path, test_delete_clean_path));
     expect(!test_clean_deleted_too_early && test_clean_deleted.count == 1);
@@ -37,10 +37,10 @@ test "Clean without a manifest uses the current root" {
 }
 
 test "Unsafe Clean path prevents every deletion" {
-    discovery: Juice.Workspace_Discovery;
+    discovery: Workspace_Discovery;
     discovery.has_package = true;
     discovery.root_dir = "root";
-    discovery.member_packages = Juice.Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
+    discovery.member_packages = Normalized_Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
     reset_clean_test(2);
     test_clean_invalid_path = "root/member/target";
     expect(!clean_discovered_workspace("", discovery, test_validate_clean_path, test_delete_clean_path));
@@ -48,10 +48,10 @@ test "Unsafe Clean path prevents every deletion" {
 }
 
 test "Clean continues after a deletion fails" {
-    discovery: Juice.Workspace_Discovery;
+    discovery: Workspace_Discovery;
     discovery.has_package = true;
     discovery.root_dir = "root";
-    discovery.member_packages = Juice.Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
+    discovery.member_packages = Normalized_Package.[.{name = "root", dir = "root"}, .{name = "member", dir = "root/member"}];
     reset_clean_test(2);
     test_clean_failed_delete = "root/target";
     expect(!clean_discovered_workspace("", discovery, test_validate_clean_path, test_delete_clean_path));

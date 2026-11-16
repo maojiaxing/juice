@@ -65,7 +65,7 @@ is_command_static_plugin_id :: (id: string) -> bool {
 // header), then the declarations naming a registry id become Plugin_Config
 // rows in declaration order. Non-registry ids (member plugin identities) are
 // skipped here.
-resolve_package_plugins :: (decls: [] Juice.Plugin_Declaration) -> Resolved_Plugins {
+resolve_package_plugins :: (decls: [] Plugin_Reference, plugins_omitted: bool = true) -> Resolved_Plugins {
     registry := command_plugin_registry();
 
     configs: [..] Plugin_Config;
@@ -74,11 +74,10 @@ resolve_package_plugins :: (decls: [] Juice.Plugin_Declaration) -> Resolved_Plug
         for plugin: registry {
             if plugin.id == decl.id is_builtin = true;
         }
-        if !is_builtin continue;
+        if !decl.builtin continue;
 
         config: Plugin_Config;
         config.id = decl.id;
-        config.version = decl.version;
         // The declaration options slice -> the shared Option_Row array (a
         // slice field cannot array_add; rebuild and assign the view).
         rows: [..] Option_Row;
@@ -86,7 +85,7 @@ resolve_package_plugins :: (decls: [] Juice.Plugin_Declaration) -> Resolved_Plug
         config.options = rows;
         array_add(*configs, config);
     }
-    return resolve_plugin_configs(registry, configs);
+    return resolve_plugin_configs(registry, configs, plugins_omitted);
 }
 
 // The full declaration -> shared config conversion for the generated test
@@ -98,18 +97,13 @@ resolve_package_plugins :: (decls: [] Juice.Plugin_Declaration) -> Resolved_Plug
 // declaration order (the generated program's lint observation order),
 // including repeated ids (the resolver reports the duplicate where the
 // values exist).
-plugin_configs_from_declarations :: (decls: [] Juice.Plugin_Declaration, member_packages: [] Juice.Package) -> [..] Plugin_Config {
+plugin_configs_from_declarations :: (decls: [] Plugin_Reference, member_packages: [] Normalized_Package) -> [..] Plugin_Config {
     configs: [..] Plugin_Config;
     for decl: decls {
-        is_member := false;
-        for pkg: member_packages {
-            if pkg.name == decl.id is_member = true;
-        }
-        if !is_member continue;
+        if decl.builtin continue;
 
         config: Plugin_Config;
         config.id = decl.id;
-        config.version = decl.version;
         rows: [..] Option_Row;
         for opt: decl.options array_add(*rows, .{ key = opt.key, value = opt.value });
         config.options = rows;

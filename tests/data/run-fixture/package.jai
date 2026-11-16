@@ -4,7 +4,8 @@
 // (named after the package), so `juice run` drives the build prerequisite
 // chain and launches the artifact by default selection.
 PACKAGE :: Package.{
-    name    = "run-fixture",
+    executables = .[.{name = "run_fixture", entry = "src/main.jai"}],
     version = "0.1.0",
-    type    = .BIN,
+    name    = "run-fixture",
+
 };

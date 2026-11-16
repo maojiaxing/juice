@@ -39,6 +39,28 @@ otter_scratch :: (name: string) -> string {
     return target_scratch_dir(otter_target_dir(), name);
 }
 
+// Scratch root outside every package: commands resolve the nearest package.jai
+// upward, so a fixture placed under this repository's target/ would silently
+// belong to the repository package. Tests that exercise the no-declaration
+// behavior (for example "no package.jai found") need a root whose ancestors
+// carry no declaration at all.
+external_scratch :: (name: string) -> string {
+    temporary := external_temporary_root();
+    return path_slashes(tprint("%1/juice-test-%2", temporary, name));
+}
+
+external_temporary_root :: () -> string {
+    for variable: string.["TEMP", "TMP", "HOME"] {
+        c_name := temp_c_string(variable);
+        c_value := getenv(c_name);
+        if !c_value continue;
+        value := to_string(c_value);
+        if value == "" continue;
+        return value;
+    }
+    return ".";
+}
+
 // A crash-recovery backup path under target/recovery — the zone the test
 // command never prunes (park_source_file/restore_source_file below).
 otter_recovery_path :: (file_name: string) -> string {
@@ -135,21 +157,32 @@ ensure_published_modules :: () -> bool {
         if !closure_read_ok return false;
         array_add(*closure_sources, closure_source);
     }
-    if !make_directory_if_it_does_not_exist(juice_module_dir(target_dir), recursive = true) return false;
+    // The plugin ABI's own declaration line (ticket 0094): the installation
+    // marker carries it, and every executable compares it against the
+    // constant it compiled with.
+    plugin_source, plugin_read_ok := read_entire_file(tprint("%1/src/plugin.jai", otter_root()));
+    if !plugin_read_ok return false;
+    plugin_abi_line, plugin_abi_ok := extract_constant_line(plugin_source, "JUICE_PLUGIN_ABI_VERSION");
+    if !plugin_abi_ok return false;
     juice_text, juice_ok := publish_juice_module(source);
     if !juice_ok return false;
     testing_text, testing_ok := publish_testing_module(source);
     if !testing_ok return false;
     core_text, core_ok := publish_juice_core(source);
     if !core_ok return false;
-    if !make_directory_if_it_does_not_exist(juice_internal_dir(modules_dir), recursive = true) return false;
-    if !make_directory_if_it_does_not_exist(juice_plugin_face_dir(modules_dir), recursive = true) return false;
-    if !write_entire_file(juice_module_path(target_dir), juice_text) return false;
-    if !write_entire_file(testing_module_path(target_dir), testing_text) return false;
-    if !write_entire_file(juice_core_module_path(target_dir), core_text) return false;
-    if !write_entire_file(test_discovery_module_path(modules_dir), discovery_source) return false;
-    for file, index: JUICE_CORE_LOAD_FILES {
-        if !write_entire_file(juice_plugin_face_file_path(modules_dir, file), closure_sources[index]) return false;
+    // One writer for the whole installation unit — every artifact plus the
+    // compatibility marker — so the test scaffolding and the bootstrap
+    // metaprogram cannot publish different sets.
+    published_texts: [..] string;
+    array_add(*published_texts, juice_text);
+    array_add(*published_texts, testing_text);
+    array_add(*published_texts, core_text);
+    array_add(*published_texts, discovery_source);
+    for closure_source: closure_sources array_add(*published_texts, closure_source);
+    failure, published_ok := publish_install_set(modules_dir, plugin_abi_line, published_texts);
+    if !published_ok {
+        print("[test support] publishing the installation set failed: %\n", failure);
+        return false;
     }
     flat_seed := tprint("%1/Juice.jai", target_modules_dir(target_dir));
     if file_exists(flat_seed) {
@@ -175,6 +208,22 @@ run_otter_child_at :: (working_dir: string, arguments: [] string) -> (Process_Re
     for argument: arguments array_add(*args, argument);
     result, output, errors, _ := run_command(..args, working_directory = working_dir, capture_and_return_output = true);
     return result, output, errors;
+}
+
+// Occurrence count of a literal needle, used by fixtures that must prove a
+// member or product appears exactly once (overlap deduplication) instead of
+// matching a duplicate silently.
+count_text_occurrences :: (haystack: string, needle: string) -> s64 {
+    if needle == "" return 0;
+    count := 0;
+    cursor := 0;
+    while cursor <= haystack.count - needle.count {
+        found := find_index_from_left(slice(haystack, cursor, haystack.count - cursor), needle);
+        if found < 0 break;
+        count += 1;
+        cursor += found + needle.count;
+    }
+    return count;
 }
 
 expect_exit :: (name: string, result: Process_Result, want: s32, tag := "child") -> bool {
@@ -397,27 +446,29 @@ escape_record_value :: (value: string) -> string {
 // ---------------------------------------------------------------------------
 test_discovery_attempts: s64 = 0;
 test_fake_discovery_ok: bool = false;
-test_fake_discovery: Juice.Workspace_Discovery;
+test_fake_discovery: Workspace_Discovery;
 
-test_fake_discover :: (root_dir: string, cache_dir: string, modules_dir: string) -> (Juice.Workspace_Discovery, bool) {
+test_fake_discover :: (root_dir: string, cache_dir: string, modules_dir: string) -> (Workspace_Discovery, bool) {
     test_discovery_attempts += 1;
     return test_fake_discovery, test_fake_discovery_ok;
 }
 
 test_plan_resolution_success: bool = false;
-test_resolved_plans: [] Juice.Artifact_Plan;
+test_resolved_plans: [] Artifact_Plan;
 test_dependency_attempts: s64 = 0;
 test_dependency_ok: bool = false;
-test_dependency_snapshot: [] Juice.Package;
+test_dependency_snapshot: [] Normalized_Package;
+test_dependency_request: Dependency_Preparation_Request;
 
-test_fake_resolve :: (pkg: Juice.Package) -> Artifact_Plan_Result {
+test_fake_resolve :: (pkg: Normalized_Package) -> Artifact_Plan_Result {
     if !test_plan_resolution_success return .{success = false, error_message = copy_string("resolution failure")};
     return .{success = true, plans = test_resolved_plans};
 }
 
-test_fake_prepare_dependencies :: (root_dir: string, cache_dir: string, member_packages: [] Juice.Package) -> bool {
+test_fake_prepare_dependencies :: (request: Dependency_Preparation_Request) -> bool {
     test_dependency_attempts += 1;
-    test_dependency_snapshot = member_packages;
+    test_dependency_request = request;
+    test_dependency_snapshot = request.discovery.member_packages;
     return test_dependency_ok;
 }
 
@@ -426,10 +477,11 @@ reset_preparation_test :: () {
     test_fake_discovery_ok = false;
     test_fake_discovery = .{};
     test_plan_resolution_success = false;
-    test_resolved_plans = Juice.Artifact_Plan.[];
+    test_resolved_plans = Artifact_Plan.[];
     test_dependency_attempts = 0;
     test_dependency_ok = false;
-    test_dependency_snapshot = Juice.Package.[];
+    test_dependency_snapshot = Normalized_Package.[];
+    test_dependency_request = .{};
 }
 
 // ---------------------------------------------------------------------------
@@ -452,6 +504,9 @@ workspace_discovery_driver_code :: (fixture_root: string, cache_dir: string) -> 
     append(*builder, "#import \"Compiler\";\n\n");
     append(*builder, "#load \"");
     append(*builder, path_slashes(tprint("%1/src/juice_module.jai", otter_root())));
+    append(*builder, "\";\n");
+    append(*builder, "#load \"");
+    append(*builder, path_slashes(tprint("%1/src/package_model.jai", otter_root())));
     append(*builder, "\";\n");
     append(*builder, "#load \"");
     append(*builder, path_slashes(tprint("%1/src/path_safety.jai", otter_root())));
@@ -482,6 +537,12 @@ workspace_discovery_driver_code :: (fixture_root: string, cache_dir: string) -> 
     append(*builder, "\";\n");
     append(*builder, "#load \"");
     append(*builder, path_slashes(tprint("%1/src/target_layout.jai", otter_root())));
+    append(*builder, "\";\n");
+    append(*builder, "#load \"");
+    append(*builder, path_slashes(tprint("%1/src/resolution_state.jai", otter_root())));
+    append(*builder, "\";\n");
+    append(*builder, "#load \"");
+    append(*builder, path_slashes(tprint("%1/src/dependency_resolution.jai", otter_root())));
     append(*builder, "\";\n\n");
     append(*builder, "#run {\n");
     append(*builder, "    set_build_options_dc(.{do_output = false});\n");
@@ -524,12 +585,12 @@ run_workspace_discovery_child :: (fixture_name: string) -> (Process_Result, stri
 // library_fixture_package semantics — a declared-LIB package pointing at the
 // root module.jai layout fixture).
 // ---------------------------------------------------------------------------
-library_fixture_package :: () -> Juice.Package {
-    pkg: Juice.Package;
+library_fixture_package :: () -> Normalized_Package {
+    pkg: Normalized_Package;
     pkg.name    = "libdemo";
     pkg.version = "1";
     pkg.dir     = tprint("%1/tests/data/target-lib-module", otter_root());
-    pkg.type    = .LIB;
+
     return pkg;
 }
 
@@ -543,12 +604,12 @@ test_linked_member_names: [..] string;
 test_fetch_result: bool = false;
 test_link_result: bool = false;
 
-test_fake_fetch :: (root_dir: string, cache_dir: string, dep: Juice.Dependency) -> bool {
+test_fake_fetch :: (root_dir: string, cache_dir: string, dep: Dependency_Reference, modules_dir: string = "") -> bool {
     array_add(*test_fetched_dependency_names, copy_string(dep.name));
     return test_fetch_result;
 }
 
-test_fake_link_member :: (root_dir: string, member: Juice.Package) -> bool {
+test_fake_link_member :: (root_dir: string, member: Normalized_Package) -> bool {
     array_add(*test_linked_member_names, copy_string(member.name));
     return test_link_result;
 }
@@ -588,6 +649,9 @@ dependency_prep_driver_code :: (fixture_root: string, scratch_root: string, cach
     append(*builder, path_slashes(tprint("%1/src/juice_module.jai", otter_root())));
     append(*builder, "\";\n");
     append(*builder, "#load \"");
+    append(*builder, path_slashes(tprint("%1/src/package_model.jai", otter_root())));
+    append(*builder, "\";\n");
+    append(*builder, "#load \"");
     append(*builder, path_slashes(tprint("%1/src/path_safety.jai", otter_root())));
     append(*builder, "\";\n");
     append(*builder, "#load \"");
@@ -616,6 +680,12 @@ dependency_prep_driver_code :: (fixture_root: string, scratch_root: string, cach
     append(*builder, "\";\n");
     append(*builder, "#load \"");
     append(*builder, path_slashes(tprint("%1/src/target_layout.jai", otter_root())));
+    append(*builder, "\";\n");
+    append(*builder, "#load \"");
+    append(*builder, path_slashes(tprint("%1/src/resolution_state.jai", otter_root())));
+    append(*builder, "\";\n");
+    append(*builder, "#load \"");
+    append(*builder, path_slashes(tprint("%1/src/dependency_resolution.jai", otter_root())));
     append(*builder, "\";\n\n");
     append(*builder, "#run {\n");
     append(*builder, "    set_build_options_dc(.{do_output = false});\n");
@@ -641,18 +711,22 @@ dependency_prep_driver_code :: (fixture_root: string, scratch_root: string, cach
     append(*builder, "\");\n");
     append(*builder, "    print(\"discovery-ok=%\\n\", ok);\n");
     append(*builder, "    if ok && discovery.has_package {\n");
-    append(*builder, "        deps_ok := resolve_and_fetch_dependencies(\"");
+    append(*builder, "        deps_ok := resolve_and_fetch_dependencies_with_modules(\"");
     append(*builder, path_slashes(scratch_root));
     append(*builder, "\", \"");
     append(*builder, path_slashes(cache_dir));
-    append(*builder, "\", discovery.member_packages);\n");
+    append(*builder, "\", discovery.member_packages, \"");
+    append(*builder, path_slashes(plugin_face_modules_dir()));
+    append(*builder, "\");\n");
     append(*builder, "        print(\"deps-ok=%\\n\", deps_ok);\n");
     append(*builder, "    }\n");
     append(*builder, "    rel_ok := fetch_dependency(\"");
     append(*builder, path_slashes(scratch_root));
     append(*builder, "\", \"");
     append(*builder, path_slashes(cache_dir));
-    append(*builder, "\", .{name = \"dep_rel\", source = \"tests/data/dep-fixture/shim-pkg\"});\n");
+    append(*builder, "\", .{name = \"dep_rel\", source = .{kind = .PATH, path = \"tests/data/dep-fixture/shim-pkg\"}, modules = .[.{alias = \"dep_rel\"}], modules_omitted = false}, \"");
+    append(*builder, path_slashes(plugin_face_modules_dir()));
+    append(*builder, "\");\n");
     append(*builder, "    print(\"rel-ok=%\\n\", rel_ok);\n");
     append(*builder, "}\n");
     return builder_to_string(*builder);
@@ -666,6 +740,7 @@ run_dependency_prep_child :: (fixture_name: string, scratch_root: string) -> (Pr
     make_directory_if_it_does_not_exist(cache, recursive = true);
     write_entire_file(driver, dependency_prep_driver_code(fixture_root, scratch_root, cache));
     result, output, errors, _ := run_command("jai", driver, "-import_dir", plugin_face_modules_dir(), "-quiet", working_directory = otter_root(), capture_and_return_output = true);
+    if errors.count > 0 print("[dependency child stderr] %\n", errors);
     return result, output, errors;
 }
 
@@ -679,12 +754,12 @@ run_dependency_prep_child :: (fixture_name: string, scratch_root: string) -> (Pr
 // real filesystem.
 // ---------------------------------------------------------------------------
 test_compile_count: s64;
-test_compiled_plan: Juice.Artifact_Plan;
+test_compiled_plan: Artifact_Plan;
 test_compiled_driver_root: string;
 test_compiled_entry: string;
 test_compile_success: bool;
 
-test_compile_artifact :: (root_dir: string, plan: Juice.Artifact_Plan, entry: string) -> bool {
+test_compile_artifact :: (root_dir: string, plan: Artifact_Plan, entry: string) -> bool {
     test_compile_count += 1;
     test_compiled_plan = plan;
     test_compiled_driver_root = root_dir;
@@ -723,10 +798,10 @@ test_artifact_is_running :: (artifact_path: string) -> bool {
 }
 
 test_handoff_calls: s64;
-test_handoff_plan: Juice.Artifact_Plan;
+test_handoff_plan: Artifact_Plan;
 test_handoff_success: bool;
 
-test_artifact_handoff :: (plan: Juice.Artifact_Plan) -> bool {
+test_artifact_handoff :: (plan: Artifact_Plan) -> bool {
     test_handoff_calls += 1;
     test_handoff_plan = plan;
     return test_handoff_success;
@@ -777,20 +852,20 @@ reset_compile_seam :: () {
 // A prepared workspace over a real temp fixture root: the revalidation gate
 // probes real files even in seam tests (the same posture as the old juice
 // helpers).
-build_seam_plan :: (root: string, main_file: string) -> Juice.Artifact_Plan {
-    plan: Juice.Artifact_Plan;
+build_seam_plan :: (root: string, main_file: string) -> Artifact_Plan {
+    plan: Artifact_Plan;
     plan.target = .{name = "app", main_file = main_file, source_path = tprint("%1/%2", root, main_file)};
     plan.target_dir = package_target_dir(root);
     plan.artifact_path = target_artifact_path(plan.target_dir, "app");
     return plan;
 }
 
-build_seam_prepared :: (root: string, plan: Juice.Artifact_Plan) -> Juice.Prepared_Workspace {
-    prepared: Juice.Prepared_Workspace;
+build_seam_prepared :: (root: string, plan: Artifact_Plan) -> Prepared_Workspace {
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     // The plan must live in a heap-backed array: a static literal here would
     // leave the slice pointing at this frame's stack.
-    plans: [..] Juice.Artifact_Plan;
+    plans: [..] Artifact_Plan;
     array_add(*plans, plan);
     prepared.artifact_plans = plans;
     return prepared;
@@ -892,18 +967,21 @@ make_test_link :: (link: string, target: string, directory: bool, junction: bool
 }
 
 // ---------------------------------------------------------------------------
-// Run test support: the recording launch seam (the old juice test_launch_*
-// semantics — run_prepared_workspace's launch seam).
+// Run test support: the recording launch seam (launch_selected_plan's seam,
+// ticket 0093: the program's separator arguments travel through unchanged).
 // ---------------------------------------------------------------------------
 test_launch_count: s64;
-test_launched_plan: Juice.Artifact_Plan;
+test_launched_plan: Artifact_Plan;
 test_launched_root: string;
+test_launched_arguments: [..] string;
 test_launch_success: bool;
 
-test_launch_artifact :: (plan: Juice.Artifact_Plan, package_root: string) -> bool {
+test_launch_artifact :: (plan: Artifact_Plan, package_root: string, arguments: [] string) -> bool {
     test_launch_count += 1;
     test_launched_plan = plan;
     test_launched_root = package_root;
+    array_reset(*test_launched_arguments);
+    for argument: arguments array_add(*test_launched_arguments, argument);
     return test_launch_success;
 }
 
@@ -911,6 +989,7 @@ reset_run_seam :: () {
     test_launch_count = 0;
     test_launched_plan = .{};
     test_launched_root = "";
+    array_reset(*test_launched_arguments);
     test_launch_success = true;
 }
 
@@ -925,7 +1004,7 @@ test_test_collect_calls: s64;
 test_test_collect_files: [] Scan_File;
 test_test_collect_ok: bool;
 
-test_collect_test_files :: (prepared: *Juice.Prepared_Workspace) -> ([] Scan_File, bool) {
+test_collect_test_files :: (prepared: *Prepared_Workspace, package_root: string) -> ([] Scan_File, bool) {
     test_test_collect_calls += 1;
     return test_test_collect_files, test_test_collect_ok;
 }
@@ -958,8 +1037,8 @@ reset_test_command_seam :: () {
 // A prepared workspace over a root string — the test command consumes only
 // the discovery snapshot (root dir + member packages), so seam tests build
 // the state directly (the build_seam_prepared posture).
-test_command_prepared :: (root: string) -> Juice.Prepared_Workspace {
-    prepared: Juice.Prepared_Workspace;
+test_command_prepared :: (root: string) -> Prepared_Workspace {
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     return prepared;
 }
@@ -1104,7 +1183,7 @@ plugin_scan_driver_code :: (registration_path: string, marker: string, configs: 
     append(*builder, "plugin_configs: [] Plugin_Config = Plugin_Config.[");
     for config, index: configs {
         if index > 0 append(*builder, ", ");
-        print_to_builder(*builder, ".{ id = %1, version = %2, options = Option_Row.[] }", quote_jai_string(config.id), quote_jai_string(config.version));
+        print_to_builder(*builder, ".{ id = %1, options = Option_Row.[] }", quote_jai_string(config.id));
     }
     append(*builder, "];\n\n");
     append(*builder, "main :: () {\n");
@@ -1203,7 +1282,7 @@ run_plugin_lint_child :: (registration_fixture: string, test_fixture: string, te
     resolved_configs := configs;
     if resolved_configs.count == 0 {
         default_configs: [..] Plugin_Config;
-        array_add(*default_configs, .{id = registration_fixture, version = "1.0.0"});
+        array_add(*default_configs, .{id = registration_fixture});
         resolved_configs = default_configs;
     }
 

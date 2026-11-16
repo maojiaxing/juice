@@ -4,10 +4,10 @@
 // source relative to the member's own root when it runs as its own root);
 // from the root side the declared name links the member directly.
 PACKAGE :: Package.{
-    name    = "member_extra",
     version = "0.1.0",
-    type    = .LIB,
+    name    = "member_extra",
+
     dependencies = Dependency.[
-        .{name = "member_lib", version = "0.1.0", source = "../member_lib"},
+        .{name = "member_lib", source = .{kind = .PATH, path = "../member_lib"}},
     ],
 };

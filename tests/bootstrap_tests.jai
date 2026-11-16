@@ -234,6 +234,33 @@ test "E2E: jai build.jai self-builds a test-free root in debug and publishes the
     // The flat seed retired — zero residue.
     expect(!file_exists(flat_seed), "the stale flat Juice.jai seed must be retired by the publish step");
 
+    // Ticket 0094: the installation marker is part of the publication. It must
+    // describe exactly this set byte for byte, so the executable that runs next
+    // to it can prove the unit is one release.
+    marker_text, marker_read_ok := read_entire_file(install_manifest_path(modules_dir));
+    expect(marker_read_ok, "the debug build must publish the installation marker");
+    plugin_source, plugin_source_ok := read_entire_file(tprint("%1/src/plugin.jai", otter_root()));
+    expect(plugin_source_ok);
+    plugin_abi_line, plugin_abi_line_ok := extract_constant_line(plugin_source, "JUICE_PLUGIN_ABI_VERSION");
+    expect(plugin_abi_line_ok);
+    published_texts: [..] string;
+    array_add(*published_texts, expected_juice);
+    array_add(*published_texts, expected_testing);
+    array_add(*published_texts, expected_core);
+    array_add(*published_texts, discovery_source);
+    for file: JUICE_CORE_LOAD_FILES {
+        closure_source, closure_source_ok := read_entire_file(path_slashes(tprint("%1/src/%2", otter_root(), file)));
+        expect(closure_source_ok);
+        array_add(*published_texts, closure_source);
+    }
+    expected_marker, expected_marker_ok := publish_install_manifest(modules_dir, plugin_abi_line, published_texts);
+    expect(expected_marker_ok, "the installation marker must be generatable from the published set");
+    expect(marker_text == expected_marker, "the published installation marker must describe the published set byte for byte");
+    plugin_abi_value, plugin_abi_value_ok := constant_integer_value(plugin_abi_line, "JUICE_PLUGIN_ABI_VERSION");
+    expect(plugin_abi_value_ok);
+    install_check := verify_install(modules_dir, plugin_abi_value);
+    expect(install_check.ok, "the freshly published unit must verify: %", install_check.reason);
+
     // The production closure is test-free after the self-test migration,
     // so the generated compile driver must use the original entry. Inspect
     // this run's driver rather than stale views left by an earlier build.
@@ -287,6 +314,18 @@ test "E2E: jai build.jai - release self-builds the otter root" {
     for file: JUICE_CORE_LOAD_FILES {
         expect(file_exists(juice_plugin_face_file_path(modules_dir, file)), "the release build must publish the plugin face copy %", file);
     }
+    // Ticket 0094: the release build publishes the same complete unit — the
+    // installation marker beside the artifacts, and an executable that accepts
+    // it (the version run below passes the gate).
+    expect(file_exists(install_manifest_path(modules_dir)), "the release build must publish the installation marker");
+    plugin_source, plugin_source_ok := read_entire_file(tprint("%1/src/plugin.jai", otter_root()));
+    expect(plugin_source_ok);
+    plugin_abi_line, plugin_abi_line_ok := extract_constant_line(plugin_source, "JUICE_PLUGIN_ABI_VERSION");
+    expect(plugin_abi_line_ok);
+    plugin_abi_value, plugin_abi_value_ok := constant_integer_value(plugin_abi_line, "JUICE_PLUGIN_ABI_VERSION");
+    expect(plugin_abi_value_ok);
+    install_check := verify_install(modules_dir, plugin_abi_value);
+    expect(install_check.ok, "the release build's installation unit must verify: %", install_check.reason);
     expect(!file_exists(path_slashes(tprint("%1/Juice.jai", target_modules_dir(otter_target_dir())))));
 
     artifact := otter_exe();
@@ -424,3 +463,78 @@ test "E2E: a missing plugin face closure source fails the self-build without a p
         expect(!file_exists(juice_plugin_face_file_path(modules_dir, file)), "the failed publish must not land the plugin face copy %", file);
     }
 }
+
+// ---------------------------------------------------------------------------
+// The installation unit of a real self-build (ticket 0094, spec 0087 decision
+// 28 / A16). A named, filterable case (`juice test bootstrap_`): the debug
+// self-build publishes the complete unit, the marker describes exactly the
+// artifacts it landed, the artifact it just produced accepts that unit, and it
+// refuses a unit an artifact was replaced in. The inline E2E cases above cover
+// the same publication from the artifact side; this case pins the marker and
+// the acceptance half on the real self-build.
+// ---------------------------------------------------------------------------
+bootstrap_publication_unit_marker :: () {
+    if bootstrap_e2e_self_locked() return;
+
+    result, _, _ := run_bootstrap_child(string.[]);
+    expect(expect_exit("bootstrap-unit", result, 0, "bootstrap child"));
+
+    target_dir := otter_target_dir();
+    modules_dir := target_modules_dir(target_dir);
+    marker_path := install_manifest_path(modules_dir);
+    expect(file_exists(marker_path), "the self-build must publish the installation marker");
+    marker_text, marker_ok := read_entire_file(marker_path);
+    expect(marker_ok);
+
+    // The marker describes exactly what this build landed, and the unit
+    // verifies against the plugin ABI its own source declares.
+    source, source_ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
+    expect(source_ok);
+    juice_text, juice_ok := publish_juice_module(source);
+    testing_text, testing_ok := publish_testing_module(source);
+    core_text, core_ok := publish_juice_core(source);
+    expect(juice_ok && testing_ok && core_ok);
+    discovery_text, discovery_ok := read_entire_file(tprint("%1/src/test_discovery.jai", otter_root()));
+    expect(discovery_ok);
+    plugin_source, plugin_ok := read_entire_file(tprint("%1/src/plugin.jai", otter_root()));
+    expect(plugin_ok);
+    plugin_abi_line, plugin_abi_line_ok := extract_constant_line(plugin_source, "JUICE_PLUGIN_ABI_VERSION");
+    expect(plugin_abi_line_ok);
+    plugin_abi_value, plugin_abi_value_ok := constant_integer_value(plugin_abi_line, "JUICE_PLUGIN_ABI_VERSION");
+    expect(plugin_abi_value_ok);
+    published_texts: [..] string;
+    array_add(*published_texts, juice_text);
+    array_add(*published_texts, testing_text);
+    array_add(*published_texts, core_text);
+    array_add(*published_texts, discovery_text);
+    for file: JUICE_CORE_LOAD_FILES {
+        closure_text, closure_ok := read_entire_file(tprint("%1/src/%2", otter_root(), file));
+        expect(closure_ok);
+        array_add(*published_texts, closure_text);
+    }
+    expected_marker, expected_marker_ok := publish_install_manifest(modules_dir, plugin_abi_line, published_texts);
+    expect(expected_marker_ok);
+    expect(marker_text == expected_marker, "the published marker must describe the published set byte for byte");
+    check := verify_install(modules_dir, plugin_abi_value);
+    expect(check.ok, "the self-built installation unit must verify: %", check.reason);
+
+    // The artifact the build just produced accepts that unit.
+    artifact := otter_exe();
+    version_result, version_output, _, _ := run_command(artifact, "version", capture_and_return_output = true);
+    expect(expect_exit("bootstrap-unit version", version_result, 0, "bootstrap child"));
+    expect(child_output_contains("bootstrap-unit version", version_output, "juice 0.1.0"));
+
+    // And refuses a unit with one artifact from another release: the marker no
+    // longer describes what is on disk. Restored by the defer so the following
+    // cases observe a complete unit.
+    testing_path := testing_module_path(target_dir);
+    published_testing, published_testing_ok := read_entire_file(testing_path);
+    expect(published_testing_ok);
+    defer expect(write_entire_file(testing_path, published_testing));
+    expect(write_entire_file(testing_path, "// juice modules/Testing.jai from another release\n"));
+    mixed_result, mixed_output, mixed_errors, _ := run_command(artifact, "version", capture_and_return_output = true);
+    expect(expect_exit("bootstrap-unit mixed", mixed_result, 1, "bootstrap child"));
+    mixed_combined := tprint("%\n%", mixed_output, mixed_errors);
+    expect(child_output_contains("bootstrap-unit mixed", mixed_combined, "Testing.jai"));
+    expect(child_output_contains("bootstrap-unit mixed", mixed_combined, "not one compatible installation"));
+} @test

@@ -52,6 +52,16 @@ front_slashes :: (path: string) -> string {
 Build_Source_File :: struct {
     rel_path: string;
     abs_path: string;
+    // Where the text is READ from when it differs from abs_path: the derived
+    // physical file of a logical input the current run substituted or generated
+    // (spec 0087 decision 24: 物理路径仅用于读取). Empty = abs_path. Diagnostics,
+    // relative loads and test attribution all keep rel_path.
+    read_path: string = "";
+}
+
+// The path one source file's text is read from.
+source_read_path :: (file: Build_Source_File) -> string {
+    return ifx file.read_path != "" then file.read_path else file.abs_path;
 }
 
 // One probed closure file: its resolved in-package literal #load targets in
@@ -61,6 +71,12 @@ Build_Closure_File :: struct {
     file:      Build_Source_File;
     loads:     [..] string;
     has_tests: bool;
+}
+
+// The default derived-source probe: nothing is derived, so every closure file is
+// read from the package itself (the pre-derived shape).
+no_derived_source :: (state: *void, logical_path: string) -> (string, bool) {
+    return "", false;
 }
 
 // The transpile step's output for one file: the strip-mode view, the
@@ -88,12 +104,20 @@ probe_visited :: (visited: [] string, rel_path: string) -> bool {
 // by the consumer; pipeline is the configured pipeline the probe aggregates
 // over — an empty pipeline means the default, so every existing caller
 // keeps its behavior unchanged.
-probe_package_closure :: (package_root: string, entry_rel: string, error_prefix: string = "[juice ERROR] ", pipeline: [] Transpile_Plugin = .[]) -> [..] Build_Closure_File, bool {
+probe_package_closure :: (
+    package_root: string,
+    entry_rel: string,
+    error_prefix: string = "[juice ERROR] ",
+    pipeline: [] Transpile_Plugin = .[],
+    pipeline_omitted: bool = true,
+    derived: #type (state: *void, logical_path: string) -> (string, bool) = no_derived_source,
+    derived_state: *void = null
+) -> [..] Build_Closure_File, bool {
     entry: Build_Source_File;
     entry.rel_path = entry_rel;
     entry.abs_path = front_slashes(tprint("%1/%2", package_root, entry_rel));
 
-    resolved := resolve_pipeline(pipeline);
+    resolved := resolve_pipeline(pipeline, pipeline_omitted);
 
     files: [..] Build_Closure_File;
     visited: [..] string;
@@ -106,7 +130,13 @@ probe_package_closure :: (package_root: string, entry_rel: string, error_prefix:
         if probe_visited(visited, file.rel_path) continue;
         array_add(*visited, copy_string(file.rel_path));
 
-        source, ok := read_entire_file(file.abs_path);
+        // A logical input this round generated or substituted is READ from its
+        // derived physical file, so a `#load` of a generated helper resolves and a
+        // substituted file's own loads are followed. The logical path stays the
+        // file's identity (diagnostics, relative loads, test attribution).
+        derived_physical, is_derived := derived(derived_state, file.rel_path);
+        if is_derived file.read_path = front_slashes(derived_physical);
+        source, ok := read_entire_file(source_read_path(file));
         if !ok {
             print("%1无法读取源文件: %2\n", error_prefix, file.abs_path);
             return files, false;
@@ -178,11 +208,12 @@ Strip_View_State :: struct {
     // The transpile seam: a function from one closure file (+ its load
     // rewrite table) to the strip view. The third parameter is the pipeline
     // (empty = the default); view_of_file passes state.pipeline below.
-    transpile:     #type (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin = .[]) -> Build_File_Output;
+    transpile:     #type (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin = .[], pipeline_omitted: bool = true) -> Build_File_Output;
     // The pipeline the closure is transpiled with: the caller's configured
     // pipeline for a declared package; empty (the default) for closures
     // without a package declaration surface.
     pipeline:      [] Transpile_Plugin;
+    pipeline_omitted: bool = true;
     transpile_dir: string;   // CONTENT_ADDRESSED: transpile tree root; PLAIN: view base dir (absolute)
     dep_name:      string;   // CONTENT_ADDRESSED non-empty -> deps/<name> subtree
     layout:        Strip_View_Layout;
@@ -231,7 +262,7 @@ view_of_file :: (state: *Strip_View_State, index: s64) -> string, bool {
         array_add(*load_targets, target);
     }
 
-    output := state.transpile(state.closure[index].file, load_targets, state.pipeline);
+    output := state.transpile(state.closure[index].file, load_targets, state.pipeline, state.pipeline_omitted);
     if output.diagnostics.count > 0 {
         for diagnostic: output.diagnostics {
             print("%1%2:%3,%4: %5\n", state.error_prefix, state.closure[index].file.rel_path, diagnostic.line, diagnostic.column, diagnostic.message);
@@ -276,11 +307,11 @@ view_of_file :: (state: *Strip_View_State, index: s64) -> string, bool {
 // view). The load rewrite table embeds the target views' hash directories,
 // so keys form a Merkle chain computable in dependency order. pipeline is
 // the configured pipeline; an empty pipeline means the default.
-transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin = .[]) -> Build_File_Output {
+transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target, pipeline: [] Transpile_Plugin = .[], pipeline_omitted: bool = true) -> Build_File_Output {
     output: Build_File_Output;
-    source, ok := read_entire_file(file.abs_path);
+    source, ok := read_entire_file(source_read_path(file));
     if !ok {
-        array_add(*output.diagnostics, .{line = 0, column = 0, message = tprint("无法读取源文件: %1", file.abs_path)});
+        array_add(*output.diagnostics, .{line = 0, column = 0, message = tprint("无法读取源文件: %1", file.rel_path)});
         return output;
     }
     ctx: Transpile_Context;
@@ -289,10 +320,11 @@ transpile_build_file :: (file: Build_Source_File, load_targets: [] Load_Target, 
     ctx.load_targets = load_targets;
     // ctx.plugins is a resizable array; copy the slice in so the context
     // owns its pipeline view.
+    ctx.plugins_omitted = pipeline_omitted;
     for plugin: pipeline array_add(*ctx.plugins, plugin);
     result := transpile_source(source, ctx);
     output.view = result.view;
-    output.key = transpile_view_key(file.rel_path, source, .STRIP, load_targets, VIEW_CONTRACT_VERSION, ctx.plugins);
+    output.key = transpile_view_key(file.rel_path, source, .STRIP, load_targets, VIEW_CONTRACT_VERSION, ctx.plugins, pipeline_omitted = pipeline_omitted);
     output.diagnostics = result.diagnostics;
     return output;
 }

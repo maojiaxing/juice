@@ -111,13 +111,14 @@ jp_write_demo_package_with_exe :: (root: string) -> bool {
     append(*builder, "PACKAGE :: Package.{\n");
     append(*builder, "    name    = \"jaix-demo\",\n");
     append(*builder, "    version = \"0.1.0\",\n");
-    append(*builder, "    type    = .BIN,\n");
-    append(*builder, "    targets = Target.[.{name = \"jaix-demo\", main_file = \"src/main.jai\"}],\n");
+    append(*builder, "    \n");
+    append(*builder, "    executables = .[.{name = \"jaix_demo\", entry = \"src/main.jai\"}],\n");
     append(*builder, "    workspace = .{ members = string.[\"packages/juice-plugin-jaix\"] },\n");
     append(*builder, "    plugins = Plugin_Declaration.[\n");
+    append(*builder, "        .{builtin = \"load\"},\n        .{builtin = \"test-block\"},\n");
     append(*builder, "        .{\n");
     append(*builder, "            id      = \"juice-plugin-jaix\",\n");
-    append(*builder, "            version = \"0.1.0\",\n");
+    append(*builder, "            source = .{kind = .PATH, path = \"packages/juice-plugin-jaix\"},\n");
     append(*builder, "            options = Plugin_Option.[\n");
     append(*builder, "                .{key = \"config\", value = \"jaix.config.jai\"},\n");
     print_to_builder(*builder, "                .{key = \"exe\", value = %1},\n", quote_jai_string(exe));
@@ -251,7 +252,7 @@ test "E2E: jaix pre-step build compiles the mirror through the member and host" 
     // The pre-step ran inside the generated host (its stdout passes through
     // the child's inherited handles), and the build compiled the mirror entry.
     expect(child_output_contains("jaix-member build", output, "[juice] Running jaix pre-step (2 files) -> target/jaix/..."));
-    expect(child_output_contains("jaix-member build", output, "[juice Build] Compiling Target 'jaix-demo' (src/main.jai) -> target/..."));
+    expect(child_output_contains("jaix-member build", output, "[juice Build] Compiling Target 'jaix_demo' (src/main.jai) -> target/..."));
 
     // The host driver and its record file are session artifacts; the records
     // carry the substitution, the config drop and OK=1.
@@ -264,17 +265,29 @@ test "E2E: jaix pre-step build compiles the mirror through the member and host" 
 
     // The artifact runs the lowered code: the try error propagation really
     // executed (success and error paths).
-    artifact := target_artifact_path(package_target_dir(root), "jaix-demo");
+    artifact := target_artifact_path(package_target_dir(root), "jaix_demo");
     expect(file_exists(artifact));
     run_result, run_output, _, _ := run_command(artifact, capture_and_return_output = true);
     expect(expect_exit("jaix-member artifact", run_result, 0, "build child"));
     expect(child_output_contains("jaix-member artifact", run_output, "double(20): NONE 40"));
     expect(child_output_contains("jaix-member artifact", run_output, "double(-6): NEGATIVE 0"));
 
-    // The entry compiles the mirror path directly (no closure probe, no
-    // transpile view): the generated build metaprogram quotes it.
-    metaprogram := target_session_driver_path(target_build_dir(package_target_dir(root)), tprint("build-jaix-demo.jai"));
-    expect(file_contains(metaprogram, path_slashes(tprint("%1/target/jaix/src/main.jai", root))));
+    // Spec 0087 decision 24: a substitution replaces the entry's CONTENT and keeps
+    // its logical path, so the build compiles the entry materialized at its own
+    // coordinate inside the package's private derived root — never the plugin's
+    // mirror path, which is only where juice reads the new text from.
+    metaprogram := target_session_driver_path(target_build_dir(package_target_dir(root)), tprint("build-jaix_demo.jai"));
+    mirror_path := path_slashes(tprint("%1/target/jaix/src/main.jai", root));
+    derived_entry := path_slashes(tprint("%1/src/main.jai", package_derived_view_root(package_target_dir(root), "jaix-demo")));
+    expect(file_contains(metaprogram, derived_entry));
+    expect(!file_contains(metaprogram, mirror_path));
+    // The materialized input carries the substituted text, and no transpile view
+    // was needed (this fixture's closure is test-free).
+    materialized, materialized_ok := read_entire_file(derived_entry);
+    expect(materialized_ok);
+    original_mirror, mirror_ok := read_entire_file(mirror_path);
+    expect(mirror_ok && materialized == original_mirror);
+    expect(!file_exists(transpile_tree_dir(root)));
 
     // The mirror: untouched files are byte-identical to the originals (the
     // round-trip identity), the try file is lowered, the test block file and
@@ -370,7 +383,7 @@ test "E2E: a jaix transpile failure propagates diagnostics and produces no artif
     defer jp_delete_dir(root);
     expect(jp_copy_member_tree(tprint("%1/packages/juice-plugin-jaix", root)));
     expect(build_seam_write(root, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"jaix-fail\",\n    version = \"1\",\n    type    = .BIN,\n    targets = Target.[.{name = \"jaix-fail\", main_file = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"packages/juice-plugin-jaix\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"juice-plugin-jaix\", version = \"0.1.0\", options = Plugin_Option.[.{key = \"config\", value = \"jaix.config.jai\"}]},\n    ],\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"jaix-fail\",\n    version = \"1\",\n    \n    executables = .[.{name = \"jaix_fail\", entry = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"packages/juice-plugin-jaix\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"juice-plugin-jaix\", source = .{kind = .PATH, path = \"packages/juice-plugin-jaix\"}, options = Plugin_Option.[.{key = \"config\", value = \"jaix.config.jai\"}]},\n    ],\n};\n"));
     expect(build_seam_write(root, "jaix.config.jai",
         "#import \"jaix\";\nJaix_Plugin_Try_Catch :: #import \"Jaix_Plugin_Try_Catch\";\n\nget_config :: () -> Jaix_Config {\n    p := Jaix_Plugin_Try_Catch.get_plugin();\n    return .{ plugins = plugins_of(as_plugin(p)) };\n}\n"));
     expect(build_seam_write(root, "src/main.jai", "main :: () {\n    try half(1) catch;\n}\n"));
@@ -383,7 +396,7 @@ test "E2E: a jaix transpile failure propagates diagnostics and produces no artif
     expect(output_matches("jaix-member fail", errors, string.["src/main.jai", "Error:"]));
     expect(child_output_contains("jaix-member fail", output, "[juice ERROR] jaix pre-step failed for src/main.jai"));
     expect(child_output_contains("jaix-member fail", output, "[juice ERROR] The plugin host reported a pre-step failure."));
-    expect(!file_exists(target_artifact_path(package_target_dir(root), "jaix-fail")));
+    expect(!file_exists(target_artifact_path(package_target_dir(root), "jaix_fail")));
 }
 
 // A declared exe that does not exist fails the pre-step with the clear
@@ -394,7 +407,7 @@ test "E2E: a missing jaix executable fails the pre-step with a clear error" {
     defer jp_delete_dir(root);
     expect(jp_copy_member_tree(tprint("%1/packages/juice-plugin-jaix", root)));
     expect(build_seam_write(root, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"jaix-noexe\",\n    version = \"1\",\n    type    = .BIN,\n    targets = Target.[.{name = \"jaix-noexe\", main_file = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"packages/juice-plugin-jaix\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"juice-plugin-jaix\", version = \"0.1.0\", options = Plugin_Option.[\n            .{key = \"config\", value = \"jaix.config.jai\"},\n            .{key = \"exe\", value = \"no-such-jaix.exe\"},\n        ]},\n    ],\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"jaix-noexe\",\n    version = \"1\",\n    \n    executables = .[.{name = \"jaix_noexe\", entry = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"packages/juice-plugin-jaix\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"juice-plugin-jaix\", source = .{kind = .PATH, path = \"packages/juice-plugin-jaix\"}, options = Plugin_Option.[\n            .{key = \"config\", value = \"jaix.config.jai\"},\n            .{key = \"exe\", value = \"no-such-jaix.exe\"},\n        ]},\n    ],\n};\n"));
     expect(build_seam_write(root, "jaix.config.jai", "// config\n"));
     expect(build_seam_write(root, "src/main.jai", "main :: () {}\n"));
 
@@ -402,7 +415,7 @@ test "E2E: a missing jaix executable fails the pre-step with a clear error" {
     expect(expect_exit("jaix-member noexe", result, 1, "build child"));
     expect(child_output_contains("jaix-member noexe", output, "[juice ERROR] jaix executable not found: "));
     expect(child_output_contains("jaix-member noexe", output, "[juice ERROR] The plugin host reported a pre-step failure."));
-    expect(!file_exists(target_artifact_path(package_target_dir(root), "jaix-noexe")));
+    expect(!file_exists(target_artifact_path(package_target_dir(root), "jaix_noexe")));
     expect(!file_exists(tprint("%1/target/jaix", root)));
     expect(!file_exists(tprint("%1/target/jaix-drivers", root)));
 }
@@ -414,7 +427,7 @@ test "E2E: an undeclared package runs no pre-step and spawns no host" {
     jp_delete_dir(root);
     defer jp_delete_dir(root);
     expect(build_seam_write(root, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"plain\",\n    version = \"1\",\n    type    = .BIN,\n    targets = Target.[.{name = \"plain\", main_file = \"src/main.jai\"}],\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"plain\",\n    version = \"1\",\n    \n    executables = .[.{name = \"plain\", entry = \"src/main.jai\"}],\n};\n"));
     expect(build_seam_write(root, "src/main.jai", "#import \"Basic\";\n\nmain :: () { print(\"plain\\n\"); }\n"));
 
     result, output, _ := run_otter_child_at(root, string.["build"]);
@@ -478,9 +491,9 @@ test "E2E: an installed juice runs the real jaix member through the host" {
     result, output, errors, _ := run_command(installed_exe, "build", working_directory = root, capture_and_return_output = true);
     expect(expect_exit("jaix-installed", result, 0));
     expect(child_output_contains("jaix-installed", output, "[juice] Running jaix pre-step (2 files) -> target/jaix/..."));
-    expect(child_output_contains("jaix-installed", output, "[juice Build] Compiling Target 'jaix-demo' (src/main.jai) -> target/..."));
+    expect(child_output_contains("jaix-installed", output, "[juice Build] Compiling Target 'jaix_demo' (src/main.jai) -> target/..."));
     expect(output_matches("jaix-installed", errors, string.["Error:"], want = false));
-    artifact := target_artifact_path(package_target_dir(root), "jaix-demo");
+    artifact := target_artifact_path(package_target_dir(root), "jaix_demo");
     expect(file_exists(artifact));
     run_result, run_output, _, _ := run_command(artifact, capture_and_return_output = true);
     expect(expect_exit("jaix-installed artifact", run_result, 0));
@@ -502,17 +515,21 @@ test "E2E: an installed juice runs the real jaix member through the host" {
     ]));
 
     // Negative: delete exactly one installed plugin-face closure copy — from
-    // the scratch install only — and rerun. The host program's `#import
-    // "juice_core"` reaches the missing closure: the host compile fails
-    // loudly before the build compile, never a green or zero-plugin run.
+    // the scratch install only — and rerun. Ticket 0094's unit check runs
+    // before any package work, so the missing published support source is
+    // refused as an incomplete installation: the run fails loudly, names the
+    // artifact and never degrades into a green or zero-plugin build. (Before
+    // the unit check this surfaced later, as the host program's compile error;
+    // the observable contract — a missing support source fails the command,
+    // never a green run — is unchanged and now reported up front.)
     missing_closure := juice_plugin_face_file_path(modules_dir, "plugin.jai");
     expect(file_exists(missing_closure));
     expect(file_delete(missing_closure));
     result, output, errors = run_command(installed_exe, "build", working_directory = root, capture_and_return_output = true);
     expect(expect_exit("jaix-installed missing-face", result, 1));
-    expect(child_output_contains("jaix-installed missing-face", errors, "Unable to open file"));
-    expect(child_output_contains("jaix-installed missing-face", errors, "plugin_face/plugin.jai"));
-    expect(child_output_contains("jaix-installed missing-face", output, "[juice ERROR] Plugin host failed (exit "));
+    expect(child_output_contains("jaix-installed missing-face", output, "the installed artifact juice_internal/plugin_face/plugin.jai is missing"));
+    expect(child_output_contains("jaix-installed missing-face", output, "not one compatible installation"));
+    expect(output_matches("jaix-installed missing-face", output, string.["passed, 0 failed", "Plugin host failed"], want = false));
 }
 
 test "E2E: an installed juice fails loudly when the jaix member is missing" {
@@ -528,21 +545,21 @@ test "E2E: an installed juice fails loudly when the jaix member is missing" {
     jp_delete_dir(root);
     defer jp_delete_dir(root);
     expect(build_seam_write(root, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"missing-member\",\n    version = \"1\",\n    type    = .BIN,\n    targets = Target.[.{name = \"missing-member\", main_file = \"src/main.jai\"}],\n    plugins = Plugin_Declaration.[\n        .{id = \"juice-plugin-jaix\", version = \"0.1.0\", options = Plugin_Option.[.{key = \"config\", value = \"jaix.config.jai\"}]},\n    ],\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"missing-member\",\n    version = \"1\",\n    \n    executables = .[.{name = \"missing_member\", entry = \"src/main.jai\"}],\n    plugins = Plugin_Declaration.[\n        .{id = \"juice-plugin-jaix\", source = .{kind = .PATH, path = \"packages/juice-plugin-jaix\"}, options = Plugin_Option.[.{key = \"config\", value = \"jaix.config.jai\"}]},\n    ],\n};\n"));
     expect(build_seam_write(root, "jaix.config.jai", "// config\n"));
     expect(build_seam_write(root, "src/main.jai", "main :: () {}\n"));
 
     result, output, _, _ := run_command(installed_exe, "build", working_directory = root, capture_and_return_output = true);
     expect(expect_exit("jaix-installed missing-member", result, 1));
-    expect(child_output_contains("jaix-installed missing-member", output, "[juice ERROR] juice-plugin-jaix: Unknown plugin id: juice-plugin-jaix"));
+    expect(child_output_contains("jaix-installed missing-member", output, "[juice ERROR] juice-plugin-jaix: Plugin 'juice-plugin-jaix' source: provider package has no declaration:"));
     expect(child_output_contains("jaix-installed missing-member", output, "[juice ERROR] Could not prepare the workspace's plugin declarations."));
-    expect(!file_exists(target_artifact_path(package_target_dir(root), "missing-member")));
+    expect(!file_exists(target_artifact_path(package_target_dir(root), "missing_member")));
     // No host was spawned, no registration landed.
     expect(!file_exists(plugin_host_path(package_target_dir(root))));
     expect(!file_exists(workspace_plugin_registration_path(package_target_dir(root))));
 }
 
-test "E2E: an installed juice fails loudly when the member shim cannot land" {
+test "E2E: an installed juice fails loudly when the declared plugin module has no export" {
     expect(file_exists(jp_jaix_exe()));
     bin_dir, _ := jp_install_layout("missing-shim");
     expect(bin_dir != "");
@@ -551,26 +568,30 @@ test "E2E: an installed juice fails loudly when the member shim cannot land" {
     root := path_slashes(otter_scratch("jaix-installed-e2e/missing-shim-workspace"));
     jp_delete_dir(root);
     defer jp_delete_dir(root);
-    // The declared member package has no importable entry layout (no
-    // module.jai / src/module.jai / <name>.jai): the member link writes no
-    // import shim, so the generated registration's module import cannot
-    // resolve and the host compile fails. This is the "missing shim" face —
-    // a declared plugin whose value can never be imported must never degrade
-    // into a silent zero-plugin run.
+    // The declared provider package exports NO public module (its modules list
+    // is explicitly empty), so the enablement cannot select a module at all.
+    // Under the retired model the member link wrote no import shim and the
+    // failure surfaced later as a host compile error; a plugin comes from a
+    // DECLARED public module (spec 0087 decision 21), so the declaration is
+    // rejected before any hook or compile. Either way a declared plugin whose
+    // value can never be imported must never degrade into a silent zero-plugin
+    // run.
     expect(build_seam_write(root, "packages/jaix-copy/package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"jaix-copy\",\n    version = \"0.1.0\",\n    type    = .LIB,\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    modules = .[],\n    executables = .[],\n    name    = \"jaix-copy\",\n    version = \"0.1.0\",\n    \n};\n"));
     expect(build_seam_write(root, "packages/jaix-copy/plugin.jai",
         "get_juice_plugin :: () -> *X { plugin.hooks; return null; } @juice_plugin\n"));
     expect(build_seam_write(root, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"missing-shim\",\n    version = \"0.1.0\",\n    type    = .BIN,\n    targets = Target.[.{name = \"missing-shim\", main_file = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"packages/jaix-copy\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"jaix-copy\", version = \"0.1.0\"},\n    ],\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"missing-shim\",\n    version = \"0.1.0\",\n    \n    executables = .[.{name = \"missing_shim\", entry = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"packages/jaix-copy\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"jaix-copy\", source = .{kind = .PATH, path = \"packages/jaix-copy\"}},\n    ],\n};\n"));
     expect(build_seam_write(root, "src/main.jai", "main :: () {}\n"));
 
-    result, output, errors, _ := run_command(installed_exe, "build", working_directory = root, capture_and_return_output = true);
+    result, output, _, _ := run_command(installed_exe, "build", working_directory = root, capture_and_return_output = true);
     expect(expect_exit("jaix-installed missing-shim", result, 1));
-    expect(child_output_contains("jaix-installed missing-shim", output, "[juice ERROR] Plugin host failed (exit "));
-    // The host compiler names the unresolvable plugin module import.
-    expect(child_output_contains("jaix-installed missing-shim", errors, "Unable to find a module called 'plugin'"));
-    expect(!file_exists(target_artifact_path(package_target_dir(root), "missing-shim")));
-    // The link really wrote nothing: the member has no recognized entry.
+    expect(child_output_contains("jaix-installed missing-shim", output, "[juice ERROR] jaix-copy: Plugin 'jaix-copy' source: Provider exposes no modules; name the export explicitly."));
+    expect(child_output_contains("jaix-installed missing-shim", output, "[juice ERROR] Could not prepare the workspace's plugin declarations."));
+    expect(!file_exists(target_artifact_path(package_target_dir(root), "missing_shim")));
+    // No host, no registration and no import shim: the rejection happens at
+    // declaration validation, before any member link is written.
+    expect(!file_exists(plugin_host_path(package_target_dir(root))));
+    expect(!file_exists(workspace_plugin_registration_path(package_target_dir(root))));
     expect(!file_exists(tprint("%1/jaix-copy.jai", packages_dir(root))));
 }

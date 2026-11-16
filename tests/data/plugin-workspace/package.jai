@@ -9,17 +9,17 @@
 // The workspace.members order and the package directory order both put
 // alpha-plugin first — the scan order follows the declarations instead.
 PACKAGE :: Package.{
-    name    = "plugin_ws_root",
     version = "0.1.0",
-    type    = .BIN,
+    name    = "plugin_ws_root",
+
     workspace = .{
         members = string.["packages/alpha-plugin", "packages/plain-member", "packages/zeta-plugin"],
     },
     dependencies = Dependency.[
-        .{name = "external-lib", version = "9.9.9"},
+        .{name = "external-lib", source = .{kind = .WORKSPACE}, modules = .[.{path = "packages/external-lib"}]},
     ],
     plugins = .[
-        .{id = "zeta-plugin", version = "0.1.0"},
-        .{id = "alpha-plugin", version = "0.1.0"},
+        .{id = "zeta-plugin", source = .{kind = .PATH, path = "packages/zeta-plugin"}},
+        .{id = "alpha-plugin", source = .{kind = .PATH, path = "packages/alpha-plugin"}},
     ],
 };

@@ -55,24 +55,30 @@
 // duplicate types (spike-pinned).
 //
 // Ticket 043 added the workspace-level stage on top of the per-package scan;
-// ticket 056 makes it declaration-driven. scan_workspace_plugins consumes
-// the discovery snapshot (Juice.Workspace_Discovery) and the root package's
-// Package.plugins declarations: built-in ids are skipped, every other id
-// must name a workspace member (member plugin id = package name), and each
-// declared member is scanned with scan_plugin_package in declaration order.
-// The declared member gets its import shim through the ordinary member link
-// (ensure_import_shim), so its module name resolves for the generated
-// registration / test metaprogram; root dependencies never activate
-// plugins. Cross-package same-module-name collisions resolve by the same
-// probe precedence (a later winner replaces the earlier hit at its own
-// declaration position) and are reported as non-fatal diagnostics. An
-// unknown id, a member with zero or several plugin anchors, and any
-// unscannable member root (an unreadable source file included, US 27) leave
-// ok = false (the loud failure channel), and the merged registration file
-// lands at <target_dir>/plugins/registration.jai
+// ticket 056 made it declaration-driven, and ticket 0092 replaced the member
+// name guess with independent typed sources (spec 0087 decisions 21/23).
+// scan_workspace_plugins consumes the discovery snapshot (Workspace_Discovery)
+// and the consuming package's Package.plugins declarations: built-in ids are
+// skipped, and every other declaration resolves its OWN PATH / GIT / WORKSPACE
+// source plus a public-module selection through resolve_plugin_sources — no
+// ordinary dependency and no member-name guess is involved, so a provider may
+// be any reachable package. The selected module must carry exactly one plugin
+// entry (zero = capability missing, several = ambiguity), the same actual
+// plugin must not be enabled twice, and no selected module may already be an
+// ordinary dependency module. Each enablement is linked through one import shim
+// named after its DECLARATION id, so the registration and the generated test
+// metaprogram can `#import "<id>"`; the entry file's own name never becomes an
+// import name. Root dependencies never activate plugins. Every failure is a
+// fatal diagnostic + ok = false (the loud channel), and the merged registration
+// file lands at <target_dir>/plugins/registration.jai
 // (workspace_plugin_registration_path; the per-package helper stays).
 //
-// Load order: the workspace-level function references Juice.Workspace_Discovery
+// The per-package scan (scan_plugin_package) stays as the package-level probe the
+// E2E fixtures and the read-failure channel use; its entry-probe naming
+// (plugin_module_name / plugin_probe_rank) is that face's own convention and is
+// no longer how a declared plugin gets its import name.
+//
+// Load order: the workspace-level function references Workspace_Discovery
 // (the namespaced binding declared in src/juice_module.jai) and
 // find_workspace_member (src/dependency.jai) — a program that #loads this
 // file must load juice_module.jai and dependency.jai first. The file's older
@@ -93,8 +99,12 @@
 // Scan result shapes
 // ---------------------------------------------------------------------------
 
-// One discovered plugin module: the #import name the registration file
-// writes (the entry probe's derivation) plus the anchored file's paths.
+// One discovered plugin module. `module_name` is the #import name the
+// registration file writes: the DECLARATION id for a declared external plugin
+// ([..] from resolve_plugin_sources), the entry probe's derivation for the
+// per-package scan. `rel_path` is the entry file relative to the package that
+// owns it (the scanned package, or the enabled provider package) and
+// `abs_path` its machine path — a report name and a read path, never swapped.
 Plugin_Scan_Hit :: struct {
     module_name: string;  // the #import name in the generated registration
                           // file
@@ -102,14 +112,16 @@ Plugin_Scan_Hit :: struct {
     abs_path:    string;
 }
 
-// One scan-side report: a dropped duplicate registration, a source file
-// that could not be read, or a declaration-level failure (unknown plugin
-// id, a member without/multiple plugin anchors, an unlinkable member). A
-// dropped duplicate is non-fatal (ok stays true); every other report is
-// fatal (fatal = true, ok = false — a broken plugin declaration/package
-// must fail the command, never degrade into "no plugins"). The walk failure
-// stays the ok=false channel without a diagnostic — the collect_scan_files
-// convention.
+// One scan-side report: a non-fatal dropped duplicate (the per-package scan's
+// probe arbitration), a source file that could not be read, or a
+// declaration-level failure of a plugin enablement (unusable source, provider
+// without a declaration, ambiguous or missing module export, zero/multiple
+// plugin entries in the selected module, the same plugin enabled twice, a
+// module already selected as an ordinary dependency). A dropped duplicate is
+// non-fatal (ok stays true); every other report is fatal (fatal = true,
+// ok = false — a broken plugin declaration/package must fail the command, never
+// degrade into "no plugins"). The walk failure stays the ok=false channel
+// without a diagnostic — the collect_scan_files convention.
 Plugin_Scan_Diagnostic :: struct {
     rel_path: string;  // the dropped or unreadable file (or the declared id
                        // for declaration-level reports)
@@ -209,22 +221,22 @@ scan_plugin_package :: (root: string) -> Plugin_Scan_Result {
             result.ok = false;
             continue;
         }
-        s := normalize_view_line_endings(source);
-        tokens := lex_source(s);
-        i := 0;
-        while i < tokens.count {
+        normalized_source := normalize_view_line_endings(source);
+        tokens := lex_source(normalized_source);
+        token_index := 0;
+        while token_index < tokens.count {
             // The hooks-face probe (ticket 060): one IDENT token named
             // "hooks" anywhere in the package marks the scan result — the
-            // prepare's conservative host trigger (see Plugin_Scan_Result).
-            if tokens[i].kind == .IDENT && token_text(s, tokens[i]) == "hooks" result.has_hooks = true;
-            if is_juice_plugin_anchor(s, tokens, i) {
+            // prepare'normalized_source conservative host trigger (see Plugin_Scan_Result).
+            if tokens[token_index].kind == .IDENT && token_text(normalized_source, tokens[token_index]) == "hooks" result.has_hooks = true;
+            if is_juice_plugin_anchor(normalized_source, tokens, token_index) {
                 hit: Plugin_Scan_Hit;
                 hit.module_name = plugin_module_name(file.rel_path, collect.pkg_name);
                 hit.rel_path = file.rel_path;
                 hit.abs_path = file.abs_path;
                 place_scan_hit(*result, hit);
             }
-            i += 1;
+            token_index += 1;
         }
     }
     return result;
@@ -233,9 +245,7 @@ scan_plugin_package :: (root: string) -> Plugin_Scan_Result {
 // Add a hit to a per-package scan result, resolving a same-module-name
 // collision by probe precedence (lower rank wins; equal ranks: the earlier
 // hit in scan order wins — the entry probe order, spec §5.2). The loser is
-// dropped with a diagnostic. The workspace-level merge does not reuse this
-// in-place replacement: it must keep each package's segment in DEP order
-// (place_workspace_scan_hit).
+// dropped with a diagnostic.
 place_scan_hit :: (result: *Plugin_Scan_Result, hit: Plugin_Scan_Hit) {
     for h, i: result.hits {
         if h.module_name != hit.module_name continue;
@@ -256,112 +266,504 @@ place_scan_hit :: (result: *Plugin_Scan_Result, hit: Plugin_Scan_Hit) {
 // Workspace-level scan, declaration-driven (tickets 043/056)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Independent plugin sources (ticket 0092, spec 0087 decisions 21/23)
+// ---------------------------------------------------------------------------
+
+// One plugin source request: the discovery snapshot (workspace root + members),
+// the consuming package whose `plugins` list is being resolved, and the
+// resolution environment (Git record reuse / offline / update mode) the typed
+// source selection reuses from ticket 0091.
+Plugin_Source_Request :: struct {
+    discovery:   Workspace_Discovery;
+    consumer:    Normalized_Package;
+    environment: Resolution_Environment;
+}
+
+// One enabled external plugin: the resolved provider package, the public
+// module the declaration selected (the plugin entry lives there), the module's
+// entry file and the import name the registration file binds. `identity` is the
+// ACTUAL identity (source + resolved commit + provider directory + export) the
+// duplicate rule compares — different names, spellings or option rows never
+// bypass it (spec 0087 decision 21). `anchor_rel_path` stays the
+// provider-package-relative entry path a scan hit reports (a machine path is
+// never a report name).
+Resolved_Plugin_Source :: struct {
+    id:                string;
+    declaration_index: int;
+    package_dir:       string;
+    module_export:     string;
+    entry_path:        string;
+    import_name:       string;
+    identity:          string;
+    anchor_rel_path:   string;
+    // The Git selector this source resolved through ("" for PATH/WORKSPACE).
+    // A plugin Git source is a resolution like any other: the command records
+    // it in the same state transaction as the package's dependency selections
+    // (decision 9/13-15), so a later offline run reuses the same commit.
+    // The provider package's own declaration, so the caller can resolve the
+    // provider's dependency graph (decision 21: the consumer does not repeat it).
+    provider_package:  Normalized_Package;
+    git_url:           string;
+    git_branch:        string;
+    git_tag:           string;
+    git_rev:           string;
+    git_commit:        string;
+}
+
+// The plugin-source resolution product. ok=false means the command must stop
+// before any hook runs; the diagnostics keep declaration order.
+Plugin_Source_Resolution :: struct {
+    sources:     [..] Resolved_Plugin_Source;
+    diagnostics: [..] Plugin_Scan_Diagnostic;
+    ok:          bool;
+}
+
+// The actual identity of one plugin module: `source key | commit | provider dir
+// | export name`. Two enablements agreeing on all four are one plugin.
+plugin_source_identity :: (commit: string, package_dir: string, export_name: string) -> string {
+    key := ifx commit == "" then "local" else tprint("commit:%", commit);
+    return tprint("%1|%2|%3", key, path_slashes(package_dir), export_name);
+}
+
+// One resolved module reference (a plugin enablement or a dependency
+// declaration): the provider package directory, the selected public module, its
+// entry file, and the identity/commit the source resolution produced.
+Reference_Module :: struct {
+    ok:           bool;
+    error:        string;
+    commit:       string;
+    provider_dir: string;
+    package:      Normalized_Package;
+    export_name:  string;
+    entry_path:   string;
+    identity:     string;
+    // The selector spelling the reference resolved through (empty = PATH or
+    // WORKSPACE). Kept so a caller can publish the record it reused.
+    url:          string;
+    branch:       string;
+    tag:          string;
+    rev:          string;
+}
+
+// Resolve one typed source + module selection to a provider package and one of
+// its PUBLIC modules (spec 0087 decisions 9-12 reused verbatim: PATH is
+// relative to the declaring package, WORKSPACE resolves inside the workspace
+// root and only to members, GIT goes through the shared content cache with
+// record reuse). No name guessing: an omitted module name adopts the single
+// public export and an ambiguous one fails.
+resolve_reference_module :: (
+    declaring_dir: string,
+    discovery: Workspace_Discovery,
+    environment: Resolution_Environment,
+    source: Source_Reference,
+    selection: Module_Reference
+) -> Reference_Module {
+    reference: Reference_Module;
+
+    source_root := "";
+    if source.kind == .PATH {
+        normalized, path_status := source_path_root(source.path, declaring_dir);
+        if path_status == .EMPTY {
+            reference.error = "path source is empty";
+            return reference;
+        }
+        if path_status == .NOT_NORMALIZED {
+            reference.error = tprint("path source could not be normalized: %", source.path);
+            return reference;
+        }
+        source_root = normalized;
+    } else if source.kind == .WORKSPACE {
+        if discovery.root_dir == "" || !discovery.has_workspace {
+            reference.error = "workspace source needs a workspace declaration";
+            return reference;
+        }
+        source_root = path_slashes(discovery.root_dir);
+    } else if source.kind == .GIT {
+        if source.url == "" {
+            reference.error = "Git source has an empty URL";
+            return reference;
+        }
+        state := read_resolution_state(resolution_state_file(environment, discovery.root_dir));
+        if state.corrupt {
+            reference.error = state.error;
+            return reference;
+        }
+        reference.url = source.url;
+        reference.branch = source.branch;
+        reference.tag = source.tag;
+        reference.rev = source.rev;
+        declaring_key := plugin_scoped_git_declaring_key(discovery.root_dir, declaring_dir, source.url);
+        // Same Git selection step as the dependency graph; the plugin declaration
+        // trusts a pinned full commit id and phrases its own offline diagnostic.
+        resolved := git_resolve_source(state, environment, declaring_key, source, .TRUST_PINNED_COMMIT);
+        if resolved.error == .OFFLINE_UNRECORDED {
+            reference.error = tprint("offline resolution has no recorded plugin source for %", source.url);
+            return reference;
+        }
+        if resolved.error != .NONE {
+            reference.error = resolved.message;
+            return reference;
+        }
+        reference.commit = resolved.commit;
+        source_root = path_slashes(resolved.content_dir);
+    } else {
+        reference.error = "an explicit PATH, GIT or WORKSPACE source is required";
+        return reference;
+    }
+
+    logical := normalize_package_relative_path(selection.path);
+    if !logical.success {
+        reference.error = tprint("module path escapes its source root: %", selection.path);
+        return reference;
+    }
+    if source.kind == .WORKSPACE {
+        expected := ifx logical.path == "." then source_root else tprint("%1/%2", source_root, logical.path);
+        normalized_expected, expected_ok := normalize_existing_path(expected);
+        if !expected_ok {
+            reference.error = tprint("workspace module path does not exist: %", selection.path);
+            return reference;
+        }
+        member := false;
+        for candidate: discovery.member_packages {
+            if paths_equal(candidate.dir, normalized_expected) member = true;
+        }
+        if !member {
+            reference.error = tprint("workspace source selects a directory that is not a workspace member: %", selection.path);
+            return reference;
+        }
+    }
+
+    provider_spelling := ifx logical.path == "." then source_root else tprint("%1/%2", source_root, logical.path);
+    provider_dir, provider_ok := normalize_existing_path(provider_spelling);
+    if !provider_ok {
+        reference.error = tprint("module path could not be normalized: %", selection.path);
+        return reference;
+    }
+    if !resolution_path_within(source_root, provider_dir) {
+        reference.error = tprint("module path escapes its source root: %", selection.path);
+        return reference;
+    }
+
+    // The provider must be a package with a declaration: plugins come from
+    // DECLARED public modules, never from an undeclared directory. A workspace
+    // member is already normalized by discovery, so its declaration is reused
+    // instead of being evaluated again.
+    package: Normalized_Package;
+    package_ok := false;
+    for member: discovery.member_packages {
+        if !paths_equal(member.dir, provider_dir) continue;
+        package = member;
+        package_ok = true;
+        break;
+    }
+    if !package_ok package, package_ok = load_package_manifest(tprint("%1/manifest", package_target_dir(discovery.root_dir)), provider_dir);
+    if !package_ok || !package.has_package {
+        reference.error = tprint("provider package has no declaration: %", path_slashes(provider_dir));
+        return reference;
+    }
+    if path_slashes(package.dir) != path_slashes(provider_dir) {
+        package.dir = path_slashes(provider_dir);
+    }
+    reference.package = package;
+    reference.provider_dir = path_slashes(provider_dir);
+
+    exports := resolve_product_list(package, package.modules, package.modules_omitted, true);
+    if !exports.success {
+        reference.error = tprint("provider package products are invalid: %", exports.error);
+        return reference;
+    }
+    export, selection_error := resolution_select_export(exports.targets, selection);
+    if selection_error != "" {
+        reference.error = selection_error;
+        return reference;
+    }
+    reference.export_name = export.name;
+    reference.entry_path = path_slashes(export.source_path);
+    reference.identity = plugin_source_identity(reference.commit, provider_dir, export.name);
+    reference.ok = true;
+    return reference;
+}
+
+// Count the plugin entry anchors of the selected public module: its own entry
+// file plus every file that entry reaches through literal in-package #load
+// edges. The module VALUE is what counts, not the spelling location, so an
+// entry that only `#load`s its implementation file carrying the single
+// get_juice_plugin is valid. Lexical recognition only (the contract above), so
+// the closure need not compile. The second result is the module's closure text
+// in probe order, used by the hooks-face probe.
+plugin_entry_anchor_count :: (package_root: string, entry_path: string) -> (s64, string, bool) {
+    entry_rel := scan_rel_path(entry_path, package_root);
+    closure, probe_ok := probe_package_closure(package_root, entry_rel);
+    if !probe_ok return 0, "", false;
+    count: s64 = 0;
+    builder: String_Builder;
+    for file: closure {
+        source, read_ok := read_entire_file(tprint("%1/%2", package_root, file.file.rel_path));
+        if !read_ok return 0, "", false;
+        normalized := normalize_view_line_endings(source);
+        tokens := lex_source(normalized);
+        for token_index: 0..tokens.count-1 {
+            if is_juice_plugin_anchor(normalized, tokens, token_index) count += 1;
+        }
+        print_to_builder(*builder, "%\n", normalized);
+    }
+    return count, builder_to_string(*builder), true;
+}
+
+// Whether the consumer's ordinary dependencies already select this exact
+// provider module (spec 0087 decision 21: 同一插件模块不得再被本消费包的普通
+// dependencies 选择 — one actual module, one role). The dependency declarations
+// are resolved through the same typed path, so a different spelling still
+// collides while a DIFFERENT export of the same provider stays legal (that is
+// how a provider offers an ordinary API beside its plugin module).
+plugin_dependency_module_conflict :: (request: Plugin_Source_Request, candidate: Resolved_Plugin_Source) -> string {
+    consumer := request.consumer;
+    for dependency: consumer.dependencies {
+        selections: [..] Module_Reference;
+        if dependency.modules_omitted {
+            array_add(*selections, .{path = "."});
+        } else {
+            for module: dependency.modules array_add(*selections, module);
+        }
+        for selection: selections {
+            reference := resolve_reference_module(consumer.dir, request.discovery, request.environment, dependency.source, selection);
+            if !reference.ok continue;
+            if reference.identity != candidate.identity continue;
+            return tprint("plugin module is already selected by the ordinary dependency '%': %", dependency.name, candidate.id);
+        }
+    }
+    return "";
+}
+
+// Resolve every external plugin enablement of the consumer package (spec 0087
+// decisions 21/23): each declaration independently selects a source, a package
+// location and a public module; no ordinary dependency and no member-name
+// guess is required. Built-in references are skipped (they resolve in-process).
+// Failures (in declaration order) — an unusable source, a provider without a
+// declaration, a module selection that names no/several public modules, a
+// selected module with zero plugin entries (capability missing), a selected
+// module with several (entry ambiguity), the same actual plugin enabled twice,
+// and a module the ordinary dependencies already selected.
+// The declaring key of a plugin Git source. Plugins and ordinary dependencies
+// are different roles over the same content cache (decision 21), so their
+// records are kept apart even when they name the same URL: one role's record
+// never satisfies the other's lookup, and neither can overwrite the other.
+plugin_git_declaring_key :: (url: string) -> string {
+    return resolution_declaring_key_git(url, "", "plugin");
+}
+
+// A plugin record is scoped to the package that declared it, exactly like a
+// dependency record: two members enabling the same Git plugin keep independent
+// records, and neither reads the other's. The lookup and the publication build
+// the key through this one function, so they cannot drift apart.
+plugin_scoped_git_declaring_key :: (consumer_root: string, declaring_dir: string, url: string) -> string {
+    return tprint("consumer:%1|%2", resolution_declaring_key_local(consumer_root, declaring_dir), plugin_git_declaring_key(url));
+}
+
+// The Git selections this resolution actually used, in declaration order, as
+// state records ready for the command's single publication.
+plugin_resolution_selections :: (consumer_root: string, consumer: Normalized_Package, sources: [] Resolved_Plugin_Source) -> [..] Resolved_Selection {
+    selections: [..] Resolved_Selection;
+    for source: sources {
+        if source.git_url == "" continue;
+        declaring_key := plugin_scoped_git_declaring_key(consumer_root, consumer.dir, source.git_url);
+        array_add(*selections, Resolved_Selection.{
+            declaring_key = declaring_key,
+            url           = source.git_url,
+            branch        = source.git_branch,
+            tag           = source.git_tag,
+            rev           = source.git_rev,
+            commit        = source.git_commit,
+        });
+    }
+    return selections;
+}
+
+// Resolve one enablement's PROVIDER graph. The provider is a package like any
+// other, so its own dependency declarations must resolve before its module can
+// compile; the consumer never repeats them (decision 21). The import names land
+// in this enablement's private directory, because the provider may be a
+// read-only Git checkout and every derived name belongs to the consuming project
+// (decision 24). Publication is deferred to the caller's single transaction.
+resolve_plugin_provider_dependencies :: (
+    request: Plugin_Source_Request,
+    source: Resolved_Plugin_Source,
+    pending: *Prepared_Workspace = null
+) -> (Resolution_Graph, bool) {
+    graph: Resolution_Graph;
+    package := source.provider_package;
+    selected_on_behalf: Package_Selection;
+    declared_any := false;
+    for dependency: package.dependencies {
+        declared_any = true;
+    }
+    if !declared_any return graph, true;
+
+    preparation: Dependency_Preparation_Request;
+    preparation.discovery = request.discovery;
+    preparation.environment = request.environment;
+    // The manifest evaluator's scratch area: the same per-workspace path the
+    // provider manifest load above already uses, so the provider graph needs no
+    // extra cache plumbing through the plugin layer.
+    preparation.cache_dir = tprint("%1/manifest", package_target_dir(request.discovery.root_dir));
+    preparation.invocation_dir = request.consumer.dir;
+    preparation.selection = .{success = true, packages = .[package], paths = .[""]};
+    preparation.shim_root_override = target_plugin_provider_imports_dir(package_target_dir(request.discovery.root_dir), source.import_name);
+    graph = resolution_resolve_consumer(preparation, package, defer_publication = true);
+    if !graph.success return graph, false;
+    if !resolution_write_shims(*graph) return graph, false;
+    if pending != null {
+        for selection_record: graph.selections array_add(*pending.pending_selections, selection_record);
+    }
+    return graph, true;
+}
+
+resolve_plugin_sources :: (request: Plugin_Source_Request) -> Plugin_Source_Resolution {
+    resolution: Plugin_Source_Resolution;
+    resolution.ok = true;
+
+    identities: [..] string;
+    identity_ids: [..] string;
+    for declaration, declaration_index: request.consumer.plugins {
+        if declaration.builtin continue;
+
+        source: Source_Reference;
+        source.kind = declaration.source.kind;
+        source.path = declaration.source.path;
+        source.url = declaration.source.url;
+        source.branch = declaration.source.branch;
+        source.tag = declaration.source.tag;
+        source.rev = declaration.source.rev;
+
+        resolved := resolve_reference_module(request.consumer.dir, request.discovery, request.environment, source, declaration.module);
+        if !resolved.ok {
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin '%' source: %", declaration.id, resolved.error), fatal = true});
+            resolution.ok = false;
+            continue;
+        }
+
+        count, _, read_ok := plugin_entry_anchor_count(resolved.provider_dir, resolved.entry_path);
+        if !read_ok {
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin module source could not be read: %", resolved.entry_path), fatal = true});
+            resolution.ok = false;
+            continue;
+        }
+        if count == 0 {
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = tprint("Plugin capability missing: module '%' of package '%' has no plugin entry", resolved.export_name, resolved.package.name), fatal = true});
+            resolution.ok = false;
+            continue;
+        }
+        if count > 1 {
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = tprint("ambiguous plugin entry: module '%' of package '%' has % entries", resolved.export_name, resolved.package.name, count), fatal = true});
+            resolution.ok = false;
+            continue;
+        }
+
+        candidate: Resolved_Plugin_Source;
+        candidate.id = declaration.id;
+        candidate.declaration_index = declaration_index;
+        candidate.package_dir = resolved.provider_dir;
+        candidate.module_export = resolved.export_name;
+        candidate.entry_path = resolved.entry_path;
+        candidate.import_name = plugin_import_name(declaration.id, resolved.identity);
+        candidate.identity = resolved.identity;
+        candidate.anchor_rel_path = scan_rel_path(resolved.entry_path, resolved.provider_dir);
+        candidate.provider_package = resolved.package;
+        candidate.git_url = resolved.url;
+        candidate.git_branch = resolved.branch;
+        candidate.git_tag = resolved.tag;
+        candidate.git_rev = resolved.rev;
+        candidate.git_commit = resolved.commit;
+
+        conflict := "";
+        for identity, i: identities {
+            if identity != candidate.identity continue;
+            conflict = tprint("the same plugin is enabled twice ('%' and '%' select %)", identity_ids[i], declaration.id, candidate.module_export);
+        }
+        if conflict == "" conflict = plugin_dependency_module_conflict(request, candidate);
+        if conflict != "" {
+            array_add(*resolution.diagnostics, .{rel_path = declaration.id, message = conflict, fatal = true});
+            resolution.ok = false;
+            continue;
+        }
+
+        array_add(*identities, candidate.identity);
+        array_add(*identity_ids, candidate.id);
+        array_add(*resolution.sources, candidate);
+    }
+    return resolution;
+}
+
 // The workspace-level scan: Package.plugins is the only activation surface
-// (spec §5.2 design revision 2026-10-21). Each declaration names a plugin:
-// built-in ids (load / test-block) resolve to the static registry and are
-// skipped by the scan; every other id must name a workspace member (member
-// plugin id = package name). Declarations are processed in declaration
-// order; a declared member package is scanned by scan_plugin_package (the
-// deterministic intra-package lexical order) and must provide exactly one
-// anchored plugin (the v1 one-plugin-per-package rule). The declared member
-// is linked through the ordinary member import shim
-// (link_workspace_member_dependency -> ensure_import_shim), so the
-// registration file and the test metaprogram can `#import "<member name>"`
-// — the member link the retired root-DEP activation used to provide. Root
-// dependencies never activate plugins and are not read here.
+// (spec §5.2 design revision 2026-10-21; independent sources since ticket
+// 0092). Each declaration names a plugin: built-in ids (load / test-block)
+// resolve to the static command registry and are skipped; every other id
+// resolves its OWN typed source + public-module selection through
+// resolve_plugin_sources — no ordinary dependency and no member-name guess is
+// required, and the provider may be any package reachable through a PATH,
+// WORKSPACE or GIT source. The selected module must carry exactly one plugin
+// entry (zero = capability missing, several = ambiguity) and the same actual
+// plugin must not be enabled twice or already be selected as an ordinary
+// dependency module.
 //
-// Failure posture: an unknown id (not a built-in and not a workspace
-// member), a declared member providing zero or several plugins, an
-// unscannable member root (walk failure or unreadable source) and a failed
-// member link are all loud failures — fatal diagnostic + ok=false. The
+// Each resolved source is linked through one import shim under
+// target/packages/<id>.jai, so the registration file and the test
+// metaprogram can `#import "<id>"`. Root dependencies never activate plugins
+// and are read only for the duplicate-role check.
+//
+// Failure posture: every failure is a fatal diagnostic + ok=false. The
 // remaining declarations are still processed so the reports stay complete;
 // consumers must treat the whole result as unusable when ok is false.
-scan_workspace_plugins :: (discovery: Juice.Workspace_Discovery) -> Plugin_Scan_Result {
+scan_workspace_plugins :: (discovery: Workspace_Discovery) -> Plugin_Scan_Result {
+    request: Plugin_Source_Request;
+    request.discovery = discovery;
+    request.consumer = discovery.root_package;
+    resolved := resolve_plugin_sources(request);
+    return plugin_scan_result_from_sources(discovery, resolved);
+}
+
+// The scan result over a resolved source set: the hits (declaration order =
+// registration order) plus the member import shims. The hooks-face probe runs
+// over each selected module entry, so the command-level prepare spawns the
+// PRESTEP host only when a plugin can actually contribute hooks.
+plugin_scan_result_from_sources :: (discovery: Workspace_Discovery, resolved: Plugin_Source_Resolution) -> Plugin_Scan_Result {
     result: Plugin_Scan_Result;
-    result.ok = true;
+    result.ok = resolved.ok;
+    for diagnostic: resolved.diagnostics array_add(*result.diagnostics, diagnostic);
+    if !resolved.ok return result;
+
     shim_dir_ready := false;
+    for source: resolved.sources {
+        // Every enabled external plugin needs the host: only a compiled child
+        // can read the module's real values, and the ABI/options check must not
+        // depend on whether the entry happens to spell its hooks face
+        // (decision 22: unknown or invalid options fail before any hook).
+        result.has_hooks = true;
 
-    for decl: discovery.root_package.plugins {
-        // Built-in ids resolve to the command registry (this process already
-        // holds those values): load / test-block. Nothing to scan or link.
-        if is_command_static_plugin_id(decl.id) continue;
-
-        // Member plugin id = member package name (v1 rule). An id that names
-        // no member is an unknown plugin — loud failure.
-        member, is_member := find_workspace_member(discovery.member_packages, decl.id);
-        if !is_member {
-            array_add(*result.diagnostics, .{rel_path = decl.id, message = tprint("Unknown plugin id: %", decl.id), fatal = true});
-            result.ok = false;
-            continue;
-        }
-
-        member_scan := scan_plugin_package(member.dir);
-        for diagnostic: member_scan.diagnostics array_add(*result.diagnostics, diagnostic);
-        if !member_scan.ok {
-            // Unscannable root or unreadable source (US 27): the reports are
-            // already copied; the result is unusable. No hit is added.
-            result.ok = false;
-            continue;
-        }
-        if member_scan.hits.count == 0 {
-            array_add(*result.diagnostics, .{rel_path = decl.id, message = tprint("Member package provides no plugin: %", decl.id), fatal = true});
-            result.ok = false;
-            continue;
-        }
-        if member_scan.hits.count > 1 {
-            array_add(*result.diagnostics, .{rel_path = decl.id, message = tprint("Member package provides multiple plugins: %", decl.id), fatal = true});
-            result.ok = false;
-            continue;
-        }
-        // The scanned package's hooks-face probe joins the workspace result:
-        // the command-level prepare spawns the PRESTEP host only when some
-        // declared member could contribute hooks (ticket 060).
-        if member_scan.has_hooks result.has_hooks = true;
-
-        // The declared member is linked through the ordinary member import
-        // shim (reuse the member link; the binding dir is created lazily).
         if !shim_dir_ready {
-            shim_dir := packages_dir(discovery.root_dir);
+            shim_dir := plugin_imports_dir(discovery.root_dir);
             if !make_directory_if_it_does_not_exist(shim_dir, recursive = true) {
-                array_add(*result.diagnostics, .{rel_path = decl.id, message = tprint("Could not create the plugin shim directory: %", shim_dir), fatal = true});
+                array_add(*result.diagnostics, .{rel_path = source.id, message = tprint("Could not create the plugin shim directory: %", shim_dir), fatal = true});
                 result.ok = false;
-                continue;
+                break;
             }
             shim_dir_ready = true;
         }
-        if !link_workspace_member_dependency(discovery.root_dir, member) {
-            array_add(*result.diagnostics, .{rel_path = decl.id, message = tprint("Could not link member plugin package: %", decl.id), fatal = true});
+        shim_path := tprint("%1/%2.jai", plugin_imports_dir(discovery.root_dir), source.import_name);
+        if !write_entire_file(shim_path, dependency_shim_content(source.import_name, source.entry_path)) {
+            array_add(*result.diagnostics, .{rel_path = source.id, message = tprint("Could not link the plugin module: %", source.id), fatal = true});
             result.ok = false;
-            continue;
+            break;
         }
 
-        place_workspace_scan_hit(*result, member_scan.hits[0]);
+        hit: Plugin_Scan_Hit;
+        hit.module_name = source.import_name;
+        hit.rel_path = source.anchor_rel_path;
+        hit.abs_path = source.entry_path;
+        array_add(*result.hits, hit);
     }
     return result;
-}
-
-// Add one member-package hit to the workspace-level accumulation. A
-// same-module collision keeps the lower probe rank; equal ranks keep the
-// earlier hit in accumulation order (the earlier declaration). A later
-// winner is removed from its earlier slot and appended — its own declaration
-// position. The loser is dropped with the in-package diagnostic shape
-// (non-fatal). Since the declaration-driven scan processes one hit per
-// declared member, cross-package collisions are the only remaining case.
-place_workspace_scan_hit :: (result: *Plugin_Scan_Result, hit: Plugin_Scan_Hit) {
-    for h, i: result.hits {
-        if h.module_name != hit.module_name continue;
-        existing_rank := plugin_probe_rank(h.rel_path);
-        new_rank := plugin_probe_rank(hit.rel_path);
-        if existing_rank <= new_rank {
-            array_add(*result.diagnostics, .{rel_path = hit.rel_path, message = tprint("duplicate plugin module name % (dropped %)", hit.module_name, hit.rel_path)});
-        } else {
-            array_add(*result.diagnostics, .{rel_path = h.rel_path, message = tprint("duplicate plugin module name % (dropped %)", h.module_name, h.rel_path)});
-            array_ordered_remove_by_index(*result.hits, i);
-            array_add(*result.hits, hit);
-        }
-        return;
-    }
-    array_add(*result.hits, hit);
 }
 
 // ---------------------------------------------------------------------------
@@ -464,6 +866,23 @@ plugin_probe_rank :: (rel_path: string) -> s64 {
 // Registration codegen
 // ---------------------------------------------------------------------------
 
+// The import name a plugin enablement's shim carries. It is derived from the
+// declaration id and the resolved module identity, never equal to the bare id,
+// so enabling a plugin can neither overwrite a business dependency alias nor
+// make `<id>` an ordinary import name of the consuming package (decision 21:
+// a plugin enablement is not an ordinary module selection).
+plugin_import_name :: (id: string, identity: string) -> string {
+    digest := u64_hex(hash_text_fnv1a(tprint("%1|%2", id, identity)));
+    return tprint("%1__plugin_%2", resolution_sanitized_identifier(id), slice(digest, 0, 8));
+}
+
+// The import directory plugin shims are written to
+// (<target>/plugins/imports): only the generated host driver and the test
+// metaprogram that loads the registration search it.
+plugin_imports_dir :: (root_dir: string) -> string {
+    return target_plugin_imports_dir(package_target_dir(root_dir));
+}
+
 // The registration file's landing path: target/plugins/<package>/
 // registration.jai — under target/, so it is a session artifact
 // (regenerated every run, removed by clean with the whole target tree,
@@ -479,6 +898,18 @@ plugin_registration_path :: (target_dir: string, package_name: string) -> string
 // above stays for the synthetic fixture E2E.
 workspace_plugin_registration_path :: (target_dir: string) -> string {
     return path_slashes(tprint("%1/registration.jai", target_plugins_dir(target_dir)));
+}
+
+// The consuming package's private derived view root:
+// <target_dir>/plugins/derived/<package>. Every physical plugin output lands
+// here and nowhere else (spec 0087 decision 24: 物理输出限于消费工程私有派生区);
+// the source tree and any shared Git checkout stay read-only. Regenerated per
+// operation: the prepare clears it before the hooks run, so only this round's
+// registrations can be consumed.
+package_derived_view_root :: (target_dir: string, package_name: string) -> string {
+    name := package_name;
+    if name == "" name = "package";
+    return path_slashes(tprint("%1/derived/%2", target_plugins_dir(target_dir), name));
 }
 
 // The two-segment registration file (spec §5.2 decision 10), scan order =

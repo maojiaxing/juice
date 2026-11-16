@@ -86,9 +86,10 @@ transpile_view_key :: (
     load_targets: [] Load_Target,
     version := VIEW_CONTRACT_VERSION,
     pipeline: [] Transpile_Plugin = .[],
-    next_test_number: s64 = 1
+    next_test_number: s64 = 1,
+    pipeline_omitted: bool = true
 ) -> string {
-    resolved := resolve_pipeline(pipeline);
+    resolved := resolve_pipeline(pipeline, pipeline_omitted);
     builder: String_Builder;
     print_to_builder(*builder, "%1\0%2\0%3\0%4\0",
         rel_path,

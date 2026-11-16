@@ -3,211 +3,103 @@
 #import "File_Utilities";
 #import "String";
 
-// The target layer: effective-target derivation (spec section 2.1, old
-// juice target.jai semantics) and artifact planning. UNSPECIFIED package
-// roles are derived by convention — declared targets or src/main.jai mean
-// BIN, an import entry means LIB, anything else stays BIN. LIB packages are
-// import sources only: declaring targets is a hard error, and the import
-// entry (module.jai at the package root, then src/module.jai) is required.
-// Artifact plans land in the package's unified target/ directory root.
-//
-// Target_Resolution_Error and Artifact_Plan_Result lived here in old juice
-// (target.jai:8-39); ticket 008 forward-declared both in workspace.jai so
-// the state machine's resolve seam could carry the exact old shape before
-// this file existed — ticket 009 moved the declarations here (workspace.jai
-// keeps the seam types by cross-file reference, old juice workspace.jai:148
-// precedent).
-//
-// The Package face is consumed through the namespaced Juice binding
-// (src/juice_module.jai), as in the workspace layer.
-
 Target_Resolution_Error :: enum {
-    NONE;
-    INVALID_PACKAGE_ROOT;
-    INVALID_PACKAGE_NAME;
-    INVALID_PACKAGE_VERSION;
-    INVALID_TARGET_NAME;
-    INVALID_TARGET_SOURCE;
-    DUPLICATE_TARGET_NAME;
-    SOURCE_NOT_FOUND;
-    SOURCE_NOT_REGULAR;
-    SOURCE_OUTSIDE_PACKAGE;
-    LIBRARY_TARGET_CONFLICT;
-    MODULE_ENTRY_NOT_FOUND;
+    NONE; INVALID_PACKAGE_ROOT; INVALID_PACKAGE_NAME; INVALID_PACKAGE_VERSION;
+    INVALID_TARGET_NAME; INVALID_TARGET_SOURCE; DUPLICATE_TARGET_NAME;
+    DUPLICATE_TARGET_SOURCE; SOURCE_NOT_FOUND; SOURCE_NOT_REGULAR;
+    SOURCE_OUTSIDE_PACKAGE; AMBIGUOUS_MODULE_ENTRY; MODULE_ENTRY_NOT_FOUND;
+    INVALID_DEFAULT_RUN;
 }
-
 Target_Resolution_Result :: struct {
-    success:      bool;
-    targets:      [] Juice.Effective_Target;
-    error:        Target_Resolution_Error;
+    success: bool;
+    modules: [] Effective_Target;
+    targets: [] Effective_Target;
+    error: Target_Resolution_Error;
     error_message: string;
-    // The package role after UNSPECIFIED has been resolved by convention.
-    package_type: Juice.Package_Type;
 }
-
 Artifact_Plan_Result :: struct {
-    success:      bool;
-    plans:        [] Juice.Artifact_Plan;
-    error:        Target_Resolution_Error;
+    success: bool;
+    plans: [] Artifact_Plan;
+    error: Target_Resolution_Error;
     error_message: string;
-    // The package role after UNSPECIFIED has been resolved by convention.
-    package_type: Juice.Package_Type;
 }
-
 make_resolution_failure :: (error: Target_Resolution_Error, message: string) -> Target_Resolution_Result {
-    return .{success = false, error = error, error_message = copy_string(message)};
+    return .{error = error, error_message = copy_string(message)};
 }
-
 make_artifact_failure :: (error: Target_Resolution_Error, message: string) -> Artifact_Plan_Result {
-    return .{success = false, error = error, error_message = copy_string(message)};
+    return .{error = error, error_message = copy_string(message)};
 }
-
-validate_package_identity :: (pkg: Juice.Package) -> Target_Resolution_Result, bool {
-    if !path_is_portable_filename(pkg.name) {
-        return make_resolution_failure(.INVALID_PACKAGE_NAME, "Package name must be a nonempty portable filename."), false;
-    }
-    if pkg.version == "" {
-        return make_resolution_failure(.INVALID_PACKAGE_VERSION, "Package version must be nonempty."), false;
-    }
-    if pkg.dir == "" || !path_exists_as_directory(pkg.dir) {
-        return make_resolution_failure(.INVALID_PACKAGE_ROOT, "Package root must be an existing real directory."), false;
-    }
+validate_package_identity :: (package: Normalized_Package) -> Target_Resolution_Result, bool {
+    if !package_name_is_valid(package.name) return make_resolution_failure(.INVALID_PACKAGE_NAME, "Package name must match [A-Za-z0-9][A-Za-z0-9._-]*."), false;
+    if package.version == "" return make_resolution_failure(.INVALID_PACKAGE_VERSION, "Package version must be nonempty."), false;
+    if package.dir == "" || !path_exists_as_directory(package.dir) || !path_chain_is_link_free(package.dir) return make_resolution_failure(.INVALID_PACKAGE_ROOT, "Package root must be an existing real directory."), false;
     return .{}, true;
 }
-
-make_effective_target :: (pkg: Juice.Package, name: string, main_file: string) -> Juice.Effective_Target, Target_Resolution_Error, string {
-    if !path_is_portable_filename(name) {
-        return .{}, .INVALID_TARGET_NAME, "Target name must be a nonempty portable filename.";
-    }
-    if !path_is_portable_relative_jai(main_file) {
-        return .{}, .INVALID_TARGET_SOURCE, "Target main_file must be a portable package-relative .jai path.";
-    }
-
-    package_root, root_ok := normalize_existing_path(pkg.dir);
-    if !root_ok {
-        return .{}, .INVALID_PACKAGE_ROOT, "Package root could not be normalized.";
-    }
-
-    source_spelling := tprint("%1/%2", package_root, path_slashes(main_file));
-    source_entry := inspect_path_entry(source_spelling);
-    if !source_entry.exists {
-        return .{}, .SOURCE_NOT_FOUND, tprint("Target source file does not exist: %1", main_file);
-    }
-    if source_entry.is_symlink || source_entry.is_junction || source_entry.is_directory {
-        return .{}, .SOURCE_NOT_REGULAR, tprint("Target source is not a regular file: %1", main_file);
-    }
-
-    source_path, source_ok := normalize_existing_path(source_spelling);
-    if !source_ok {
-        return .{}, .SOURCE_NOT_FOUND, tprint("Target source could not be normalized: %1", main_file);
-    }
-    if !path_is_within(package_root, source_path) {
-        return .{}, .SOURCE_OUTSIDE_PACKAGE, tprint("Target source escapes package root: %1", main_file);
-    }
-
-    target: Juice.Effective_Target;
-    target.name = copy_string(name);
-    target.main_file = copy_string(path_slashes(main_file));
-    target.source_path = copy_string(source_path);
-    return target, .NONE, "";
+make_effective_target :: (pkg: Normalized_Package, name: string, main_file: string) -> Effective_Target, Target_Resolution_Error, string {
+    if !declaration_identifier_is_valid(name) return .{}, .INVALID_TARGET_NAME, "Product name must be a Jai identifier; provide an explicit legal name.";
+    logical := normalize_package_relative_path(main_file);
+    if !logical.success || !ends_with_nocase(logical.path, ".jai") return .{}, .INVALID_TARGET_SOURCE, "Product entry must be a package-relative .jai path.";
+    source := path_slashes(tprint("%/%", pkg.dir, logical.path));
+    entry := inspect_path_entry(source);
+    if !entry.exists return .{}, .SOURCE_NOT_FOUND, tprint("Product entry does not exist: %", main_file);
+    if !path_chain_is_link_free(source) || entry.is_directory return .{}, .SOURCE_NOT_REGULAR, tprint("Product entry is not a regular link-free file: %", main_file);
+    source_path, ok := normalize_existing_path(source);
+    if !ok return .{}, .SOURCE_NOT_FOUND, tprint("Could not normalize product entry: %", main_file);
+    if !path_is_within(pkg.dir, source_path) return .{}, .SOURCE_OUTSIDE_PACKAGE, "Product entry escapes package root.";
+    return .{name = copy_string(name), main_file = copy_string(logical.path), source_path = source_path}, .NONE, "";
 }
-
-// Convention lookup for a library's import entry: module.jai at the package
-// root first, then src/module.jai. Both are what "#import <package name>"
-// resolves to once the package is linked into a dependency directory.
-library_import_entry :: (pkg: Juice.Package) -> string, bool {
-    package_root, root_ok := normalize_existing_path(pkg.dir);
-    if !root_ok return "", false;
-    for candidate: string.["module.jai", "src/module.jai"] {
-        spelling := tprint("%1/%2", package_root, candidate);
-        entry := inspect_path_entry(spelling);
-        if entry.exists && !entry.is_directory && !entry.is_symlink && !entry.is_junction {
-            return copy_string(spelling), true;
-        }
-    }
-    return "", false;
-}
-
-// An unspecified package role is derived from convention: declared targets or
-// the default executable entry mean BIN; an import entry means LIB; anything
-// else stays BIN (a package with nothing to build).
-derive_package_type :: (pkg: Juice.Package) -> Juice.Package_Type {
-    if pkg.targets.count > 0 return .BIN;
-    default_entry := tprint("%1/src/main.jai", path_slashes(pkg.dir));
-    if path_exists_as_regular_file(default_entry) return .BIN;
-    _, has_import_entry := library_import_entry(pkg);
-    if has_import_entry return .LIB;
-    return .BIN;
-}
-
-// A LIB package is an import source, never a compiled output: it declares no
-// executable targets and is only validated for importability.
-validate_library_package :: (pkg: Juice.Package) -> Target_Resolution_Result {
-    if pkg.targets.count > 0 {
-        return make_resolution_failure(.LIBRARY_TARGET_CONFLICT, tprint("Library package '%' cannot declare executable targets.", pkg.name));
-    }
-
-    _, found := library_import_entry(pkg);
-    if !found {
-        return make_resolution_failure(.MODULE_ENTRY_NOT_FOUND, "Library package must provide module.jai at the package root or src/module.jai.");
-    }
-    return .{success = true, package_type = .LIB};
-}
-
-resolve_effective_targets :: (pkg: Juice.Package) -> Target_Resolution_Result {
-    identity_result, identity_ok := validate_package_identity(pkg);
-    if !identity_ok return identity_result;
-
-    targets: [..] Juice.Effective_Target;
-
-    effective_type := pkg.type;
-    if effective_type == .UNSPECIFIED effective_type = derive_package_type(pkg);
-
-    if effective_type == .LIB {
-        library_result := validate_library_package(pkg);
-        if !library_result.success return library_result;
-        return .{success = true, targets = targets, package_type = .LIB};
-    }
-
-    if pkg.targets.count == 0 {
-        implicit_source := tprint("%1/src/main.jai", path_slashes(pkg.dir));
-        implicit_entry := inspect_path_entry(implicit_source);
-        if implicit_entry.exists && (implicit_entry.is_symlink || implicit_entry.is_junction || implicit_entry.is_directory) {
-            return make_resolution_failure(.SOURCE_NOT_REGULAR, "Implicit src/main.jai is not a regular file.");
-        }
-        if implicit_entry.exists {
-            target, error, message := make_effective_target(pkg, pkg.name, "src/main.jai");
+resolve_product_list :: (package: Normalized_Package, declarations: [] Declared_Product, omitted: bool, is_module: bool) -> Target_Resolution_Result {
+    products: [..] Effective_Target;
+    if omitted && declarations.count == 0 {
+        candidates: [] string = .["src/main.jai"];
+        if is_module candidates = .["module.jai", "src/module.jai"];
+        for candidate: candidates {
+            if !inspect_path_entry(tprint("%/%", package.dir, candidate)).exists continue;
+            product, error, message := make_effective_target(package, package.name, candidate);
             if error != .NONE return make_resolution_failure(error, message);
-            array_add(*targets, target);
+            array_add(*products, product);
         }
-
-        return .{success = true, targets = targets, package_type = .BIN};
-    }
-
-    for declaration, declaration_index: pkg.targets {
-        if declaration.name == "" || declaration.main_file == "" {
-            return make_resolution_failure(.INVALID_TARGET_NAME, tprint("Explicit target % has required name and main_file fields.", declaration_index));
-        }
-
-        // Declaration uniqueness is case-insensitive (artifact paths are
-        // unambiguous on Windows); run's target selection stays
-        // spelling-exact (spec section 4.6 note).
-        for previous, previous_index: pkg.targets {
-            if previous_index >= declaration_index break;
-            if equal_nocase(previous.name, declaration.name) {
-                return make_resolution_failure(.DUPLICATE_TARGET_NAME, tprint("Target name collides with another target: %1", declaration.name));
+        if products.count > 1 return make_resolution_failure(.AMBIGUOUS_MODULE_ENTRY, "Both module.jai and src/module.jai exist; declare modules explicitly.");
+    } else {
+        for declaration, index: declarations {
+            name := declaration.name;
+            if !declaration.name_present {
+                if declarations.count != 1 return make_resolution_failure(.INVALID_TARGET_NAME, "Every item in a multiple-product list must declare name.");
+                name = package.name;
             }
+            product, error, message := make_effective_target(package, name, declaration.entry);
+            if error != .NONE return make_resolution_failure(error, tprint("%[%]: %", ifx is_module then "modules" else "executables", index, message));
+            for previous: products {
+                if ascii_names_equal(previous.name, product.name) return make_resolution_failure(.DUPLICATE_TARGET_NAME, tprint("Duplicate product name: %", name));
+                if paths_equal(previous.source_path, product.source_path) return make_resolution_failure(.DUPLICATE_TARGET_SOURCE, tprint("Duplicate product entry: %", declaration.entry));
+            }
+            array_add(*products, product);
         }
-
-        target, error, message := make_effective_target(pkg, declaration.name, declaration.main_file);
-        if error != .NONE return make_resolution_failure(error, message);
-        array_add(*targets, target);
     }
-
-    return .{success = true, targets = targets, package_type = .BIN};
+    return .{success = true, targets = products};
+}
+resolve_effective_targets :: (pkg: Normalized_Package) -> Target_Resolution_Result {
+    if !pkg.has_package return .{success = true};
+    identity, ok := validate_package_identity(pkg);
+    if !ok return identity;
+    modules := resolve_product_list(pkg, pkg.modules, pkg.modules_omitted, true);
+    if !modules.success return modules;
+    executables := resolve_product_list(pkg, pkg.executables, pkg.executables_omitted, false);
+    if !executables.success return executables;
+    if pkg.default_run != "" {
+        found := false;
+        for executable: executables.targets if ascii_names_equal(executable.name, pkg.default_run) found = true;
+        if !found return make_resolution_failure(.INVALID_DEFAULT_RUN, "default_run must name a declared executable.");
+    }
+    return .{success = true, modules = modules.targets, targets = executables.targets};
+}
+library_import_entry :: (pkg: Normalized_Package) -> string, bool {
+    result := resolve_product_list(pkg, pkg.modules, pkg.modules_omitted, true);
+    if !result.success || result.targets.count != 1 return "", false;
+    return result.targets[0].source_path, true;
 }
 
-make_artifact_plan :: (pkg: Juice.Package, target: Juice.Effective_Target) -> Juice.Artifact_Plan, bool {
+make_artifact_plan :: (pkg: Normalized_Package, target: Effective_Target) -> Artifact_Plan, bool {
     package_root, root_ok := normalize_existing_path(pkg.dir);
     if !root_ok return .{}, false;
 
@@ -215,26 +107,26 @@ make_artifact_plan :: (pkg: Juice.Package, target: Juice.Effective_Target) -> Ju
     target_dir := package_target_dir(package_root);
     artifact_path := target_artifact_path(target_dir, target.name);
 
-    plan: Juice.Artifact_Plan;
+    plan: Artifact_Plan;
     plan.target = target;
     plan.target_dir = copy_string(target_dir);
     plan.artifact_path = copy_string(artifact_path);
     return plan, true;
 }
 
-resolve_artifact_plans :: (pkg: Juice.Package) -> Artifact_Plan_Result {
+resolve_artifact_plans :: (pkg: Normalized_Package) -> Artifact_Plan_Result {
     target_result := resolve_effective_targets(pkg);
     if !target_result.success {
         return make_artifact_failure(target_result.error, target_result.error_message);
     }
 
-    plans: [..] Juice.Artifact_Plan;
+    plans: [..] Artifact_Plan;
     for target: target_result.targets {
         plan, ok := make_artifact_plan(pkg, target);
         if !ok return make_artifact_failure(.INVALID_PACKAGE_ROOT, "Could not construct artifact path.");
         array_add(*plans, plan);
     }
-    return .{success = true, plans = plans, package_type = target_result.package_type};
+    return .{success = true, plans = plans};
 }
 
 // The shared gate build and run both use before touching an artifact plan:
@@ -242,7 +134,7 @@ resolve_artifact_plans :: (pkg: Juice.Package) -> Artifact_Plan_Result {
 // it, and the target declaration is still portable. Any existing target
 // directory must be a real directory; any existing artifact must be a plain
 // file (never a directory/symlink/junction).
-revalidate_artifact_plan :: (plan: Juice.Artifact_Plan, package_root: string) -> bool {
+revalidate_artifact_plan :: (plan: Artifact_Plan, package_root: string) -> bool {
     root_entry := inspect_path_entry(package_root);
     if !root_entry.exists || !root_entry.is_directory || root_entry.is_symlink || root_entry.is_junction return false;
     if !path_is_within(package_root, plan.target_dir) return false;

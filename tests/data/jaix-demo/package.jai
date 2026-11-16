@@ -14,19 +14,19 @@
 // packages/. The workspace.members path is root-relative, never a path into a
 // juice checkout (the distribution contract).
 PACKAGE :: Package.{
-    name    = "jaix-demo",
     version = "0.1.0",
-    type    = .BIN,
-    targets = Target.[
-        .{name = "jaix-demo", main_file = "src/main.jai"},
+    name    = "jaix-demo",
+
+    executables = .[
+        .{name = "jaix_demo", entry = "src/main.jai"},
     ],
     workspace = .{
         members = string.["packages/juice-plugin-jaix"],
     },
     plugins = Plugin_Declaration.[
-        .{
-            id      = "juice-plugin-jaix",
-            version = "0.1.0",
+        .{builtin = "load"},
+        .{builtin = "test-block"},
+        .{id = "juice-plugin-jaix", source = .{kind = .PATH, path = "packages/juice-plugin-jaix"},
             options = Plugin_Option.[
                 .{key = "config", value = "jaix.config.jai"},
             ],

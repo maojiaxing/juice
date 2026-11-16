@@ -39,7 +39,7 @@ tt_file :: (root: string, rel: string) -> Scan_File {
 
 // A prepared workspace over a root string — the test command consumes only
 // the discovery snapshot (test_command_prepared in test_support.jai).
-tt_prepared :: (root: string) -> Juice.Prepared_Workspace {
+tt_prepared :: (root: string) -> Prepared_Workspace {
     return test_command_prepared(root);
 }
 
@@ -535,7 +535,7 @@ test "Test front: the dependency strip front rewrites test-bearing shims" {
     dep := tprint("%1/dep", root);
     expect(build_seam_write(dep, "module.jai", "#load \"extra.jai\";\ndep_value :: () -> s32 { return extra_value(); }\n"));
     expect(build_seam_write(dep, "extra.jai", "extra_value :: () -> s32 { return 42; }\n\ntest \"dep self test\" {\n    fail(\"must never run\");\n}\n"));
-    expect(build_seam_write(root, "target/packages/depx.jai", dependency_shim_content("depx", tprint("%1/module.jai", dep))));
+    expect(build_seam_write(root, "target/imports/depx.jai", dependency_shim_content("depx", tprint("%1/module.jai", dep))));
     expect(build_seam_write(root, "src/a.jai", "#import \"Basic\";\n\ntest \"root test\" {\n    expect(true);\n}\n"));
     files := Scan_File.[tt_file(root, "src/a.jai")];
     expect(tt_run(root, files));
@@ -544,7 +544,7 @@ test "Test front: the dependency strip front rewrites test-bearing shims" {
     // The shim now #loads the entry's strip view under the dependency
     // subtree; the closure's test block is stripped — no @test (the
     // dependency-tests-neither-discovered-nor-executed face).
-    shim, ok := read_entire_file(tprint("%1/depx.jai", packages_dir(root)));
+    shim, ok := read_entire_file(tprint("%1/depx.jai", dependency_imports_dir(root)));
     expect(ok);
     entry_view, parsed := shim_load_target(shim);
     expect(parsed && find_index_from_left(entry_view, "/deps/depx/") >= 0);
@@ -573,14 +573,14 @@ test "Test front: a nonzero compiler exit fails the command" {
 
 // The real collection composed into the orchestration: the static fixture's
 // scan order and member pruning flow into the written driver (the member
-// subtree never appears), and the products land under the fixture's
-// target/transpile — removed after the test so the static fixture stays
-// clean.
+// subtree never appears), a child package declaration prunes its own subtree,
+// and the products land under the fixture's target/transpile — removed after
+// the test so the static fixture stays clean.
 test "Test front: the real collection composes into the generated products" {
     root := path_slashes(tprint("%1/tests/data/scan-fixture", otter_root()));
     defer delete_directory_full(transpile_tree_dir(root));
     prepared := tt_prepared(root);
-    prepared.discovery.member_packages = Juice.Package.[
+    prepared.discovery.member_packages = Normalized_Package.[
         .{name = "scan-fixture", dir = prepared.discovery.root_dir},
         .{name = "member-a", dir = tprint("%1/member-a", root)},
     ];
@@ -591,16 +591,15 @@ test "Test front: the real collection composes into the generated products" {
     expect(ok);
     expect(find_index_from_left(runner, "member-a") < 0);
     expect(find_index_from_left(runner, "target/h.jai") < 0);
+    expect(find_index_from_left(runner, "lib_deep") < 0);
     package_views := test_program_package_view_paths(runner);
     a_root := -1;
-    deep := -1;
     tests_e := -1;
     for view, index: package_views {
         if ends_with(view, "/a_root.jai") a_root = index;
-        if ends_with(view, "/lib_deep/package.jai") deep = index;
         if ends_with(view, "/tests/e.jai") tests_e = index;
     }
-    expect(a_root >= 0 && deep >= 0 && tests_e >= 0 && a_root < deep && deep < tests_e);
+    expect(a_root >= 0 && tests_e >= 0 && a_root < tests_e);
 }
 
 // ===========================================================================
@@ -718,10 +717,14 @@ test "Test front: a dropped file never enters the test program" {
 test "Test front: an unmatched file reads its original source" {
     // The pre-step table covers other paths only: the collected file's
     // EXPAND source stays its original source (the view key pins the input
-    // bytes).
+    // bytes). Since ticket 0092 a substitution must name a retained package
+    // source (substitute maps an existing input, it never invents one), so the
+    // other path is a real file that simply is not collected here.
     root := tt_scratch("prestep-miss");
     defer delete_directory_full(root);
     expect(build_seam_write(root, "src/a.jai", "#import \"Basic\";\n\noriginal_only :: () -> s32 { return 1; }\n\ntest \"one\" {\n    expect(true);\n}\n"));
+    expect(build_seam_write(root, "src/other.jai", "other_only :: () -> s32 { return 2; }\n"));
+    expect(build_seam_write(root, "target/mirror/src/other.jai", "mirrored_other :: () -> s32 { return 3; }\n"));
 
     tt_prestep_reset();
     array_add(*TT_PRESTEP_SUBSTITUTIONS, .{original = "src/other.jai", replacement = path_slashes(tprint("%1/target/mirror/src/other.jai", root))});
@@ -949,7 +952,7 @@ test "Test dispatch: PRESTEP fires before TRANSPILE with the stage's directories
     // The committed discovery snapshot: the root first, then one member —
     // the pre-step stage's member_dirs carries the member only.
     prepared := tt_prepared(root);
-    members: [..] Juice.Package;
+    members: [..] Normalized_Package;
     array_add(*members, .{name = "demo", dir = root});
     member_dir := path_slashes(tprint("%1/packages/member-a", root));
     array_add(*members, .{name = "member-a", dir = member_dir});
@@ -1087,7 +1090,11 @@ test "E2E: dependency tests are neither discovered nor executed" {
 
     // The shim was rewritten to the entry strip view; the closure's test
     // block is stripped (no @test).
-    shim, ok := read_entire_file(tprint("%1/test_dep.jai", packages_dir(fixture_root)));
+    // The production dependency shim directory is the package's private
+    // target/imports (graph.consumer_shim_directory), not target/packages; until
+    // 0098 this read looked in the wrong directory, so every assertion below it
+    // was vacuous.
+    shim, ok := read_entire_file(tprint("%1/test_dep.jai", dependency_imports_dir(fixture_root)));
     expect(ok);
     entry_view, parsed := shim_load_target(shim);
     expect(parsed && find_index_from_left(entry_view, "/deps/test_dep/") >= 0);
@@ -1106,7 +1113,7 @@ test "E2E: the in-package Testing module self-tests run through the compile view
     delete_directory_full(root);
     defer delete_directory_full(root);
     expect(build_seam_write(root, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"test-module-self\",\n    version = \"0.1.0\",\n    type    = .BIN,\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    executables = .[],\n    name    = \"test-module-self\",\n    version = \"0.1.0\",\n    \n};\n"));
     expect(build_seam_write(root, "modules/Testing.jai",
         "#import \"Basic\";\n\n#scope_export\n\n// A tiny in-package Testing face: the compile view special case (t9)\n// EXPANDs this file with continued numbering and appends the test support\n// segment, so the self-test runs through the generated compile view. Since\n// ticket 035 the generated driver imports this module for the bare names\n// (the single register), so the module must carry the run/finish/\n// path_mapping API the injected runner drives.\nTesting_Path_Pair :: struct {\n    view:     string;\n    original: string;\n}\n\npath_mapping : [..] Testing_Path_Pair;\n\npassed_count: s32 = 0;\n\nexpect_eq :: (expected: $T, actual: T) {\n    if expected != actual assert(false);\n}\n\nrun :: (name: string, proc: () -> ()) {\n    print(\"[test] %\\n\", name);\n    proc();\n    passed_count += 1;\n}\n\nfinish :: () -> s32 {\n    print(\"% passed, 0 failed\\n\", passed_count);\n    passed_count = 0;\n    return 0;\n}\n\nmodule_decl :: () -> s32 {\n    return support_value();\n}\n\ntest \"module self test\" {\n    assert(support_value() == 7);\n}\n"));
     expect(build_seam_write(root, "tests/test_support.jai",
@@ -1128,3 +1135,4 @@ test "E2E: the in-package Testing module self-tests run through the compile view
     expect(file_contains(module_view, "juice_test_2 :: () -> () {"));
     expect(file_contains(module_view, "__testing_module_support_begin__"));
 }
+

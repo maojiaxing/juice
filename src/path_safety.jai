@@ -131,6 +131,76 @@ path_has_escape_component :: (path: string) -> bool {
     return false;
 }
 
+path_is_filesystem_root :: (path: string) -> bool {
+    if path == "/" return true;
+    #if OS == .WINDOWS {
+        normalized := path_slashes(path);
+        if normalized.count == 3 && normalized[1] == #char ":" && normalized[2] == #char "/" return true;
+        if starts_with(normalized, "//") {
+            server_end := find_index_from_left(slice(normalized, 2, normalized.count - 2), "/");
+            if server_end < 0 return false;
+            share_start := server_end + 3;
+            if share_start >= normalized.count return false;
+            return find_index_from_left(slice(normalized, share_start, normalized.count - share_start), "/") < 0;
+        }
+    }
+    return false;
+}
+
+// Inspect each existing component up to the filesystem root, not only the
+// leaf. This rejects paths that enter through a symlink or Windows junction.
+path_chain_is_link_free :: (path: string) -> bool {
+    if path == "" return false;
+    current := lexical_absolute_path(path);
+    if current == "" return false;
+
+    while true {
+        entry := inspect_path_entry(current);
+        if entry.is_symlink || entry.is_junction return false;
+        if path_is_filesystem_root(current) return true;
+
+        parent := path_slashes(path_strip_filename(current));
+        while parent.count > 1 && parent[parent.count - 1] == #char "/" parent.count -= 1;
+        #if OS == .WINDOWS {
+            if parent.count == 2 && parent[1] == #char ":" parent = tprint("%1/", parent);
+        }
+        if parent == "" || paths_equal(parent, current) return false;
+        current = parent;
+    }
+    return false;
+}
+
+Package_Path_Result :: struct {
+    path:    string;
+    success: bool;
+}
+
+// Normalize a package-relative path without interpreting its components as
+// names. Parent segments are valid when they remain within the package root.
+normalize_package_relative_path :: (path: string) -> Package_Path_Result {
+    if path == "" || path_is_absolute_portable(path) return .{};
+
+    normalized_input := path_slashes(path);
+    parts := split(normalized_input, "/");
+    normalized_parts: [..] string;
+    for part: parts {
+        if part == "" || part == "." continue;
+        if part == ".." {
+            if normalized_parts.count == 0 return .{};
+            normalized_parts.count -= 1;
+            continue;
+        }
+        array_add(*normalized_parts, part);
+    }
+
+    normalized := "";
+    for part: normalized_parts {
+        normalized = ifx normalized == "" then part else tprint("%1/%2", normalized, part);
+    }
+    if normalized == "" normalized = ".";
+    return .{path = normalized, success = true};
+}
+
 path_is_within :: (root: string, candidate: string) -> bool {
     root_abs, root_ok := get_absolute_path(root);
     if !root_ok return false;
@@ -150,6 +220,54 @@ normalize_existing_path :: (path: string) -> string, bool {
     absolute, ok := get_absolute_path(path);
     if !ok return "", false;
     return path_slashes(absolute), true;
+}
+
+ascii_is_letter :: (character: u8) -> bool {
+    return (character >= #char "A" && character <= #char "Z") || (character >= #char "a" && character <= #char "z");
+}
+
+ascii_is_digit :: (character: u8) -> bool {
+    return character >= #char "0" && character <= #char "9";
+}
+
+// Package, dependency-reference and plugin identifiers retain their source
+// spelling; this predicate intentionally does not apply Windows filename rules.
+package_name_is_valid :: (name: string) -> bool {
+    if name == "" return false;
+    if !ascii_is_letter(name[0]) && !ascii_is_digit(name[0]) return false;
+    for character: name {
+        if ascii_is_letter(character) || ascii_is_digit(character) continue;
+        if character == #char "." || character == #char "_" || character == #char "-" continue;
+        return false;
+    }
+    return true;
+}
+
+// Export, executable, alias and option-key identifiers share Jai's
+// ASCII identifier subset: letter/underscore first, then letters/digits/underscore.
+declaration_identifier_is_valid :: (name: string) -> bool {
+    if name == "" return false;
+    if !ascii_is_letter(name[0]) && name[0] != #char "_" return false;
+    for character: name {
+        if ascii_is_letter(character) || ascii_is_digit(character) || character == #char "_" continue;
+        return false;
+    }
+    return true;
+}
+
+ascii_lowercase :: (character: u8) -> u8 {
+    if character >= #char "A" && character <= #char "Z" return character + 32;
+    return character;
+}
+
+// Compare declaration keys with ASCII-only folding. Callers keep the original
+// declaration text for diagnostics and public display.
+ascii_names_equal :: (left: string, right: string) -> bool {
+    if left.count != right.count return false;
+    for index: 0..left.count-1 {
+        if ascii_lowercase(left[index]) != ascii_lowercase(right[index]) return false;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------

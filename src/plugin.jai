@@ -155,16 +155,29 @@ Option_Row :: struct {
     value: string;
 }
 
-// One declared plugin configuration: id + version + option rows, in
-// declaration order when held in an array. The static command path and the
-// generated plugin host share this type; resolve_plugin_configs consumes it.
-// (Package.plugins is the manifest face's own declaration shape; the command
-// converts declarations to this shared shape at the resolver boundary.)
+// One declared plugin configuration: id + option rows, in declaration order
+// when held in an array. The static command path and the generated plugin
+// host share this type; resolve_plugin_configs consumes it. (Package.plugins
+// is the manifest face's own declaration shape; the command converts
+// declarations to this shared shape at the resolver boundary.)
+//
+// There is deliberately no declared version: spec 0087 decision 22 / spec 0084
+// removed the user-facing plugin version (a plugin enablement repeats neither
+// the provider package version nor the Git selector). Compatibility is the
+// entry ABI below, checked independently.
 Plugin_Config :: struct {
     id:      string;
-    version: string;
     options: [] Option_Row;
 }
+
+// The plugin entry ABI version (spec 0087 decision 21/22: 入口兼容性单独检查,
+// 不重复用户插件 version). Every Juice_Plugin value carries the ABI it was
+// compiled against through `abi_version`; a plugin built against a different
+// face sets a different number and is rejected before any hook runs. The
+// check is independent of package versions and Git selectors, so a plugin
+// enablement never repeats them. ADD ONLY: a value change is a breaking entry
+// ABI change and must be paired with a migration note.
+JUICE_PLUGIN_ABI_VERSION :: 1;
 
 // ---------------------------------------------------------------------------
 // Lint face
@@ -215,7 +228,15 @@ Juice_Plugin :: struct {
     id:             string;                    // identity: feeds the pipeline
                                                // description and the cache
                                                // keys
-    version:        string;
+    version:        string;                    // reporting metadata only (the
+                                               // plugin's own version; never a
+                                               // user declaration, never the
+                                               // compatibility gate)
+    abi_version:    s64 = JUICE_PLUGIN_ABI_VERSION;
+                                               // the entry ABI the value was
+                                               // compiled against —
+                                               // resolve_plugin_configs
+                                               // rejects any other value
     transpile:      *Transpile_Plugin = null;  // transpile pipeline face
                                                // (nullable; a non-null face
                                                // joins the declaration-order
@@ -482,17 +503,36 @@ Resolved_Plugins :: struct {
 // pipeline order = lint observation order = hook registration order):
 // - unknown id (no registry entry), a declared id matching several registry
 //   values (one package must provide exactly one plugin — the v1 rule), a
-//   repeated declaration id, a version mismatch and any option rejection are
-//   diagnostics with ok=false;
+//   repeated declaration id, an incompatible entry ABI and any option
+//   rejection are diagnostics with ok=false;
+// - the entry ABI is checked independently of any package version or Git
+//   selector (spec 0087 decision 22): a value compiled against another face
+//   is rejected before its options are applied and before any hook runs;
 // - options: every row goes through the matching schema entry's apply
 //   (unknown key = rejection), then every schema entry's validate runs; a
 //   duplicate row key is rejected up front;
 // - only declared plugins contribute faces. An empty config list resolves to
 //   the default pipeline with no hooks and no lint;
 // - the product is still filled when diagnostics exist (the reference
-//   shape — only ok=false blocks the caller); an ambiguous or
-//   version-mismatched plugin contributes no faces.
-resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config) -> Resolved_Plugins {
+//   shape — only ok=false blocks the caller); an ambiguous or ABI-mismatched
+//   plugin contributes no faces.
+// Declaration keys compare with ASCII-only folding. This face is published
+// standalone (it compiles inside the plugin registration and host programs), so
+// it carries its own two-line fold rather than importing a tool-internal module:
+// the contract is the comparison, not where the helper lives.
+plugin_key_matches :: (declared: string, requested: string) -> bool {
+    if declared.count != requested.count return false;
+    for index: 0..declared.count-1 {
+        left := declared[index];
+        right := requested[index];
+        if left >= #char "A" && left <= #char "Z" left += 32;
+        if right >= #char "A" && right <= #char "Z" right += 32;
+        if left != right return false;
+    }
+    return true;
+}
+
+resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config, plugins_omitted: bool = true) -> Resolved_Plugins {
     out: Resolved_Plugins;
     diags: [..] Transpile_Diagnostic;
     declared_transpile := false;
@@ -519,7 +559,7 @@ resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config
         matches := 0;
         plugin: *Juice_Plugin = null;
         for p: registry {
-            if p.id != config.id continue;
+            if !plugin_key_matches(p.id, config.id) continue;
             matches += 1;
             if plugin == null plugin = p;
         }
@@ -531,8 +571,8 @@ resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config
             merge_diag(*diags, tprint("plugin package provides multiple plugins: %", config.id));
             continue;
         }
-        if config.version != plugin.version {
-            merge_diag(*diags, tprint("plugin version mismatch: % (declared %, plugin %)", config.id, config.version, plugin.version));
+        if plugin.abi_version != JUICE_PLUGIN_ABI_VERSION {
+            merge_diag(*diags, tprint("incompatible plugin entry ABI: % (plugin %, juice supports %)", config.id, plugin.abi_version, JUICE_PLUGIN_ABI_VERSION));
             continue;
         }
 
@@ -543,7 +583,7 @@ resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config
         for row: config.options {
             row_duplicate := false;
             for key: seen_option_keys {
-                if key == row.key row_duplicate = true;
+                if plugin_key_matches(key, row.key) row_duplicate = true;
             }
             if row_duplicate {
                 merge_diag(*diags, tprint("duplicate plugin option key: % (%)", config.id, row.key));
@@ -553,7 +593,7 @@ resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config
 
             schema_found := false;
             for option: plugin.options_schema {
-                if option.name != row.key continue;
+                if !plugin_key_matches(option.name, row.key) continue;
                 schema_found = true;
                 message := "";
                 if option.apply != null message = option.apply(plugin.options, row.key, row.value);
@@ -585,7 +625,7 @@ resolve_plugin_configs :: (registry: [] *Juice_Plugin, configs: [] Plugin_Config
     // No declared transpile face at all: the default pipeline. This keeps an
     // undeclared package on today's behavior (and lets a declaration that
     // only activates a lint plugin keep transpiling).
-    if !declared_transpile {
+    if plugins_omitted && !declared_transpile {
         array_add(*out.pipeline, load_plugin());
         array_add(*out.pipeline, test_block_plugin());
     }

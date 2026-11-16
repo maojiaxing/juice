@@ -7,7 +7,7 @@
 // (old juice execution semantics, spec section 7.2).
 
 PACKAGE :: Package.{
-    name    = "test-blocks-fail",
     version = "0.1.0",
-    type    = .BIN,
+    name    = "test-blocks-fail",
+
 };

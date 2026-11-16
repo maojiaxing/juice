@@ -297,20 +297,20 @@ test "Test command argument guard" {
 // first, then subdirectories, both lexicographic). Excluded: dot entries at
 // any depth, the root-level target/, tests/data/ and modules/, the root
 // manifest, and the member-a subtree (boundary from the discovery
-// snapshot). Included despite same names elsewhere: src/target/,
-// src/modules/, src/data/ and a nested package.jai source file.
+// snapshot). A nested child package.jai prunes its whole subtree (spec 0087
+// decision 20), so lib_deep/package.jai is not collected. Included despite
+// same names elsewhere: src/target/, src/modules/, src/data/.
 test "Collection applies the exclusion set in scan order" {
-    prepared: Juice.Prepared_Workspace;
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = tprint("%1/tests/data/scan-fixture", otter_root());
-    prepared.discovery.member_packages = Juice.Package.[
+    prepared.discovery.member_packages = Normalized_Package.[
         .{name = "scan-fixture", dir = prepared.discovery.root_dir},
         .{name = "member-a", dir = tprint("%1/tests/data/scan-fixture/member-a", otter_root())},
     ];
-    files, ok := collect_test_files(*prepared);
+    files, ok := collect_test_files(*prepared, prepared.discovery.root_dir);
     expect(ok);
     expected := string.[
         "a_root.jai",
-        "lib_deep/package.jai",
         "src/b.jai",
         "src/data/d.jai",
         "src/modules/e.jai",
@@ -329,9 +329,9 @@ test "Collection applies the exclusion set in scan order" {
 }
 
 test "Collection rejects a missing package root" {
-    prepared: Juice.Prepared_Workspace;
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = tprint("%1/tests/data/no-such-package", otter_root());
-    _, ok := collect_test_files(*prepared);
+    _, ok := collect_test_files(*prepared, prepared.discovery.root_dir);
     expect(!ok);
 }
 
@@ -358,9 +358,9 @@ test "Collection skips symlinks and junctions" {
         return;
     }
 
-    prepared: Juice.Prepared_Workspace;
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = lexical_absolute_path(root);
-    files, ok := collect_test_files(*prepared);
+    files, ok := collect_test_files(*prepared, prepared.discovery.root_dir);
     expect(ok);
     expected := string.["real_file.jai", "real/with_test.jai"];
     if files.count != expected.count {
@@ -538,7 +538,7 @@ test "E2E: files without @test procedures short-circuit inside the metaprogram" 
     delete_directory_full(root);
     defer delete_directory_full(root);
     expect(build_seam_write(root, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"test-noentries-e2e\",\n    version = \"0.1.0\",\n    type    = .BIN,\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    executables = .[],\n    name    = \"test-noentries-e2e\",\n    version = \"0.1.0\",\n    \n};\n"));
     expect(build_seam_write(root, "src/plain.jai", "#import \"Basic\";\n\nhelper :: () -> s32 {\n    return 1;\n}\n"));
     result, output, _ := run_otter_child_at(root, string.["test"]);
     expect(expect_exit("test-no-entries", result, 0));
@@ -560,7 +560,7 @@ test "E2E: a bare-name failing assertion is counted and exits 1" {
     delete_directory_full(root);
     defer delete_directory_full(root);
     expect(build_seam_write(root, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"bare-name-fail\",\n    version = \"0.1.0\",\n    type    = .BIN,\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    executables = .[.{name = \"bare_name_fail\", entry = \"src/main.jai\"}],\n    name    = \"bare-name-fail\",\n    version = \"0.1.0\",\n    \n};\n"));
     expect(build_seam_write(root, "src/main.jai",
         "#import \"Basic\";\n#import \"Testing\";\n\nfailing_test :: () {\n    expect(1 == 2);\n} @test\n\npassing_test :: () {\n    expect(true);\n} @test\n"));
     result, output, _ := run_otter_child_at(root, string.["test"]);
@@ -585,7 +585,7 @@ test "E2E: a bare-name passing package exits 0 with the expected counts" {
     delete_directory_full(root);
     defer delete_directory_full(root);
     expect(build_seam_write(root, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"bare-name-pass\",\n    version = \"0.1.0\",\n    type    = .BIN,\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    executables = .[.{name = \"bare_name_pass\", entry = \"src/main.jai\"}],\n    name    = \"bare-name-pass\",\n    version = \"0.1.0\",\n    \n};\n"));
     expect(build_seam_write(root, "src/main.jai",
         "#import \"Basic\";\n#import \"Testing\";\n\ntest_alpha :: () {\n    expect(1 + 1 == 2);\n} @test\n\ntest_beta :: () {\n    expect_eq(2 + 3, 5);\n} @test\n"));
     result, output, _ := run_otter_child_at(root, string.["test"]);
@@ -672,24 +672,46 @@ plugin_wiring_root :: (name: string) -> string {
 // test block (the real collect/TRANSPILE fronts run) and, when member_name
 // is non-empty, one member package carrying the anchor plus the root's
 // Package.plugins declaration that activates it (ticket 056 — declaration =
-// activation; dependencies never activate plugins).
-plugin_wiring_prepared :: (root: string, member_name := "") -> Juice.Prepared_Workspace {
-    prepared: Juice.Prepared_Workspace;
+// activation; dependencies never activate plugins). The member is a real
+// package whose package.jai declares the selected public module (spec 0087
+// decision 21), and the snapshot carries that declaration plus the workspace
+// membership a WORKSPACE source requires.
+plugin_wiring_prepared :: (root: string, member_name := "") -> Prepared_Workspace {
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     prepared.discovery.has_package = true;
+    prepared.discovery.has_workspace = true;
     prepared.discovery.root_package.name = "plugin-wiring-root";
-    members: [..] Juice.Package;
+    prepared.discovery.root_package.dir = root;
+    members: [..] Normalized_Package;
     array_add(*members, .{name = "plugin-wiring-root", dir = root});
     if member_name != "" {
         // Heap-backed slices: the fields escape this frame (a fixed-array
         // literal's storage would die with it — the 028 deviation).
-        plugins: [..] Juice.Plugin_Declaration;
-        array_add(*plugins, .{id = member_name, version = "0.1.0"});
+        plugins: [..] Plugin_Reference;
+        array_add(*plugins, .{id = member_name, source = .{kind = .WORKSPACE}, module = .{path = tprint("packages/%", member_name)}});
         prepared.discovery.root_package.plugins = plugins;
-        array_add(*members, .{name = member_name, dir = path_slashes(tprint("%1/packages/%2", root, member_name))});
+        array_add(*members, .{name = member_name, dir = path_slashes(tprint("%1/packages/%2", root, member_name)),
+            modules = Declared_Product.[.{name = "plugin_module", entry = "module.jai", name_present = true}]});
+        build_seam_write(root, tprint("packages/%1/package.jai", member_name),
+            tprint("#import \"Juice\";\n\nPACKAGE :: Package.{\n    version = \"0.1.0\",\n    modules = .[.{name = \"plugin_module\", entry = \"module.jai\"}],\n    name    = \"%\",\n\n};\n", member_name));
     }
     prepared.discovery.member_packages = members;
     return prepared;
+}
+
+// Decision 22 (0098): every enabled external plugin needs the PRESTEP host — only
+// a compiled child holds a plugin's values, so options/ABI validation cannot depend
+// on what the entry happens to spell. These command-front tests therefore stub the
+// host spawn and give it a record file, exactly like the production host does
+// (run_plugin_host's read/parse path still runs for real).
+TC_HOST_ROOT: string;
+
+tc_fake_host_spawn :: (host_path: string, import_dirs: [] string) -> Process_Result {
+    path := plugin_host_records_path(package_target_dir(TC_HOST_ROOT));
+    make_directory_if_it_does_not_exist(path_strip_filename(path), recursive = true);
+    write_entire_file(path, "OK=1\n");
+    return .{exit_code = 0};
 }
 
 test "Test command: plugin hits register and wire the metaprogram" {
@@ -701,7 +723,8 @@ test "Test command: plugin hits register and wire the metaprogram" {
     prepared := plugin_wiring_prepared(root, "scratch-plugin");
 
     reset_test_command_seam();
-    expect(test_prepared_workspace(*prepared, "", Hook_Registration.[], collect_test_files, test_spawn_test_compiler));
+    TC_HOST_ROOT = root;
+    expect(test_prepared_workspace(*prepared, "", Hook_Registration.[], collect_test_files, test_spawn_test_compiler, tc_fake_host_spawn));
     expect(test_test_spawn_calls == 1);
     expect(test_test_spawn_path == path_slashes(tprint("%1/test_runner.jai", transpile_tree_dir(root))));
 
@@ -709,7 +732,7 @@ test "Test command: plugin hits register and wire the metaprogram" {
     // member's module import (the scan order = the declaration order).
     registration := workspace_plugin_registration_path(package_target_dir(root));
     expect(file_exists(registration));
-    expect(file_contains(registration, "JUICE_PLUGIN_0 :: #import \"scratch-plugin\";"));
+    expect(file_contains(registration, "JUICE_PLUGIN_0 :: #import \"scratch_plugin__plugin_"));
 
     // Both metaprogram options reached the generated text: the registration
     // #load (the absolute path), the package-root anchor (ticket 042
@@ -721,7 +744,10 @@ test "Test command: plugin hits register and wire the metaprogram" {
     expect(find_index_from_left(generated, "#import \"juice_core\";") >= 0);
     expect(find_index_from_left(generated, tprint("#load \"%1\";", registration)) >= 0);
     expect(find_index_from_left(generated, tprint("set_working_directory(\"%1\");", root)) >= 0);
-    expect(find_index_from_left(generated, "plugin_configs: [] Plugin_Config = Plugin_Config.[.{ id = \"scratch-plugin\", version = \"0.1.0\", options = Option_Row.[] }];") >= 0);
+    // Ticket 0092 (decision 21): the plugin ABI version is the host constant,
+    // not a user-declared field, so the generated config carries id + options
+    // only.
+    expect(find_index_from_left(generated, "plugin_configs: [] Plugin_Config = Plugin_Config.[.{ id = \"scratch-plugin\", options = Option_Row.[] }];") >= 0);
     expect(find_index_from_left(generated, "merged_plugins = merge_plugins(plugins);") >= 0);
     expect(find_index_from_left(generated, "resolved_plugins = resolve_plugin_configs(merged_plugins.registry, plugin_configs);") >= 0);
     expect(find_index_from_left(generated, "for lint: resolved_plugins.lint_plugins {") >= 0);
@@ -756,13 +782,14 @@ test "Test command: a plugin scan failure fails the command before compiling" {
     delete_directory_full(root);
     defer delete_directory_full(root);
     expect(build_seam_write(root, "src/wiring_tests.jai", "test \"plugin wiring scan fail\" {\n    expect(true);\n}\n"));
-    // The snapshot names a member whose directory does not exist: the scan
-    // must fail loudly, never degrade into "no plugins".
-    prepared: Juice.Prepared_Workspace;
+    // The snapshot names a declared plugin package whose directory does not
+    // exist: the source resolution must fail loudly, never degrade into "no
+    // plugins" (a stale member snapshot does not rescue a missing source).
+    prepared: Prepared_Workspace;
     prepared.discovery.root_dir = root;
     prepared.discovery.has_package = true;
-    prepared.discovery.root_package.plugins = Juice.Plugin_Declaration.[.{id = "ghost-plugin", version = "0.1.0"}];
-    prepared.discovery.member_packages = Juice.Package.[
+    prepared.discovery.root_package.plugins = Plugin_Reference.[.{id = "ghost-plugin", source = .{kind = .PATH, path = tprint("%1/packages/ghost-plugin", root)}}];
+    prepared.discovery.member_packages = Normalized_Package.[
         .{name = "plugin-wiring-root", dir = root},
         .{name = "ghost-plugin", dir = path_slashes(tprint("%1/packages/ghost-plugin", root))},
     ];
@@ -808,7 +835,7 @@ test "Test command: a non-member dependency fixture never registers plugins" {
     expect(discovery.root_package.dependencies.count == 1);
     expect(discovery.member_packages.count == 1);
 
-    prepared: Juice.Prepared_Workspace;
+    prepared: Prepared_Workspace;
     prepared.discovery = discovery;
     reset_test_command_seam();
     expect(test_prepared_workspace(*prepared, "", Hook_Registration.[], collect_test_files, test_spawn_test_compiler));
@@ -837,7 +864,7 @@ test "Test command: a non-member dependency fixture never registers plugins" {
 // dependency preparation and the file scan), the real declaration surface
 // (workspace.members + Package.plugins — ticket 056: no root DEP activates
 // the plugin).
-LINT_FULL_CHAIN_PACKAGE_SOURCE :: "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"lint-full-chain-e2e\",\n    version = \"0.1.0\",\n    type    = .BIN,\n    workspace = .{\n        members = string.[\"packages/juice-plugin-lint\"],\n    },\n    plugins = .[\n        .{id = \"juice-plugin-lint\", version = \"0.1.0\"},\n    ],\n};\n";
+LINT_FULL_CHAIN_PACKAGE_SOURCE :: "#import \"Juice\";\n\nPACKAGE :: Package.{\n    executables = .[],\n    name    = \"lint-full-chain-e2e\",\n    version = \"0.1.0\",\n    \n    workspace = .{\n        members = string.[\"packages/juice-plugin-lint\"],\n    },\n    plugins = .[\n        .{id = \"juice-plugin-lint\", source = .{kind = .PATH, path = \"packages/juice-plugin-lint\"}},\n    ],\n};\n";
 
 // The bad-named @test procedure plus one snake_case sibling: both must run
 // and count; only the first draws the shipped rule's warning.
@@ -1161,28 +1188,29 @@ test "E2E: an installed juice runs the real member plugin and lints a scratch wo
     // Negative case (ticket 053, review fix F1; parent 048 decision 12 /
     // US 4): delete exactly one installed closure copy — from the scratch
     // install only, never the repository — and rerun the installed
-    // executable at the scratch root. The plugin test program imports
-    // juice_core, whose module-relative #load now names a missing file: the
-    // compile must fail loudly (jai's original error, nonzero exit), never
-    // degrade into a green or zero-plugin run. The deletion happens after
-    // every positive assertion above, so they observe the complete install.
+    // executable at the scratch root. Ticket 0094's installation-unit check
+    // runs before any package work, so the missing published support source is
+    // refused as an incomplete installation: nonzero exit, the diagnostic names
+    // the artifact, and the run never degrades into a green or zero-plugin
+    // result. (Before the unit check the same deletion surfaced later, as the
+    // test program's compile error; the contract — a missing support source
+    // fails the command — is unchanged and now reported up front.) The deletion
+    // happens after every positive assertion above, so they observe the
+    // complete install.
     missing_closure := juice_plugin_face_file_path(modules_dir, "plugin.jai");
     expect(file_exists(missing_closure));
     expect(file_delete(missing_closure));
     result, output, errors = run_command(installed_exe, "test", working_directory = scratch, capture_and_return_output = true);
     expect(expect_exit("installed-plugin-e2e missing-closure", result, 1),
         "a missing installed closure copy must fail the run");
-    // jai's original compile error names the missing closure file.
-    expect(child_output_contains("installed-plugin-e2e missing-closure", errors, "Error: Unable to open file"));
-    expect(child_output_contains("installed-plugin-e2e missing-closure", errors, "plugin_face/plugin.jai"));
-    // The command reports the compile failure instead of a green or
-    // zero-plugin run: no test start lines, no summary, no "No tests found"
-    // degrade.
-    expect(output_matches("installed-plugin-e2e missing-closure", output, string.["[juice ERROR] Test compilation failed."]));
+    expect(child_output_contains("installed-plugin-e2e missing-closure", output, "the installed artifact juice_internal/plugin_face/plugin.jai is missing"));
+    expect(child_output_contains("installed-plugin-e2e missing-closure", output, "not one compatible installation"));
+    // No test start lines, no summary, no "No tests found" degrade.
     expect(output_matches("installed-plugin-e2e missing-closure", output, string.[
         "[test] BadName",
         "[test] test_good_name",
         "passed, 0 failed",
         "[juice Test] No tests found.",
+        "[juice ERROR] Test compilation failed.",
     ], want = false));
 }

@@ -34,12 +34,21 @@
 // the file's workspace/discovery references require juice_module.jai,
 // dependency.jai, plugin.jai, scan_walk.jai and the transpile lexer first.
 #load "juice_module.jai";
+#load "package_model.jai";
 #load "xdg.jai";
 #load "path_safety.jai";
 #load "manifest.jai";
+#load "resolution_state.jai";
 #load "workspace.jai";
 #load "target.jai";
+// The typed dependency resolution state (spec 0087 decisions 13-15) and the
+// resolver (decisions 9-12) land after dependency.jai: the resolution state
+// keeps Git selections apart from the shared content cache, and the resolver
+// consumes the shim format and the strip front. dependency_resolution.jai is
+// the production preparation seam's default, so it must be visible to
+// workspace.jai's seam type.
 #load "dependency.jai";
+#load "dependency_resolution.jai";
 #load "transpile.jai";
 #load "transpile_plugin.jai";
 #load "transpile_cache.jai";
@@ -64,7 +73,7 @@
 // Ticket 045 lands plugin_scan.jai in the tool closure: the test command's
 // COMPILE stage scans the root package's declared member dependencies and
 // writes the workspace registration file. The workspace-level scan needs
-// juice_module.jai (Juice.Workspace_Discovery) and dependency.jai
+// juice_module.jai (Workspace_Discovery) and dependency.jai
 // (find_workspace_member) first; its older references (plugin.jai's anchor
 // note, scan_walk, the transpile lexer) are all earlier in the list too, so
 // the file sits at the tail of the src modules.
@@ -77,16 +86,31 @@
 // transpile_config.jai, lifecycle.jai and manifest.jai, all loaded above.
 #load "plugin_host.jai";
 #load "commands/command.jai";
+// Ticket 0093: the shared package-selection surface (flag parsing, the
+// validated Command_Selection, the batch report) every command consumes. It
+// sits between the command declarations and the handlers so build/run/test/
+// update all accept exactly one selection contract.
+#load "commands/selection.jai";
 #load "commands/build.jai";
 #load "commands/run.jai";
 #load "commands/clean.jai";
 #load "commands/test.jai";
+#load "commands/update.jai";
 #load "commands/version.jai";
 #load "dispatcher.jai";
 #load "commands/help.jai";
 
 main :: () {
     auto_release_temp();
+
+    // The installation unit gate (spec 0087 decision 28 / A16; ticket 0094):
+    // the executable and the modules directory beside it are delivered,
+    // upgraded and rolled back as one set. Verifying the compatibility marker
+    // here — before any command reads a package — turns a missing, mixed or
+    // other-release installation into one clear failure instead of a
+    // downstream compile error. There is no fallback: the marker is only ever
+    // read from this executable's own modules directory.
+    if !require_compatible_install(juice_modules_dir(), JUICE_PLUGIN_ABI_VERSION) exit(1);
 
     args := get_command_line_arguments();
     command := ifx args.count > 1 then args[1] else "build";
@@ -102,7 +126,40 @@ main :: () {
     // (packages_dir etc.) are derived from root_dir by their respective
     // owners. ctx.workspace zero-initializes to the EMPTY phase; discovery
     // fills it on the first command that prepares the workspace.
-    ctx.cache_dir = tprint("%1/juice", get_cache_home());
+    // The typed roots (spec 0087 decision 15): Git source content and the
+    // per-consumer resolution state live in separate XDG-derived roots. A
+    // relative XDG value falls back with a warning; it never switches juice to
+    // cwd or a temporary directory. A root that cannot be created or written
+    // is not a warning but a failure: the command would otherwise report
+    // success while silently discarding the state and content it claims to
+    // keep, so the typed result is checked here, once, at the entry.
+    content_cache := get_juice_content_cache_root();
+    if content_cache.warning {
+        print("[juice WARNING] XDG_CACHE_HOME is not an absolute path; using the platform default content cache.\n");
+    }
+    if !content_cache.success {
+        print("[juice ERROR] Could not determine a writable content cache root; set an absolute, writable XDG_CACHE_HOME.\n");
+        exit(1);
+    }
+    state_root := get_juice_resolution_state_root();
+    if state_root.warning {
+        print("[juice WARNING] XDG_STATE_HOME is not an absolute path; using the platform default resolution state.\n");
+    }
+    if !state_root.success {
+        print("[juice ERROR] Could not determine a writable resolution state root; set an absolute, writable XDG_STATE_HOME.\n");
+        exit(1);
+    }
+    // Every cache consumer — the manifest evaluator's temp files included —
+    // reads the verified typed root, so an invalid XDG value cannot reappear
+    // through the legacy base-home helper.
+    ctx.cache_dir = content_cache.path;
+    ctx.content_cache_dir = content_cache.path;
+    ctx.state_dir = state_root.path;
+    ctx.workspace.environment = .{
+        content_cache_root = content_cache.path,
+        state_root         = state_root.path,
+        mode               = .NORMAL,
+    };
     result := dispatch_command(COMMAND_REGISTRY, command, *ctx, command_arguments);
     if !result.success exit(1);
 }
