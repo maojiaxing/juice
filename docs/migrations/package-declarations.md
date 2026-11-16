@@ -232,6 +232,13 @@
 （`src/publication.jai:718`）。缺失、混装、被替换的发布件都会在命令开始前失败；没有其他安装目录回退，也没有用户兼容开关。
 因此本指南的所有命令都要求 `juice.exe` 与 `modules/` 相邻；把 `target/juice.exe` 单独复制走不能运行。
 
+包声明词汇的源在 `packages/juice/module.jai`（发布源目录，不是包：没有 `package.jai`）。该文件整份发布为
+`modules/Juice/module.jai`，发布步骤不再按段标记切分。Testing 面的源仍在 `src/module.jai` 的 testing 段，
+因为它需要 token 级前缀剥离，不能整份复制。
+
+已知遗留（未处理）：`src/module.jai` 在 package 段迁出后只剩 Testing 面，文件名与内容已不匹配；改名会牵动
+`src/main.jai` 的 `#load` 顺序、`build.jai` 的发布输入与测试夹具，收益只是命名，故不动。
+
 ## 8. 证据规则
 
 - 标注 **已执行** 的行为都附 `target/evidence/` 下的日志文件名（工作树未提交的临时证据区）与退出码。

@@ -229,6 +229,10 @@ _Avoid_: first.jai（旧名）、driver.jai（旧两文件形态；driver 是嵌
 包根下 `target/` 目录的布局契约：区根（`build/`、`modules/`、`transpile/`（含 `testing-module/`）、`plugins/`、`packages/`、`tests/`、`recovery/`、`evidence/`）与落点由 `Target_Layout` 模块（`src/target_layout.jai`）单一拥有；artifact 根、发布 modules 树与 transpile 视图树是 spec 钉死的字面量。`build/` 同时收生成的构建驱动与 build/test 程序的编译中间件（`.obj/.lib/.exp/.pdb/.added_strings`）；测试 scratch 在 `tests/`，崩溃恢复备份在 `recovery/`，证据日志在 `evidence/`；clean 整棵删除。
 _Avoid_: build directory、输出目录（不区分区根与落点）
 
+**发布源目录（Publication source directory）**：
+只有 `.jai` 源、没有 `package.jai` 的目录，唯一用途是给发布步骤提供源文本。`packages/juice/` 是当前唯一实例：它存放包声明词汇（`Package` / `Product` / `Source` / `Dependency` / `Plugin_Declaration` / `Workspace_Config`），发布步骤整份读取并加上标准导入头，成为安装树里的 `Juice` 模块。它不进 `workspace.members`、没有 `Package.name`、不可被当作包 `#import`；juice 自身编译单元经 `src/module.jai` 的一行 `#load` 取得其中的裸声明名。
+_Avoid_: 把它当作包（加 `package.jai` 会立刻把它变成可依赖目标，破坏"插件包可整体复制、不带 juice 检出路径"的分发契约）、声明模块、schema 目录
+
 **测试临时区（Target scratch）**：
 测试在 `target/tests/` 下的临时根，经 `target_scratch_dir` 派生；每次 test 命令启动先整区 prune，运行期测试自行重建。
 _Avoid_: test cache、临时目录
