@@ -11,7 +11,7 @@ use the try/catch extension syntax, built and tested through juice.
   `workspace.members` entry naming the member package. The `exe` option stays
   empty, so the plugin probes PATH for "jaix". The static fixture tree does
   not contain the member: the E2E copies this directory into a scratch
-  workspace and copies the real `packages/juice-plugin-jaix` tree beside it.
+  workspace and copies the real `plugins/juice-plugin-jaix` tree beside it.
 - `jaix.config.jai` — the jaix configuration: the try/catch built-in plugin
   (MULTI_RETURN convention). Juice's own test block mechanism stays out of
   the config (the double processing exclusion).

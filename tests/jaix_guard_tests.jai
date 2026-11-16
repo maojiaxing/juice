@@ -9,7 +9,7 @@
 // evidence on any hit.
 //
 // Ticket 061 emptied the whitelist: the plugin moved from src/jaix_plugin.jai
-// into the packages/juice-plugin-jaix member package, so src/ is now scanned
+// into the plugins/juice-plugin-jaix member package, so src/ is now scanned
 // with no allowance at all. The allowance mechanism stays (an empty list) so
 // the negative self-test can still prove the scanner catches a violation —
 // it runs over a scratch root carrying a seeded violation instead of over the

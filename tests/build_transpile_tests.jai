@@ -247,7 +247,7 @@ test "The declared plugin resolver yields the default pipeline for zero transpil
     // the generated test metaprogram / Phase-2 host) and does not disturb
     // the default pipeline.
     member := resolve_package_plugins(.[
-        .{id = "juice-plugin-lint", source = .{kind = .PATH, path = "packages/juice-plugin-lint"}},
+        .{id = "juice-plugin-lint", source = .{kind = .PATH, path = "plugins/juice-plugin-lint"}},
     ]);
     expect(member.ok);
     expect(member.pipeline.count == 2);

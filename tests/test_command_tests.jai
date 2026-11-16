@@ -27,7 +27,7 @@
 // unwired shape, the scan/write failure channels and the non-member DEP
 // fixture staying scan-free. Ticket 046 adds the full-chain CLI E2E: the
 // real exe drives a runtime-built scratch workspace whose member is a byte
-// copy of the real packages/juice-plugin-lint, plus the member-root smoke.
+// copy of the real plugins/juice-plugin-lint, plus the member-root smoke.
 // Ticket 051 adds the installed-layout plugin E2E: the real exe plus the
 // whole published modules tree copied to a scratch install with no sibling
 // src/ or target/, driving a scratch workspace whose member is a byte-for-
@@ -852,7 +852,7 @@ test "Test command: a non-member dependency fixture never registers plugins" {
 // 33-34): the real executable drives a scratch workspace built only under
 // <otter>/target — the root manifest declares the real member through
 // workspace.members plus the same-name DEP, the member package files are
-// copied byte for byte from packages/juice-plugin-lint at test runtime, and
+// copied byte for byte from plugins/juice-plugin-lint at test runtime, and
 // a deliberately bad-named @test procedure exercises the shipped rule end to
 // end: scan -> workspace registration -> generated test metaprogram ->
 // collection-time lint observation -> compiler_report on the child's stderr.
@@ -864,7 +864,7 @@ test "Test command: a non-member dependency fixture never registers plugins" {
 // dependency preparation and the file scan), the real declaration surface
 // (workspace.members + Package.plugins — ticket 056: no root DEP activates
 // the plugin).
-LINT_FULL_CHAIN_PACKAGE_SOURCE :: "#import \"Juice\";\n\nPACKAGE :: Package.{\n    executables = .[],\n    name    = \"lint-full-chain-e2e\",\n    version = \"0.1.0\",\n    \n    workspace = .{\n        members = string.[\"packages/juice-plugin-lint\"],\n    },\n    plugins = .[\n        .{id = \"juice-plugin-lint\", source = .{kind = .PATH, path = \"packages/juice-plugin-lint\"}},\n    ],\n};\n";
+LINT_FULL_CHAIN_PACKAGE_SOURCE :: "#import \"Juice\";\n\nPACKAGE :: Package.{\n    executables = .[],\n    name    = \"lint-full-chain-e2e\",\n    version = \"0.1.0\",\n    \n    workspace = .{\n        members = string.[\"plugins/juice-plugin-lint\"],\n    },\n    plugins = .[\n        .{id = \"juice-plugin-lint\", source = .{kind = .PATH, path = \"plugins/juice-plugin-lint\"}},\n    ],\n};\n";
 
 // The bad-named @test procedure plus one snake_case sibling: both must run
 // and count; only the first draws the shipped rule's warning.
@@ -874,13 +874,13 @@ LINT_FULL_CHAIN_TEST_SOURCE :: "#import \"Testing\";\n\nBadName :: () {\n    exp
 // byte for byte (a runtime copy, never a fixture mirror), the root manifest
 // declares them, and the test source carries the bad-named procedure.
 build_lint_full_chain_scratch :: (scratch: string) -> bool {
-    real_member := path_slashes(tprint("%1/packages/juice-plugin-lint", otter_root()));
+    real_member := path_slashes(tprint("%1/plugins/juice-plugin-lint", otter_root()));
     member_manifest, manifest_ok := read_entire_file(tprint("%1/package.jai", real_member));
     if !manifest_ok return false;
     member_module, module_ok := read_entire_file(tprint("%1/module.jai", real_member));
     if !module_ok return false;
-    if !build_seam_write(scratch, "packages/juice-plugin-lint/package.jai", member_manifest) return false;
-    if !build_seam_write(scratch, "packages/juice-plugin-lint/module.jai", member_module) return false;
+    if !build_seam_write(scratch, "plugins/juice-plugin-lint/package.jai", member_manifest) return false;
+    if !build_seam_write(scratch, "plugins/juice-plugin-lint/module.jai", member_module) return false;
     if !build_seam_write(scratch, "package.jai", LINT_FULL_CHAIN_PACKAGE_SOURCE) return false;
     return build_seam_write(scratch, "tests/bad_name_tests.jai", LINT_FULL_CHAIN_TEST_SOURCE);
 }
@@ -924,7 +924,7 @@ test "E2E: the real member plugin lints a scratch workspace and the tests still 
 }
 
 test "E2E: the real member package root runs its own suite green" {
-    member_root := path_slashes(tprint("%1/packages/juice-plugin-lint", otter_root()));
+    member_root := path_slashes(tprint("%1/plugins/juice-plugin-lint", otter_root()));
     // Session products only (all under the member's target/): regenerate them
     // so stale views can never shadow the run, and leave the static member
     // tree untouched.
@@ -943,7 +943,7 @@ test "E2E: the real member package root runs its own suite green" {
 // 1-3/7-9/12; US 1-9, 18-25, 33-35, 39-40): the real executable and its
 // whole published modules tree copied into a scratch install with no sibling
 // src/ or target/, driving a scratch workspace whose member is a byte-for-
-// byte copy of the whole real packages/juice-plugin-lint tree (its tests/
+// byte copy of the whole real plugins/juice-plugin-lint tree (its tests/
 // included). Unlike the ticket 046 E2E — which runs the dev-tree executable —
 // every face the run consumes (Juice, Testing, the discovery source and the
 // juice_core plugin closure) resolves from the modules directory adjacent to
@@ -1065,10 +1065,10 @@ copy_member_tree_visitor :: (info: *File_Visit_Info, ctx: *Copy_Member_Tree_Cont
 // copy — never a fixture mirror — is the distribution-contract proof: the
 // copied package must run unchanged under the installed tool.
 copy_real_member_tree :: (scratch: string) -> bool {
-    real_member := path_slashes(tprint("%1/packages/juice-plugin-lint", otter_root()));
+    real_member := path_slashes(tprint("%1/plugins/juice-plugin-lint", otter_root()));
     ctx: Copy_Member_Tree_Context;
     ctx.source_dir = real_member;
-    ctx.dest_dir = path_slashes(tprint("%1/packages/juice-plugin-lint", scratch));
+    ctx.dest_dir = path_slashes(tprint("%1/plugins/juice-plugin-lint", scratch));
     ctx.ok = true;
     delete_directory_full(ctx.dest_dir);
     if !visit_files(real_member, true, *ctx, copy_member_tree_visitor, visit_directories = true) return false;
@@ -1144,8 +1144,8 @@ test "E2E: an installed juice runs the real member plugin and lints a scratch wo
     // (tests/ included), and the bad-named @test plus its snake_case
     // sibling at the root.
     expect(copy_real_member_tree(scratch));
-    real_member := path_slashes(tprint("%1/packages/juice-plugin-lint", otter_root()));
-    copied_member := path_slashes(tprint("%1/packages/juice-plugin-lint", scratch));
+    real_member := path_slashes(tprint("%1/plugins/juice-plugin-lint", otter_root()));
+    copied_member := path_slashes(tprint("%1/plugins/juice-plugin-lint", scratch));
     for rel: string.["package.jai", "module.jai", "tests/lint_rule_tests.jai"] {
         source, source_ok := read_entire_file(tprint("%1/%2", real_member, rel));
         copied, copied_ok := read_entire_file(tprint("%1/%2", copied_member, rel));

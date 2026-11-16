@@ -1,12 +1,14 @@
 #import "Juice";
 
-// Real third-party plugin member (ticket 044, parent 040 decisions 1/2/10):
-// the repository's first packages/ member. Directory name = Package.name =
+// The lint plugin package (ticket 044, parent 040 decisions 1/2/10): the
+// repository's first real plugin package. Directory name = Package.name =
 // module name — the root module.jai entry convention (its #import name is
-// the package directory name, spec section 3).
+// the package directory name, spec section 3). The directory name carries no
+// further meaning: `plugins/` classifies this as juice's own integration, and
+// the plugin id comes from the root declaration, not from this name.
 //
-// LIB with no targets and no dependencies (ticket 050, parent 048 decisions
-// 9/10): the package is a plain, copyable source member. `juice_core` is the
+// No executables and no dependencies (ticket 050, parent 048 decisions 9/10):
+// the package is a plain, copyable source member. `juice_core` is the
 // tool-provided module face — the installed executable resolves it from its
 // adjacent modules/ directory on every compile subprocess's import path — so
 // the package declares no dependency for it and carries no path into a juice
@@ -17,7 +19,6 @@
 // declarations) and resolves the face from the tool that runs it.
 PACKAGE :: Package.{
     version = "0.1.0",
-    modules = .[.{name = "juice_plugin_lint", entry = "module.jai"}],
     name    = "juice-plugin-lint",
-
+    modules = .[.{name = "juice_plugin_lint", entry = "module.jai"}],
 };

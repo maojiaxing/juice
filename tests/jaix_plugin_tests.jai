@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // The jaix member plugin at the repository root (ticket 061, spec §8.3):
 // integration and E2E coverage for the Phase 2 form. The member's unit
-// matrix lives in packages/juice-plugin-jaix/tests/jaix_plugin_tests.jai and
+// matrix lives in plugins/juice-plugin-jaix/tests/jaix_plugin_tests.jai and
 // runs with the member root as its package; this file covers the parts that
 // need the repository's test support (otter_root, the real executable child
 // runners, the published modules):
@@ -51,7 +51,7 @@ jp_jaix_exe :: () -> string {
 
 // The real member package tree in this repository.
 jp_member_package :: () -> string {
-    return path_slashes(tprint("%1/packages/juice-plugin-jaix", otter_root()));
+    return path_slashes(tprint("%1/plugins/juice-plugin-jaix", otter_root()));
 }
 
 // The jaix-demo fixture.
@@ -90,7 +90,7 @@ jp_copy_member_tree :: (dest: string) -> bool {
 }
 
 // A scratch copy of the demo fixture as a full workspace: the fixture files,
-// the real member under packages/juice-plugin-jaix and no target/ yet. The
+// the real member under plugins/juice-plugin-jaix and no target/ yet. The
 // caller decides whether the package declaration carries the exe option.
 jp_demo_workspace :: (name: string) -> string {
     root := otter_scratch(tprint("jaix-member-e2e/%1", name));
@@ -98,7 +98,7 @@ jp_demo_workspace :: (name: string) -> string {
     if !make_directory_if_it_does_not_exist(root, recursive = true) return "";
     copy_directory(jp_demo_fixture(), root);
     jp_delete_dir(package_target_dir(root));
-    if !jp_copy_member_tree(tprint("%1/packages/juice-plugin-jaix", root)) return "";
+    if !jp_copy_member_tree(tprint("%1/plugins/juice-plugin-jaix", root)) return "";
     return root;
 }
 
@@ -113,12 +113,12 @@ jp_write_demo_package_with_exe :: (root: string) -> bool {
     append(*builder, "    version = \"0.1.0\",\n");
     append(*builder, "    \n");
     append(*builder, "    executables = .[.{name = \"jaix_demo\", entry = \"src/main.jai\"}],\n");
-    append(*builder, "    workspace = .{ members = string.[\"packages/juice-plugin-jaix\"] },\n");
+    append(*builder, "    workspace = .{ members = string.[\"plugins/juice-plugin-jaix\"] },\n");
     append(*builder, "    plugins = Plugin_Declaration.[\n");
     append(*builder, "        .{builtin = \"load\"},\n        .{builtin = \"test-block\"},\n");
     append(*builder, "        .{\n");
     append(*builder, "            id      = \"juice-plugin-jaix\",\n");
-    append(*builder, "            source = .{kind = .PATH, path = \"packages/juice-plugin-jaix\"},\n");
+    append(*builder, "            source = .{kind = .PATH, path = \"plugins/juice-plugin-jaix\"},\n");
     append(*builder, "            options = Plugin_Option.[\n");
     append(*builder, "                .{key = \"config\", value = \"jaix.config.jai\"},\n");
     print_to_builder(*builder, "                .{key = \"exe\", value = %1},\n", quote_jai_string(exe));
@@ -381,9 +381,9 @@ test "E2E: a jaix transpile failure propagates diagnostics and produces no artif
     root := path_slashes(otter_scratch("jaix-member-e2e/fail"));
     jp_delete_dir(root);
     defer jp_delete_dir(root);
-    expect(jp_copy_member_tree(tprint("%1/packages/juice-plugin-jaix", root)));
+    expect(jp_copy_member_tree(tprint("%1/plugins/juice-plugin-jaix", root)));
     expect(build_seam_write(root, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"jaix-fail\",\n    version = \"1\",\n    \n    executables = .[.{name = \"jaix_fail\", entry = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"packages/juice-plugin-jaix\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"juice-plugin-jaix\", source = .{kind = .PATH, path = \"packages/juice-plugin-jaix\"}, options = Plugin_Option.[.{key = \"config\", value = \"jaix.config.jai\"}]},\n    ],\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"jaix-fail\",\n    version = \"1\",\n    \n    executables = .[.{name = \"jaix_fail\", entry = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"plugins/juice-plugin-jaix\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"juice-plugin-jaix\", source = .{kind = .PATH, path = \"plugins/juice-plugin-jaix\"}, options = Plugin_Option.[.{key = \"config\", value = \"jaix.config.jai\"}]},\n    ],\n};\n"));
     expect(build_seam_write(root, "jaix.config.jai",
         "#import \"jaix\";\nJaix_Plugin_Try_Catch :: #import \"Jaix_Plugin_Try_Catch\";\n\nget_config :: () -> Jaix_Config {\n    p := Jaix_Plugin_Try_Catch.get_plugin();\n    return .{ plugins = plugins_of(as_plugin(p)) };\n}\n"));
     expect(build_seam_write(root, "src/main.jai", "main :: () {\n    try half(1) catch;\n}\n"));
@@ -405,9 +405,9 @@ test "E2E: a missing jaix executable fails the pre-step with a clear error" {
     root := path_slashes(otter_scratch("jaix-member-e2e/noexe"));
     jp_delete_dir(root);
     defer jp_delete_dir(root);
-    expect(jp_copy_member_tree(tprint("%1/packages/juice-plugin-jaix", root)));
+    expect(jp_copy_member_tree(tprint("%1/plugins/juice-plugin-jaix", root)));
     expect(build_seam_write(root, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"jaix-noexe\",\n    version = \"1\",\n    \n    executables = .[.{name = \"jaix_noexe\", entry = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"packages/juice-plugin-jaix\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"juice-plugin-jaix\", source = .{kind = .PATH, path = \"packages/juice-plugin-jaix\"}, options = Plugin_Option.[\n            .{key = \"config\", value = \"jaix.config.jai\"},\n            .{key = \"exe\", value = \"no-such-jaix.exe\"},\n        ]},\n    ],\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"jaix-noexe\",\n    version = \"1\",\n    \n    executables = .[.{name = \"jaix_noexe\", entry = \"src/main.jai\"}],\n    workspace = .{ members = string.[\"plugins/juice-plugin-jaix\"] },\n    plugins = Plugin_Declaration.[\n        .{id = \"juice-plugin-jaix\", source = .{kind = .PATH, path = \"plugins/juice-plugin-jaix\"}, options = Plugin_Option.[\n            .{key = \"config\", value = \"jaix.config.jai\"},\n            .{key = \"exe\", value = \"no-such-jaix.exe\"},\n        ]},\n    ],\n};\n"));
     expect(build_seam_write(root, "jaix.config.jai", "// config\n"));
     expect(build_seam_write(root, "src/main.jai", "main :: () {}\n"));
 
@@ -545,7 +545,7 @@ test "E2E: an installed juice fails loudly when the jaix member is missing" {
     jp_delete_dir(root);
     defer jp_delete_dir(root);
     expect(build_seam_write(root, "package.jai",
-        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"missing-member\",\n    version = \"1\",\n    \n    executables = .[.{name = \"missing_member\", entry = \"src/main.jai\"}],\n    plugins = Plugin_Declaration.[\n        .{id = \"juice-plugin-jaix\", source = .{kind = .PATH, path = \"packages/juice-plugin-jaix\"}, options = Plugin_Option.[.{key = \"config\", value = \"jaix.config.jai\"}]},\n    ],\n};\n"));
+        "#import \"Juice\";\n\nPACKAGE :: Package.{\n    name    = \"missing-member\",\n    version = \"1\",\n    \n    executables = .[.{name = \"missing_member\", entry = \"src/main.jai\"}],\n    plugins = Plugin_Declaration.[\n        .{id = \"juice-plugin-jaix\", source = .{kind = .PATH, path = \"plugins/juice-plugin-jaix\"}, options = Plugin_Option.[.{key = \"config\", value = \"jaix.config.jai\"}]},\n    ],\n};\n"));
     expect(build_seam_write(root, "jaix.config.jai", "// config\n"));
     expect(build_seam_write(root, "src/main.jai", "main :: () {}\n"));
 

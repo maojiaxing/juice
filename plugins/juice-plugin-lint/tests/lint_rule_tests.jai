@@ -3,7 +3,7 @@
 
 // The member's own tests (ticket 044): the v1 lint rule's predicate,
 // exercised with this package as the root (juice test from
-// packages/juice-plugin-lint). The module itself stays test-free — the
+// plugins/juice-plugin-lint). The module itself stays test-free — the
 // registration program compiles it directly — so its tests live here in
 // tests/, like any user package's. The assertion names come from the
 // published Testing face the generated driver imports (the single register

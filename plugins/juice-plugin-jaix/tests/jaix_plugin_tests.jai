@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Member plugin unit tests (ticket 061): the `juice-plugin-jaix` member's
 // own suite, run with the member root as the package root (`juice test` from
-// packages/juice-plugin-jaix). The shared Phase-1 unit matrix migrated here
+// plugins/juice-plugin-jaix). The shared Phase-1 unit matrix migrated here
 // from the root tests (ticket 058's tests/jaix_plugin_tests.jai) because the
 // value now lives in this member: identity and options schema, the package
 // scan matrix (the plugin's own walk and exclusion set), executable

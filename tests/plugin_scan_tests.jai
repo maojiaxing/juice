@@ -586,10 +586,10 @@ test "工作区插件扫描：真实仓库根声明面（生产发现 + 扫描�
     expect(scan.hits.count == 2);
     expect(pls_private_plugin_import_name_ok(scan.hits[0].module_name, "juice-plugin-lint"));
     expect(scan.hits[0].rel_path == "module.jai");
-    expect(paths_equal(scan.hits[0].abs_path, path_slashes(tprint("%1/packages/juice-plugin-lint/module.jai", otter_root()))));
+    expect(paths_equal(scan.hits[0].abs_path, path_slashes(tprint("%1/plugins/juice-plugin-lint/module.jai", otter_root()))));
     expect(pls_private_plugin_import_name_ok(scan.hits[1].module_name, "juice-plugin-jaix"));
     expect(scan.hits[1].rel_path == "module.jai");
-    expect(paths_equal(scan.hits[1].abs_path, path_slashes(tprint("%1/packages/juice-plugin-jaix/module.jai", otter_root()))));
+    expect(paths_equal(scan.hits[1].abs_path, path_slashes(tprint("%1/plugins/juice-plugin-jaix/module.jai", otter_root()))));
     // The jaix member carries the hooks face: the prepare's conservative
     // host trigger reports it on the repository root.
     expect(scan.has_hooks);

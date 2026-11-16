@@ -9,7 +9,7 @@
 // plugin probes PATH for "jaix" (the E2E injects the sibling jaix-cli build).
 //
 // The member package is not part of this static fixture tree (it lives at
-// packages/juice-plugin-jaix in the repository): the E2E copies the fixture
+// plugins/juice-plugin-jaix in the repository): the E2E copies the fixture
 // into a scratch workspace and copies the real member tree beside it under
 // packages/. The workspace.members path is root-relative, never a path into a
 // juice checkout (the distribution contract).
@@ -21,12 +21,12 @@ PACKAGE :: Package.{
         .{name = "jaix_demo", entry = "src/main.jai"},
     ],
     workspace = .{
-        members = string.["packages/juice-plugin-jaix"],
+        members = string.["plugins/juice-plugin-jaix"],
     },
     plugins = Plugin_Declaration.[
         .{builtin = "load"},
         .{builtin = "test-block"},
-        .{id = "juice-plugin-jaix", source = .{kind = .PATH, path = "packages/juice-plugin-jaix"},
+        .{id = "juice-plugin-jaix", source = .{kind = .PATH, path = "plugins/juice-plugin-jaix"},
             options = Plugin_Option.[
                 .{key = "config", value = "jaix.config.jai"},
             ],
