@@ -193,6 +193,10 @@ _Avoid_: mount matrix、stage/position hook、lifecycle context
 
 ## 七、转译与测试
 
+**Testing（测试断言模块）**：
+提供测试断言、失败状态记录、单个测试执行、结果汇总及诊断路径映射的导入模块。它不负责测试发现、test-block 转换、测试运行器生成或 test 命令编排。
+_Avoid_: 用 Testing 指代整条测试工具链、把 Testing 与测试运行器混为一谈
+
 **转译（Transpile）**：
 juice 进程内的锚点级文本变换，只服务 test block 与 `#load`。
 _Avoid_: jaix、pre-step（两者是外部工具或前置层，不是 Transpile）
@@ -230,12 +234,12 @@ _Avoid_: first.jai（旧名）、driver.jai（旧两文件形态；driver 是嵌
 _Avoid_: build directory、输出目录（不区分区根与落点）
 
 **发布源目录（Publication source directory）**：
-只有 `.jai` 源、没有 `package.jai` 的目录，唯一用途是给发布步骤提供源文本。`packages/juice/` 下有两个实例：`module.jai`（包声明词汇——`Package` / `Product` / `Source` / `Dependency` / `Plugin_Declaration` / `Workspace_Config`）与 `testing.jai`（Testing API 定义面，prefixed 公开名，不含 `@test`）。发布步骤对两者都是**整文件读取**：前者加标准导入头成为安装树里的 `Juice` 模块，后者剥掉 `Testing_` 前缀成为 `Testing.jai`。两者都不进 `workspace.members`、没有 `Package.name`、不可被当作包 `#import`；juice 自身编译单元经 `src/module.jai` 的 `#load` 取得其中的裸名。
-_Avoid_: 把它当作包（加 `package.jai` 会立刻把它变成可依赖目标，破坏"插件包可整体复制、不带 juice 检出路径"的分发契约）、声明模块、schema 目录
+只有 `.jai` 源、没有 `package.jai`，用于给发布步骤提供源文本的目录。当前实例为 `packages/juice/module.jai`（包声明词汇——`Package` / `Product` / `Source` / `Dependency` / `Plugin_Declaration` / `Workspace_Config`）：发布步骤整文件读取并加标准导入头，成为安装树里的 `Juice` 模块；juice 经 `src/module.jai` 的 `#load` 使用这些声明。它不进 `workspace.members`、没有独立包身份。Testing 不再属于此类：它由标准成员包 `packages/testing/` 提供，声明入口 `src/module.jai` 逐字节复制为安装树的 `Testing.jai`，行为自测属于成员。
+_Avoid_: 把源码包身份与安装布局混为一谈、声称新增包声明必然破坏可搬迁分发、把 Testing 成员称为发布源目录
 
 **段标记协议（Publication section markers）**：
-**已退役**。发布面曾经从 `src/module.jai` 里按 `// [PUBLICATION-SECTION …]` / `// [PUBLICATION-CUT …]` 标记裁出，并配一套"缺标/重复/改名/乱序即响亮失败"的守则。两个发布面各有实体文件后，不再存在"裁错段"这个失败模式，整套标记协议（扫描器、段抽取、裁剪标记）一并删除。保留的同类机制只有 `strip_testing_prefix`：它是 token 级重命名，不是裁剪。
-_Avoid_: 重新引入段标记（有独立源文件就不需要裁剪）、把 `strip_testing_prefix` 当作裁剪
+**已退役**。发布面曾经从 `src/module.jai` 按段标记抽取，并校验缺失、重复与乱序。独立源码入口消除了裁错段的失败模式；Testing 的前缀重命名 adapter 也已随成员化删除，发布不再改写其内容。
+_Avoid_: 重新引入段标记或 Testing 前缀转换、为发布另存一份实现
 
 **测试临时区（Target scratch）**：
 测试在 `target/tests/` 下的临时根，经 `target_scratch_dir` 派生；每次 test 命令启动先整区 prune，运行期测试自行重建。

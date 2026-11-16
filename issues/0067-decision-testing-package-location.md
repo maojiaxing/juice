@@ -9,6 +9,8 @@ parent: 0065
 
 > 2026-10-22 重锚：按新 juice（otter 实现）重写；旧 `modules/Testing.jai` 查找与旧发布树描述已失效。共同事实见 `0065` Notes。
 
+> **当前决策修订：外部 Testing 兄弟包方案已废弃。** `jai/testing/` 定位及其 `JUICE_TESTING_ROOT` / `../testing` 外部权威源探测方案不再执行。当前探索 juice 仓库内 `packages/testing/` 工作区成员；已确认迁移断言、失败状态、执行汇总、路径映射及其自测，不迁转译与测试发现，公开导入和自包含分发不变。已确认按标准 package 布局采用 `packages/testing/src/module.jai`，显式导出 `Testing`，不使用成员 `modules/Testing.jai` 专用源码布局。安装树仍为 `modules/Testing.jai`，由入口源码逐字节复制生成；自测必须消费本包声明入口，不能回退宿主旧副本。当前完整决策见 0065。下文外部包 Resolution 为历史记录，不再作为新迁移的实施依据。
+
 ## Question
 
 新 juice 在运行时如何定位 testing 包 / 其模块面，并把哪个目录前插到编译 import path，使 `#import "Testing"`（以及 jaix 消费者对 `Jaix_Plugin_Test_Block` 的导入）解析到它？

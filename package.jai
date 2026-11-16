@@ -10,6 +10,8 @@ PACKAGE :: Package.{
     executables = .[
         .{name = "juice", entry = "src/main.jai"},
     ],
+    // Testing is a standard module member. Plugin members remain juice's own
+    // integrations; membership alone never activates a plugin.
     // The two plugin packages live under plugins/ (they are juice's own
     // integrations, not third-party members); workspace.members makes each
     // package discoverable and Package.plugins declares it as a plugin
@@ -28,7 +30,7 @@ PACKAGE :: Package.{
     // builds run no jaix work while the declaration keeps the member wiring
     // exercised.
     workspace = .{
-        members = string.["plugins/juice-plugin-lint", "plugins/juice-plugin-jaix"],
+        members = string.["packages/testing", "plugins/juice-plugin-lint", "plugins/juice-plugin-jaix"],
     },
     plugins = Plugin_Declaration.[
         .{builtin = "load"},

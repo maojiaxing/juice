@@ -1,15 +1,13 @@
-// Publication transforms (ticket 030, spec §9): the pure text-to-text
-// generators producing the three published module artifacts from two
-// publication source directories, plus the target/modules landing path
-// helpers:
+// Publication generators producing the three published module artifacts from
+// their dedicated source files, plus the target/modules landing path helpers:
 //
 // - Juice directory module (target/modules/Juice/module.jai): the declaration
 //   vocabulary copied whole from packages/juice/module.jai (the Package
 //   compatibility face — the field shapes old juice modules/Juice.jai
 //   declares);
-// - Testing.jai (target/modules/Testing.jai): packages/juice/testing.jai with
-//   the Testing_ public-name prefixes stripped — flat module, bare exports,
-//   the old juice Testing.jai API-compatible face;
+// - Testing.jai (target/modules/Testing.jai): a byte-for-byte copy of the
+//   standard workspace member's packages/testing/src/module.jai entry, with
+//   bare exports and no self-tests;
 // - juice_core.jai (target/modules/juice_core.jai): a generated module that
 //   #loads the plugin face closure by module-relative paths (ticket 049) and
 //   re-declares the two built-in id constants extracted verbatim from
@@ -36,19 +34,15 @@
 // spike fact). The published modules/ tree therefore relocates unchanged;
 // no build-machine src path crosses the publication boundary.
 //
-// Section boundary contract: there is none any more. Both published faces are
-// read whole from their own file — packages/juice/module.jai and
-// packages/juice/testing.jai — so nothing in this module cuts a larger file
-// into a published face. The declaration vocabulary and the Testing face each
-// own a file, and juice's own @test procedures live in src/module.jai, which is
-// never published. A publication source that is empty fails loudly
-// (ok = false); there is no marker whose absence or duplication could
-// silently publish the wrong cut, because there is no cut.
+// Section boundary contract: there is none. The declaration vocabulary lives
+// in packages/juice/module.jai; the Testing implementation lives in the standard
+// workspace member packages/testing/src/module.jai. Member self-tests live
+// outside that entry and are never published. An empty Testing source fails
+// loudly (ok = false), without requiring a section marker or member manifest.
 //
-// Line fidelity (the transpile discipline): the prefix strip rewrites IDENT
-// tokens only, so the published Testing.jai is line-for-line identical to
-// packages/juice/testing.jai (published line N = source line N) — diagnostics
-// and path_mapping stay verifiable against the definition source.
+// Testing publication is the identity: every byte, including imports, comments
+// and line endings, survives unchanged. Diagnostics and path_mapping therefore
+// refer to the exact definition-source line and column.
 //
 // Pure functions only — the caller (the build.jai metaprogram, ticket 031)
 // reads the definition source and writes the artifacts. This module is a
@@ -67,8 +61,6 @@
 #import "File";
 #import "File_Utilities";
 #import "String";
-
-TESTING_PREFIX :: "Testing_";
 
 // The plugin face closure the generated juice_core module #loads (module-
 // relative paths under the plugin face landing directory — ticket 049) and
@@ -103,9 +95,9 @@ line_trimmed :: (line: string) -> string {
 // Publication
 // ---------------------------------------------------------------------------
 
-// A publication source without its leading `#import "Basic";` line or
-// trailing newlines: each published face re-adds a single standard import
-// line, so the source own import must not appear twice.
+// The Juice declaration source without its leading `#import "Basic";` line or
+// trailing newlines. Juice publication re-adds its standard import; Testing
+// publication does not use this transform.
 publication_source_body :: (source: string) -> string {
     body := source;
     while body.count > 0 && (body[body.count - 1] == #char "\n" || body[body.count - 1] == #char "\r") {
@@ -138,34 +130,20 @@ publish_juice_module :: (source: string) -> (text: string, ok: bool) {
     return tprint("#import \"Basic\";\n\n%1\n", body), true;
 }
 
-// Strips the Testing_ prefix from every IDENT token carrying it — the
-// bootstrap prefixed public names (Testing_run/Testing_finish/Testing_expect/
-// Testing_expect_eq/Testing_fail, the Testing_Path_Pair declaration and the
-// Testing_path_mapping references). The edit spans are token-bounded, so the
-// line structure is preserved exactly (the line-fidelity discipline) and no
-// comment or string content is touched.
-strip_testing_prefix :: (source: string) -> string {
-    tokens := lex_source(source);
-    edits: [..] Edit;
-    for tok: tokens {
-        if tok.kind != .IDENT continue;
-        text := token_text(source, tok);
-        if text.count > TESTING_PREFIX.count && slice(text, 0, TESTING_PREFIX.count) == TESTING_PREFIX {
-            array_add(*edits, .{ start = tok.start, end = tok.end, text = slice(text, TESTING_PREFIX.count, text.count - TESTING_PREFIX.count) });
-        }
-    }
-    return apply_edits(source, edits);
-}
-
-// The published Testing module content: packages/juice/testing.jai with the
-// Testing_ prefixes stripped, behind the standard Basic import line. The
-// source carries no @test procedures — juice's own tests of this face live in
-// src/module.jai — so the published module is test-free and contributes no
-// procedures to a consumer's program.
+// The published Testing module is packages/testing/src/module.jai unchanged.
+// Validate that something besides whitespace and the optional Basic import is
+// present, but never publish the validation view: successful output preserves
+// every source byte, including CRLF and an absent final newline.
 publish_testing_module :: (source: string) -> (text: string, ok: bool) {
-    body := publication_source_body(source);
-    if body.count == 0 return "", false;
-    return tprint("#import \"Basic\";\n\n%1\n", strip_testing_prefix(body)), true;
+    for line: split(source, "\n") {
+        trimmed := line_trimmed(line);
+        while trimmed.count > 0 && trimmed[trimmed.count - 1] == #char "\r" {
+            trimmed = line_trimmed(slice(trimmed, 0, trimmed.count - 1));
+        }
+        if trimmed == "" || trimmed == "#import \"Basic\";" continue;
+        return source, true;
+    }
+    return "", false;
 }
 
 // ---------------------------------------------------------------------------

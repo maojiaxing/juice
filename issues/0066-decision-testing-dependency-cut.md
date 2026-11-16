@@ -11,6 +11,8 @@ parent: 0065
 >
 > 2026-10-22 补充：测试发现源（`src/test_discovery.jai`）的自包含/发布问题与 Testing 定义面同构但独立，归 0075；本票只定 Testing 定义面。
 
+> **当前决策修订：外部 Testing 兄弟包方案已废弃。** 本票依赖外部 Testing 权威源的 vendored 双份源码与同步测试方案不再执行。当前已确认仓库内 Testing 工作区成员保留单一裸名实现，删除根包直接加载、Testing_ 前缀与发布重命名 adapter；行为自测通过子进程导入成员源码，自举自包含与安装消费契约不变。源码已定为标准成员入口 `packages/testing/src/module.jai`，发布逐字节复制；导入接线须沿普通包声明验证，当前完整决策见 0065。下文 Resolution 为历史记录。
+
 ## Question
 
 Testing 模块迁出 juice 后，新 juice 自身构建（bootstrap `build.jai` + Build command + 自托管测试程序）如何满足 `#import "Testing"` / Testing 定义面？

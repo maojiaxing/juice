@@ -91,14 +91,11 @@ ic_lines :: (lines: [] string) -> string {
 // JUICE_CORE_LOAD_FILES order.
 ic_real_published_texts :: () -> ([..] string, bool) {
     texts: [..] string;
-    source, source_ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
-    if !source_ok return texts, false;
-    // The Juice face and the built-in id constants come from the declaration
-    // vocabulary's own file (packages/juice/module.jai); Testing is still cut
-    // out of src/module.jai.
+    // Publication reads the declaration vocabulary and the standard Testing
+    // member entry directly; no member manifest is needed to publish either.
     declaration, declaration_ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
     if !declaration_ok return texts, false;
-    testing_source, testing_source_ok := read_entire_file(tprint("%1/packages/juice/testing.jai", otter_root()));
+    testing_source, testing_source_ok := read_entire_file(tprint("%1/packages/testing/src/module.jai", otter_root()));
     if !testing_source_ok return texts, false;
     discovery, discovery_ok := read_entire_file(tprint("%1/src/test_discovery.jai", otter_root()));
     if !discovery_ok return texts, false;
@@ -289,11 +286,50 @@ publication_install_verify_complete :: () {
     expect(check.ok, "a complete installation must verify: %", check.reason);
     expect(check.reason == "");
 
+    testing_source, source_ok := read_entire_file(tprint("%1/packages/testing/src/module.jai", otter_root()));
+    installed_testing, installed_ok := read_entire_file(testing_module_path_in(modules_directory));
+    expect(source_ok && installed_ok);
+    expect(installed_testing == testing_source, "the installation must contain the exact Testing member entry");
+    marker, marker_ok := read_entire_file(install_manifest_path(modules_directory));
+    expect(marker_ok);
+    manifest, parsed := parse_install_manifest(marker);
+    expect(parsed);
+    expect(manifest.artifacts[1].relative_path == "Testing.jai");
+    expect(manifest.artifacts[1].digest == hash_hex(testing_source),
+           "the marker must record the unmodified member source digest");
+
     // The plugin entry contract is part of the unit: an executable whose ABI
     // differs from the marker's rejects the installation.
     check = verify_install(modules_directory, abi_value + 1);
     expect(!check.ok);
     expect(find_index_from_left(check.reason, "plugin ABI") >= 0, "the reason must name the plugin ABI: %", check.reason);
+} @test
+
+publication_install_relocated_set_preserves_identity :: () {
+    original_directory := ic_scratch("relocation-original");
+    relocated_directory := ic_scratch("relocation-copy");
+    defer delete_directory_full(original_directory);
+    defer delete_directory_full(relocated_directory);
+    expect(ic_publish_real_set(original_directory));
+    expect(make_directory_if_it_does_not_exist(relocated_directory, recursive = true));
+    copy_directory(original_directory, relocated_directory);
+
+    original_marker, original_ok := read_entire_file(install_manifest_path(original_directory));
+    relocated_marker, relocated_ok := read_entire_file(install_manifest_path(relocated_directory));
+    expect(original_ok && relocated_ok);
+    expect(relocated_marker == original_marker, "relocation must not regenerate or rewrite the marker");
+    for artifact: install_artifact_paths(original_directory) {
+        original, source_ok := read_entire_file(artifact.absolute_path);
+        relocated, copied_ok := read_entire_file(tprint("%1/%2", relocated_directory, artifact.relative_path));
+        expect(source_ok && copied_ok);
+        expect(relocated == original, "relocation must preserve % byte for byte", artifact.relative_path);
+    }
+    plugin_abi_line, plugin_abi_ok := ic_plugin_abi_line();
+    expect(plugin_abi_ok);
+    plugin_abi, plugin_abi_value_ok := constant_integer_value(plugin_abi_line, "JUICE_PLUGIN_ABI_VERSION");
+    expect(plugin_abi_value_ok);
+    check := verify_install(relocated_directory, plugin_abi);
+    expect(check.ok, "a copied installation set must verify without republishing: %", check.reason);
 } @test
 
 publication_install_verify_missing_marker :: () {
@@ -695,6 +731,7 @@ publication_install_external_project :: () {
     expect(ic_write(project, "packages/member/module.jai", "Member_Value :: 55;\n"));
     expect(ic_write(project, "tests/project_tests.jai", ic_lines(string.[
         "#import \"Testing\";",
+        "#load \"../src/module.jai\";",
         "",
         "external_project_test :: () {",
         "    expect(External_Value == 1);",

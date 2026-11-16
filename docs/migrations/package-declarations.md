@@ -6,7 +6,7 @@
 - `src/manifest.jai:276` — `Unknown manifest record: %; see docs/migrations/package-declarations.md`
 - `src/manifest.jai:416` — `[juice] Migration: docs/migrations/package-declarations.md; ...`
 
-本文件只描述声明语义。它不覆盖独立的 Testing 迁移 effort（`issues/0065` 及后续票），也不覆盖兄弟仓库。
+本文件以声明语义为主；§7 与相关入口说明同步 Testing 标准工作区成员迁移（`docs/spec.md` §13）的实施结果，状态为**已实施并验证（仅 Windows）**，证据见 [Testing 成员迁移验收记录](../implementation/testing-package-migration.md)。这不继承旧 Testing effort（`issues/0065` 及后续票）的外部包、转译/发现迁出或 jaix 范围，也不覆盖兄弟仓库；下文已有 A01–A16 证据仍是历史记录，不作为本次迁移的验收结果，也不因本轮成功改写为重新全量验收通过。
 
 ## 0. 结论先行
 
@@ -183,6 +183,7 @@
   这些 shim 落在本包自己的 `target/packages/`（包私有），所以不同包可以声明同名模块，一个包的模块名不会变成另一个包的导入名。
   文件级 `#load` 仍然可用，两种写法不冲突。验收用例：`dependency_resolution_own_module_public_import`（本包程序与本包模块互相引用，`build`/`run`）、
   `dependency_resolution_own_module_workspace_members`（工作区成员，成员间同名模块互不覆盖）、`dependency_resolution_own_module_in_test_source`（`test` 的测试程序）。
+- **Testing 成员迁移补充（已实施并验证）**：标准入口 `module.jai` / `src/module.jai` 的测试加载去重计入生成 driver 隐式发出的 `#import "Testing"`，不能只检查手写 import；已通过模块导入的入口不再由扫描清单重复 `#load`。按单名生成的本包 shim 目录置于该次编译导入路径首位，保证 `testing` 成员解析到自己的 `src/module.jai`，而非安装单元的 `Testing.jai`；不以特殊源码 `modules/` 目录规避重入。本轮验证结果见 §7 与 [验收记录](../implementation/testing-package-migration.md)，不由上一条既有用例替代背书。
 - 传递依赖不会泄漏为消费方的直接导入名：`#import` 提供方的传递模块仍然失败（`dependency_resolution_transitive_visibility`）。
 - 依赖的最终导入名不得覆盖本包模块、其他直接导入或编译器标准模块：该冲突在解析阶段报错（`dependency_resolution_module_identity_and_name_conflicts`）。
 
@@ -232,18 +233,21 @@
 （`src/publication.jai:718`）。缺失、混装、被替换的发布件都会在命令开始前失败；没有其他安装目录回退，也没有用户兼容开关。
 因此本指南的所有命令都要求 `juice.exe` 与 `modules/` 相邻；把 `target/juice.exe` 单独复制走不能运行。
 
-两个发布源目录：`packages/juice/module.jai`（包声明词汇）与 `packages/juice/testing.jai`（Testing API
-定义面）。两者都不是包：没有 `package.jai`，所以不进 `workspace.members`、没有 `Package.name`、不可被当作包
-`#import`。发布步骤对两者都是**整文件读取**——前者加标准导入头成为 `modules/Juice/module.jai`，后者剥掉
-`Testing_` 前缀成为 `modules/Testing.jai`。发布产物与旧段裁剪时代**逐字节相同**（发布测试的字节钉未修改即通过）。
+**Testing 标准成员迁移（已实施并验证，仅 Windows）**：安装布局保持不变，改变的是定义源与测试归属；本轮证据见 [Testing 成员迁移验收记录](../implementation/testing-package-migration.md)。
 
-段标记协议（`// [PUBLICATION-SECTION …]` / `// [PUBLICATION-CUT …]`、扫描器、段抽取）已整体退役：两个面各有
-实体文件后，不再存在"裁错段"这个失败模式。原来由裁剪标记守的契约改为结构性保证——`packages/juice/testing.jai`
-不含 `@test`，juice 自己的 Testing 面自测过程留在 `src/module.jai`，两边不可能同时携带。有测试钉住这两点。
+- **Juice 声明发布源目录保留**：`packages/juice/module.jai` 仍只承载包声明词汇；该目录无 `package.jai`，不是工作区成员。发布时整文件读取并加标准导入头，生成 `modules/Juice/module.jai`。是否存在 `package.jai` 只影响包身份，并不单独决定发布模块是否可搬迁；可搬迁性由完整安装闭包保证。
+- **Testing 改为标准成员**：`packages/testing/package.jai` 声明 `name = "testing"`，显式 `modules = .[.{name = "Testing", entry = "src/module.jai"}]`、`executables = Product.[]`，纳入根工作区。唯一实现是 `packages/testing/src/module.jai`：公开 API 使用裸名、不含 `@test`；不再保留 `packages/juice/testing.jai` 或第二份 prefixed/vendored 实现。
+- **发布直接复制**：build 直接读取成员 `src/module.jai`，逐字节复制到 `modules/Testing.jai`；不拼导入头、不剥前缀、不规范化换行。安装后仍可 `#import "Testing"`，普通消费方无需声明 dependency，也不读取仓库内成员路径。自举源码只取自仓库，不依赖兄弟检出、已安装 Testing 或同步步骤。
+- **测试归成员，根留集成**：断言、失败状态、`run` / `finish`、`path_mapping` 等行为自测迁到 `packages/testing/tests/`，测试样例位于 `packages/testing/tests/data/`。成员以 **1 个综合子进程行为自测**覆盖 pass/fail、格式文案、defer/return、reset/mapping，故意失败与状态重置不污染外层测试状态。根 `src/module.jai` 只 `#load` Juice 声明源，Testing load、前缀实现与 `strip_testing_prefix` 已删除。根测试只保留与 Testing 有关的发布、安装与命令集成验证。
+- **选包使用标准规则**：在 `packages/testing/` 内 `juice test` 独立测试该成员；根 `juice test --workspace` 包含它；根默认 `juice test` 仍只选根包。标准入口去重与单名 shim 的优先级见 §4.3，不创建特殊源码 `modules/` 目录。
 
-`src/module.jai` 保留原名，不是因为挪不动，而是因为 `src/module.jai` 是 spec §5.2 包入口探测的约定路径
-（`src/plugin_scan.jai`、`src/dependency.jai` 都按该字面量推导导入名）；改名会改变探测结果。它的内容现在只有：
-两行 `#load` + Testing 面的自测过程。
+段标记协议（`// [PUBLICATION-SECTION …]` / `// [PUBLICATION-CUT …]`、扫描器、段抽取）已退役；本次迁移不恢复段裁剪。Testing 的 test-free 保证来自唯一实现与成员 `tests/` 的结构分离，而不是段尾标记或前缀转换。`src/module.jai` 保留标准入口路径（spec §2.3），不再承担 Testing 自测。
+
+旧 `../testing` 兄弟包、`JUICE_TESTING_ROOT` 与 vendored 同步方案全部废弃；转译、发现与 jaix 迁出不在本次范围。
+
+**本轮验证结果（仅 Windows）**：`jai build.jai`、Testing 成员 `juice test`、根新增 `testing_package_declared` 回归均 exit 0。完整 `target/juice-testing-verify.exe test --workspace` exit 0，耗时 **1412.4s**；root **668 passed / 0 failed**、Testing **1 / 0**、jaix **17 / 0**、lint **3 / 0**。测试包含 debug/release 自举、安装搬迁及负向用例，运行后 `target/recovery` 为空；完整日志为 `target/evidence/testing-package-workspace.log`。
+
+`packages/testing/src/module.jai` 与 `target/modules/Testing.jai` 均为 **2542 字节**、逐字节完全相同，SHA-256 均为 `3ef4ac1c0ca0904869921c6418f1d47ea8b924fbb8aac47902cc1e613ca2162e`。上述结果及范围见 [验收记录](../implementation/testing-package-migration.md)；**Linux 与大小写敏感文件系统未验证**。下文 A01–A16 的历史证据不变，不把本次迁移成功泛化为旧矩阵重新全量验收。
 
 ## 8. 证据规则
 
@@ -892,8 +896,8 @@ check_internal_rule :: () {
 
 1. 本指南全部运行证据来自 Windows + `jai 0.2.9`。Linux 或大小写敏感文件系统未运行，不能据此声明跨平台通过。
 2. `target/evidence/` 是易失证据区（`clean` 会删除）。需要长期保留的验收记录应复制到 `docs/implementation/` 或由 0096 收进其 Resolution。
-3. `test` 命令的测试程序会 `#load` 包内每个不在根级 `target/`、`modules/`、`tests/data/` 之下的 `.jai` 文件。因此本包模块入口若落在这些扫描区内，同一文件再被 `#import` 会重复声明（这与文件级 `#load` 的既有行为相同，与本票无关）。把本包公开模块放在包内 `modules/` 下即可避免；`build`/`run` 不受此限，模块入口可在包内任意位置。
-4. 本指南没有展开：Testing 迁移 effort、兄弟仓库、静态/动态库产物、包注册中心、版本范围求解。
+3. **标准模块入口的测试重入修订（已实施并验证）**：`test` 扫描仍排除根级 `target/`、`modules/`、`tests/data/` 等目录，但本包标准入口 `module.jai` / `src/module.jai` 的去重计入生成 driver 隐式 `#import "Testing"`，已导入入口不再重复 `#load`（§4.3）。旧“必须放入源码 `modules/` 目录”的规避办法不再作为 Testing 成员方案；其他入口或主动混用 `#load` / `#import` 不在本项扩张承诺内。本轮结果见 §7（仅 Windows），`build` / `run` 的入口规则不变。
+4. 本指南只在 §7 及相关入口说明同步 Testing 标准成员迁移，不展开旧 effort 的外部包、转译/发现或 jaix 迁出；兄弟仓库、静态/动态库产物、包注册中心、版本范围求解仍不覆盖。
 5. 以下行为在本指南的示例中没有执行：同名成员与 Git 来源冲突（A02）、不同来源同名包并存（A03）、完整多跳环链路（A04）、插件坏 options 与派生视图冲突（A06/A08）、无记录离线/短修订拒绝（A09）、失败保旧状态与成员隔离（A10）、缓存清理与状态损坏与移根新上下文与 XDG 回退（A11）、Git 内部相对引用与检出内工作区（A12）、未选中成员阻止操作与下级包测试扫描剪除（A13）、链接拒绝（A15）、安装单元缺失/混装（A16）。
    这些行为已由 0096 用真实 CLI 用例补齐并执行，逐条映射与用例名见
    [`docs/implementation/package-declaration-acceptance.md`](../implementation/package-declaration-acceptance.md) §2、§5；

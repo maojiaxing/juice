@@ -197,22 +197,27 @@ test "E2E: jai build.jai self-builds a test-free root in debug and publishes the
         if file_exists(flat_seed) file_delete(flat_seed);
     }
 
+    // Bootstrap reads the member entry directly, before any workspace discovery.
+    // The member manifest must not be needed to publish or compile this root.
+    testing_manifest_path := path_slashes(tprint("%1/packages/testing/package.jai", otter_root()));
+    testing_manifest_backup := path_slashes(otter_recovery_path("bootstrap-testing-package.jai"));
+    expect(park_source_file(testing_manifest_path, testing_manifest_backup));
+    defer expect(restore_source_file(testing_manifest_path, testing_manifest_backup));
+
     result, _, _ := run_bootstrap_child(string.[]);
     expect(expect_exit("bootstrap-debug", result, 0, "bootstrap child"));
 
     // The three published artifacts exist and match the in-process
     // publication byte for byte (005 US 19: publication drift fails
     // loudly); the fourth is the verbatim discovery source (ticket 037).
-    source, source_ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
-    expect(source_ok);
-    // The Juice face and the built-in id constants come from the declaration
-    // vocabulary's own file; Testing is still cut out of src/module.jai.
+    // Juice and its built-in id constants keep their declaration source;
+    // Testing is the standard member entry copied without transformation.
     declaration, declaration_ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
     expect(declaration_ok);
-    testing_source, testing_source_ok := read_entire_file(tprint("%1/packages/juice/testing.jai", otter_root()));
+    testing_source, testing_source_ok := read_entire_file(tprint("%1/packages/testing/src/module.jai", otter_root()));
     expect(testing_source_ok);
     expected_juice, _ := publish_juice_module(declaration);
-    expected_testing, _ := publish_testing_module(testing_source);
+    expected_testing := testing_source;
     expected_core, _ := publish_juice_core(declaration);
     juice_path, testing_path, core_path, discovery_path := bootstrap_published_paths();
     actual_juice, juice_read_ok := read_entire_file(juice_path);
@@ -277,13 +282,14 @@ test "E2E: jai build.jai self-builds a test-free root in debug and publishes the
     expect(find_index_from_left(compile_driver, tprint("add_build_file(%1, workspace);", quote_jai_string(source_entry_path))) >= 0,
            "a test-free bootstrap must compile the original entry");
 
-    // Publication cuts the Testing self-tests from the consumer face. It
+    // The Testing member entry is already test-free. Its verbatim publication
     // compiles directly with bare exported names and needs no STRIP import
     // override; the explicit inline-test fixture above covers view landing.
     expect(find_index_from_left(compile_driver, quote_jai_string(target_testing_module_dir(otter_target_dir()))) < 0,
            "a test-free Testing publication must not select a STRIP view");
     expect(find_index_from_left(actual_testing, "run :: (name: string") >= 0, "the published Testing face must export bare names");
-    expect(find_index_from_left(actual_testing, "Testing_run") < 0);
+    expect(find_index_from_left(actual_testing, "Testing_") < 0);
+    expect(find_index_from_left(actual_testing, "@test") < 0);
 
     // The self-built artifact replaces the suite's exe; the version smoke
     // proves the product is complete (the version command's output
@@ -352,7 +358,7 @@ test "E2E: a version drift between package.jai and JUICE_VERSION fails the self-
     // Rewrite package.jai's VERSION record for the duration of the test
     // (the assertion driver compiles the manifest and #asserts against the
     // JUICE_VERSION constant line extracted from src/commands/version.jai;
-    // the publish step is unaffected — it reads src/module.jai — so the
+    // the publish step reads the dedicated publication entries, so the
     // run fails at the assertion, before the compile child). The defer
     // restores the manifest so later E2E children keep building green.
     manifest_path := tprint("%1/package.jai", otter_root());
@@ -382,9 +388,10 @@ test "E2E: a version drift between package.jai and JUICE_VERSION fails the self-
     ]));
 }
 
-test "E2E: a missing definition source fails the self-build" {
-    // Park the definition source for the duration of the test: the publish
-    // step reads src/module.jai first, so the build fails before any child
+test "E2E: a missing Testing member entry fails before publication" {
+    // Park the member entry: bootstrap reads it directly and fails before
+    // publication or any compiler child, without falling back to an old source.
+    // The build fails before any child
     // spawns — the observable is the exit code only (the parent's failure
     // print is swallowed by exit(1), the pinned Jai fact; the loud-output
     // child failure seam is covered by the version drift test above). The
@@ -393,13 +400,42 @@ test "E2E: a missing definition source fails the self-build" {
     // process killed mid-run leaves the only copy recoverable; the defer
     // restores from the backup and asserts the restore so later E2E
     // children keep building green.
-    module_path := path_slashes(tprint("%1/src/module.jai", otter_root()));
-    backup_path := path_slashes(otter_recovery_path("bootstrap-definition-module.jai"));
-    expect(park_source_file(module_path, backup_path));
-    defer expect(restore_source_file(module_path, backup_path));
+    testing_path := path_slashes(tprint("%1/packages/testing/src/module.jai", otter_root()));
+    backup_path := path_slashes(otter_recovery_path("bootstrap-testing-module.jai"));
+    modules_directory := target_modules_dir(otter_target_dir());
+    expect(park_source_file(testing_path, backup_path));
+    defer {
+        expect(restore_source_file(testing_path, backup_path));
+        expect(ensure_published_modules());
+    }
+    expect(delete_directory_full(modules_directory));
 
     result, _, _ := run_bootstrap_child(string.[]);
-    expect(expect_exit("bootstrap-missing-source", result, 1, "bootstrap child"));
+    expect(expect_exit("bootstrap-missing-testing-source", result, 1, "bootstrap child"));
+    for artifact: install_artifact_paths(modules_directory) {
+        expect(!file_exists(artifact.absolute_path), "a failed publication must not land %", artifact.relative_path);
+    }
+    expect(!file_exists(install_manifest_path(modules_directory)));
+}
+
+test "E2E: an empty Testing member entry fails before publication" {
+    testing_path := path_slashes(tprint("%1/packages/testing/src/module.jai", otter_root()));
+    backup_path := path_slashes(otter_recovery_path("bootstrap-empty-testing-module.jai"));
+    modules_directory := target_modules_dir(otter_target_dir());
+    expect(park_source_file(testing_path, backup_path));
+    defer {
+        expect(restore_source_file(testing_path, backup_path));
+        expect(ensure_published_modules());
+    }
+    expect(write_entire_file(testing_path, "#import \"Basic\";\r\n \t\r\n"));
+    expect(delete_directory_full(modules_directory));
+
+    result, _, _ := run_bootstrap_child(string.[]);
+    expect(expect_exit("bootstrap-empty-testing-source", result, 1, "bootstrap child"));
+    for artifact: install_artifact_paths(modules_directory) {
+        expect(!file_exists(artifact.absolute_path), "an empty source must not land %", artifact.relative_path);
+    }
+    expect(!file_exists(install_manifest_path(modules_directory)));
 }
 
 test "E2E: a missing discovery source fails the self-build without a partial publication" {
@@ -494,16 +530,15 @@ bootstrap_publication_unit_marker :: () {
 
     // The marker describes exactly what this build landed, and the unit
     // verifies against the plugin ABI its own source declares.
-    source, source_ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
-    expect(source_ok);
     declaration_text, declaration_read_ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
     expect(declaration_read_ok);
-    testing_marker_source, testing_marker_read_ok := read_entire_file(tprint("%1/packages/juice/testing.jai", otter_root()));
+    testing_marker_source, testing_marker_read_ok := read_entire_file(tprint("%1/packages/testing/src/module.jai", otter_root()));
     expect(testing_marker_read_ok);
     juice_text, juice_ok := publish_juice_module(declaration_text);
     testing_text, testing_ok := publish_testing_module(testing_marker_source);
     core_text, core_ok := publish_juice_core(declaration_text);
     expect(juice_ok && testing_ok && core_ok);
+    expect(testing_text == testing_marker_source, "the marker must hash the exact Testing member entry");
     discovery_text, discovery_ok := read_entire_file(tprint("%1/src/test_discovery.jai", otter_root()));
     expect(discovery_ok);
     plugin_source, plugin_ok := read_entire_file(tprint("%1/src/plugin.jai", otter_root()));
@@ -540,6 +575,7 @@ bootstrap_publication_unit_marker :: () {
     testing_path := testing_module_path(target_dir);
     published_testing, published_testing_ok := read_entire_file(testing_path);
     expect(published_testing_ok);
+    expect(published_testing == testing_marker_source, "the installed Testing artifact must be the member source bytes");
     defer expect(write_entire_file(testing_path, published_testing));
     expect(write_entire_file(testing_path, "// juice modules/Testing.jai from another release\n"));
     mixed_result, mixed_output, mixed_errors, _ := run_command(artifact, "version", capture_and_return_output = true);

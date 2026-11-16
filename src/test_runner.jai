@@ -240,13 +240,12 @@ generate_test_metaprogram :: (options: Test_Metaprogram_Options) -> string {
     print_to_builder(*builder, "    options.output_type = .NO_OUTPUT;\n");
     print_to_builder(*builder, "    options.intermediate_path = %1;\n", quote_jai_string(path_slashes(options.intermediate_path)));
     print_to_builder(*builder, "    import_paths: [..] string;\n");
-    print_to_builder(*builder, "    array_add(*import_paths, .. options.import_path);\n");
     if options.testing_view_dir != "" {
-        // Testing module compile view special case: the view directory is
-        // prepended so `#import "Testing"` resolves to the generated view
-        // instead of the module source file.
-        print_to_builder(*builder, "    array_add(*import_paths, %1);\n", quote_jai_string(options.testing_view_dir));
+        // The selected Testing module must precede inherited command-line
+        // paths too, not only the extra paths appended below.
+        print_to_builder(*builder, "    array_add(*import_paths, %1);\n", quote_jai_string(path_slashes(options.testing_view_dir)));
     }
+    print_to_builder(*builder, "    array_add(*import_paths, .. options.import_path);\n");
     for dir: options.import_dirs {
         print_to_builder(*builder, "    array_add(*import_paths, %1);\n", quote_jai_string(path_slashes(dir)));
     }
@@ -539,11 +538,13 @@ prepare_module_instance_shims :: (stage: *Test_Compile_Stage, shim_dirs: [] stri
     return instances;
 }
 
-// True when a collected file other than the module entry itself imports the module
-// by name. The scan is textual on the raw source: a file that does not name the
-// import never reaches the module, so it is the driver (the only other way in) that
-// has to compile it.
+// True when another source imports the module, including the generated driver's
+// unconditional Testing import. Other names are checked against collected files;
+// an unimported module is still loaded directly so its own tests are discovered.
 module_is_imported_by_another_file :: (stage: *Test_Compile_Stage, entry_rel: string, module_name: string) -> bool {
+    // The generated driver imports Testing even when no scanned file does.
+    // Treat that import exactly like a source import for module-instance ownership.
+    if module_name == "Testing" return true;
     needle := tprint("#import \"%1\"", module_name);
     for file: stage.files {
         if paths_equal(path_slashes(file.rel_path), entry_rel) continue;
@@ -574,15 +575,9 @@ test_compile_front :: (stage: *Test_Compile_Stage, spawn: #type (runner_path: st
     // generated text stays byte-identical to the pre-plugin shape.
     plugin_registration := stage.registration_path;
 
-    // The single test program shape (ticket 035, spec 006 decision 2):
-    // every package's driver imports the published Testing face through
-    // `#import "Testing"` (the t9 compile view on the import path resolves
-    // it to the published flat face, or to the package's in-package module
-    // EXPAND view), and the injected runner drives the same bare register
-    // the test bodies' assertions write. The retired prefixed source-face
-    // loading path had split the register: the runner counted the prefixed
-    // face while bare assertions registered on the published one, so
-    // failing user packages printed `expect failed` but exited 0.
+    // Select this run's Testing module: a declared package module when present,
+    // otherwise the existing package-local or installed Testing view. The driver
+    // and injected runner import one module instance and share its register.
 
     // The embedded driver source: anchors the compile-time working directory
     // at the package root (the 009 deviation 2 discipline), imports the
@@ -603,6 +598,31 @@ test_compile_front :: (stage: *Test_Compile_Stage, spawn: #type (runner_path: st
         array_add(*module_shim_dirs, dependency_imports_dir(stage.package_root));
     }
     module_instances := prepare_module_instance_shims(stage, module_shim_dirs);
+
+    // An explicitly exported Testing module belongs to the tested package.
+    // Select its expanded entry through a single-name import directory: other
+    // module precedence is unchanged, and the installed Testing cannot win.
+    testing_import_directory := stage.testing_module_dir;
+    for declared_module: stage.package.modules {
+        if declared_module.name != "Testing" continue;
+        testing_entry_view := "";
+        for file, index: stage.files {
+            if paths_equal(path_slashes(file.rel_path), path_slashes(declared_module.entry)) {
+                testing_entry_view = stage.view_paths[index];
+                break;
+            }
+        }
+        if testing_entry_view == "" || !file_exists(testing_entry_view) {
+            print("[juice ERROR] Declared Testing entry has no compiled test view: %\n", declared_module.entry);
+            return false;
+        }
+        testing_import_directory = target_testing_module_dir(package_target_dir(tested_root));
+        if !make_directory_if_it_does_not_exist(testing_import_directory, recursive = true) return false;
+        if !write_entire_file(tprint("%1/Testing.jai", testing_import_directory), dependency_shim_content("Testing", testing_entry_view)) {
+            print("[juice ERROR] Could not write the declared Testing import shim.\n");
+            return false;
+        }
+    }
 
     driver_options: Test_Driver_Options;
     driver_options.package_root = tested_root;
@@ -662,7 +682,7 @@ test_compile_front :: (stage: *Test_Compile_Stage, spawn: #type (runner_path: st
     metaprogram_options.discovery_source = discovery_face_source();
     metaprogram_options.numbering_start  = 1;
     metaprogram_options.pattern          = stage.pattern;
-    metaprogram_options.testing_view_dir = stage.testing_module_dir;
+    metaprogram_options.testing_view_dir = testing_import_directory;
     if plugin_registration != "" {
         // The three options go together (tickets 042/056): the generated
         // text loads the registration and anchors its working directory at
@@ -681,7 +701,10 @@ test_compile_front :: (stage: *Test_Compile_Stage, spawn: #type (runner_path: st
         return false;
     }
 
-    result := spawn(runner_path, import_dirs);
+    compiler_search_directories: [..] string;
+    if testing_import_directory != "" array_add(*compiler_search_directories, testing_import_directory);
+    for directory: import_dirs array_add(*compiler_search_directories, directory);
+    result := spawn(runner_path, compiler_search_directories);
     if result.exit_code != 0 {
         print("[juice ERROR] Test compilation failed.\n");
         return false;

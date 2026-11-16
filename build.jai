@@ -163,8 +163,8 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     // 3. The publication step (005 decision 4: publish before compile):
     //    read the definition source and land the module artifacts under
     //    target/modules — Juice/module.jai (the Package compatibility
-    //    directory module), Testing.jai (the prefix-stripped flat module,
-    //    self-tests excluded) and juice_core.jai (the generated
+    //    directory module), Testing.jai (the verbatim, test-free standard
+    //    member entry) and juice_core.jai (the generated
     //    plugin face). Ticket 037 adds the fourth, non-module-face artifact:
     //    modules/juice_internal/test_discovery.jai, a verbatim copy of
     //    src/test_discovery.jai that the generated test metaprogram #loads
@@ -195,22 +195,18 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     // -------------------------------------------------------------
     target_dir := package_target_dir(root);
     modules_dir := target_modules_dir(target_dir);
-    module_source, module_read_ok := read_entire_file(tprint("%1/src/module.jai", root));
-    if !module_read_ok {
-        print("[Build System] Error: 无法读取定义源 src/module.jai（发布步骤）\n");
-        exit(1);
-    }
-    // The package declaration vocabulary has its own file now, so the published
-    // Juice face and the built-in id constants come from there. Testing stays in
-    // src/module.jai: its published form is a token-level strip, not a copy.
+    // Read publication sources directly, without evaluating the Testing member
+    // manifest: bootstrap must publish the modules before any manifest imports
+    // Juice. The declaration vocabulary and Testing implementation each own an
+    // entry file; neither is cut from src/module.jai.
     declaration_source, declaration_read_ok := read_entire_file(tprint("%1/packages/juice/module.jai", root));
     if !declaration_read_ok {
         print("[Build System] Error: 无法读取声明词汇源 packages/juice/module.jai（发布步骤）\n");
         exit(1);
     }
-    testing_source, testing_read_ok := read_entire_file(tprint("%1/packages/juice/testing.jai", root));
+    testing_source, testing_read_ok := read_entire_file(tprint("%1/packages/testing/src/module.jai", root));
     if !testing_read_ok {
-        print("[Build System] Error: 无法读取 Testing 面源 packages/juice/testing.jai（发布步骤）\n");
+        print("[Build System] Error: 无法读取 Testing 面源 packages/testing/src/module.jai（发布步骤）\n");
         exit(1);
     }
     discovery_source, discovery_read_ok := read_entire_file(tprint("%1/src/test_discovery.jai", root));
@@ -354,8 +350,8 @@ bootstrap_build_entry :: (entry_rel: string) -> string, bool {
     //    shared testing_module_strip_view_dir's return value.
     //
     //    The module source is the PUBLISHED face (target/modules/
-    //    Testing.jai — the step 3 product). Publication cuts its self-tests,
-    //    so the current consumer face compiles directly and the special
+    //    Testing.jai — the step 3 product). Its source is already test-free,
+    //    so the verbatim consumer face compiles directly and the special
     //    case stays disabled. The shared helper still handles sources with
     //    inline test blocks. A missing module degrades to "" (zero change)
     //    — but step 3 just wrote it, so that is a defensive branch only.

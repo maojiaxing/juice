@@ -67,14 +67,23 @@ otter_recovery_path :: (file_name: string) -> string {
     return tprint("%1/%2", target_recovery_dir(otter_target_dir()), file_name);
 }
 
-// ---------------------------------------------------------------------------
-// Testing-face self-test state (ticket 030) moved into src/module.jai's
-// testing section: the published Testing module must be self-contained
-// standard Jai, so the self_testing_failures accumulator and the g_self_*
-// globals it drives live beside the @test procedures that use them. This
-// file keeps no declarations for them (they were only ever consumed by the
-// module's self tests).
-// ---------------------------------------------------------------------------
+// Expected diagnostic coordinates shared by runner, lint and transpile tests.
+// This helper belongs to root integration tests, not the Testing member.
+fixture_line_col :: (file: string, needle: string) -> (line: s64, column: s64) {
+    source, read_ok := read_entire_file(file);
+    if !read_ok return 0, 0;
+    position := find_index_from_left(source, needle);
+    if position < 0 return 0, 0;
+    line := 1;
+    line_start := 0;
+    for index: 0..position-1 {
+        if source[index] == #char "\n" {
+            line += 1;
+            line_start = index + 1;
+        }
+    }
+    return line, position - line_start + 1;
+}
 
 // ---------------------------------------------------------------------------
 // Recording fake for the manifest evaluator spawn seam: exit_codes are
@@ -144,13 +153,11 @@ otter_exe :: () -> string {
 ensure_published_modules :: () -> bool {
     target_dir := otter_target_dir();
     modules_dir := target_modules_dir(target_dir);
-    source, read_ok := read_entire_file(tprint("%1/src/module.jai", otter_root()));
-    if !read_ok return false;
-    // The declaration vocabulary has its own file (packages/juice/module.jai);
-    // the published Juice face is read from there, not cut out of src/module.jai.
+    // Read the declaration vocabulary and the standard Testing member entry
+    // directly, without evaluating a member manifest during bootstrap.
     declaration_source, declaration_read_ok := read_entire_file(tprint("%1/packages/juice/module.jai", otter_root()));
     if !declaration_read_ok return false;
-    testing_source, testing_read_ok := read_entire_file(tprint("%1/packages/juice/testing.jai", otter_root()));
+    testing_source, testing_read_ok := read_entire_file(tprint("%1/packages/testing/src/module.jai", otter_root()));
     if !testing_read_ok return false;
     discovery_source, discovery_read_ok := read_entire_file(tprint("%1/src/test_discovery.jai", otter_root()));
     if !discovery_read_ok return false;

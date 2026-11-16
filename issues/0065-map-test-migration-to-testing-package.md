@@ -1,11 +1,38 @@
 ---
-title: 地图：test 功能迁入 testing 包并在 juice 集成（新实现重锚）
-status: open
+title: 地图：Testing 标准工作区成员迁移
+status: closed
 labels: [wayfinder:map]
 assignee: maojiaxing
 ---
 
-## Destination
+> **当前决策修订：外部 Testing 兄弟包方案已废弃。** 不再实施本文的 `jai/testing/` / `../testing` 外部权威源及其定位、vendored 同步方案。当前探索 juice 仓库内 `packages/testing/` 工作区成员，迁移实际实现与自测，不只是新增包声明。下文及 0066/0067 的外部包方案保留为历史，不再作为当前实施依据。
+
+## 当前已确认决策（内部 Testing 成员包）
+
+1. **迁移范围**：Testing 断言（`expect` / `expect_eq` / `fail`）、失败状态、单个测试执行与结果汇总（`run` / `finish`）、诊断路径映射，以及对应行为自测与专用测试助手。
+2. **本轮不迁**：juice 文本 test-block 转换、jaix AST 转换、测试发现与 test 命令编排；不继承旧外部包方案捆绑的迁移范围。
+3. **消费契约不变**：使用者继续 `#import "Testing"`，不要求额外声明 Testing 依赖；juice 安装包继续携带 Testing，维持可执行文件与相邻 `modules/` 的可搬迁布局。
+4. **自举自包含**：仅检出 juice 仓库即可自举，不访问外部 Testing 兄弟目录。
+5. **验证归属**：Testing 拥有行为自测；juice 保留发布、安装与命令集成验证，不将整个根测试设施搬入成员。
+6. **单一实现**：成员只保留一份裸名实现；移除根包对 Testing 定义源的直接 `#load`、`Testing_` 前缀和发布重命名 adapter。发布复制实现，不再维护定义源与发布面的两套名字。
+7. **同一消费 interface**：行为自测以 `#import "Testing"` 消费成员自己的源码或其可编译视图，不能误用宿主安装树的旧副本。
+8. **自测隔离**：故意失败、`run` / `finish` 状态与诊断场景放入子进程；外层测试检查子进程结果。沿用已有进程测试模式并补齐 defer、提前返回、finish 重置覆盖，不为自测新增公开 session/reset interface。
+9. **成员独立可测**：`packages/testing/` 内 `juice test` 运行完整行为自测；根包 `juice test` 保留发布与集成验证，不重复全部行为用例。仓库全量验收以 `juice test --workspace` 显式包含 Testing 成员，不改变根位置默认只选根包的语义。
+10. **标准 package 布局**：包根为 `packages/testing/`，包名 `testing`，`package.jai` 显式导出 `Testing`，源码入口为 `src/module.jai`，不提供可执行产物；自测与专用 fixtures 放在成员 `tests/`。成员以根 `workspace.members` 注册。用户明确否定为迁就旧 Testing 特例而采用成员 `modules/Testing.jai` 的布局；不增加特殊目录要求或将发布目录冒充源码入口。
+11. **成员源码接线**：成员测试和行为子进程必须消费本包声明的 Testing 入口；入口缺失失败，不静默回退宿主副本。沿普通包声明、导出模块和测试加载机制解决接线，不依赖旧 `modules/Testing.jai` 约定；不新增环境变量、开关或无关模块的全局优先级重排。须以成员源码与宿主副本产生不同可观察结果的编译测试，证明选中了成员源码，并验证标准入口不会同时经扫描加载和按名导入造成重复定义或重复状态。
+12. **逐字节发布**：自举读取 `packages/testing/src/module.jai`，原样发布至安装树 `modules/Testing.jai`；不重命名、不拼导入头、不规范化换行。源保持标准 Jai、无自测且可独立作为发布模块使用；保留源缺失、空内容等必要校验。
+13. **删除而非兼容**：删除旧 `packages/juice/testing.jai`、根包 Testing 定义源加载、前缀转换与仅服务该转换的测试，不留下第二份源码或兼容适配；行为覆盖迁入成员而非删除。
+14. **发布验收**：根包验证发布文件与成员源码逐字节一致、真实消费者可导入运行和安装树可整体搬迁。保持公开 interface 与运行行为；不以旧产物文本中涉及前缀机制的注释作为继续保留旧机制的理由。
+
+**实施状态**：已实施并完成 Windows 验收。`jai build.jai`、成员独立自测、标准入口 CLI 回归和 `test --workspace` 均 exit 0；全工作区耗时 1412.4 秒，根包 668/0、Testing 1/0、jaix 17/0、lint 3/0。源码与发布件逐字节一致。完整结果与范围见 [Testing 成员迁移验收](../docs/implementation/testing-package-migration.md)。本地图按新的内部成员范围关闭；下文旧票链及其转译、发现、jaix 外迁范围仍为已废弃方案的历史，不代表旧实施票已交付。
+
+### 接线验证
+
+迁移前可执行文件已在标准声明入口的最小包上复现 `Procedure call matches 2 possible overloads`（退出 1）：入口既被 driver 加载又与宿主 Testing 导入冲突。独立 Jai 探针确认命令行导入目录按前后顺序选同名模块，内层 workspace 可显式前置目录；两个源文件导入同一模块时共享全局状态（计数结果 1，退出 0）。探针位于系统临时目录，不作为持久验收件；仓库新增 `tests/testing_package_tests.jai` 持续验证声明入口选择、显式/隐式导入与失败汇总。
+
+旧的包内 `modules/Testing.jai` 路径方案已否定。已查明旧 Testing 特例在无转译锚点时不传递源路径（`src/commands/test.jai:283–285`），不能作为标准 package 自测接线的保证。常规导入目录以宿主 modules 为先（`src/dependency.jai:111–125`），测试生成还包含外层命令行与内层 Build_Options 两处路径组合（`src/test_runner.jai:239–254,450–464,636–646`）。自身模块 shim 根据声明的导出名和入口生成（`src/dependency_resolution.jai:808`）；接线修正将 driver 隐式导入纳入入口去重，并把该声明入口的单名 Testing shim 置于测试编译路径首位，不改变其他模块的相对导入顺序。
+
+## 历史 Destination（外部包方案已废弃）
 
 把 juice 的测试库面（断言模块 Testing + 两套 test-block 转换 + 测试发现面）与 jaix 的 test-block 插件迁入仓库根独立包 `testing/`，并在新 juice（otter 重写版；2026-10-22 已替换旧实现）中完成集成：`#import "Testing"` / `#import "Juice"` 拼写不变，juice 侧只保留集成接口/协议（发现、断言、转换由 testing 提供），juice 三路径测试全绿且既有 pin 零重定，jaix 自家测试与 fixture 更新后全绿。本 effort 决策与实施一体：票关闭时代码已落地并有测试证据。
 

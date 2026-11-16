@@ -260,7 +260,7 @@ test "The generated test metaprogram prepends the Testing module view directory"
     options.discovery_source   = "X:\\otter\\src\\test_discovery.jai";
     generated := generate_test_metaprogram(options);
     expect(find_index_from_left(generated,
-        "    array_add(*import_paths, \"X:/demo/target/transpile/testing-module\");\n    array_add(*import_paths, \"X:/demo/modules\");") >= 0);
+        "    array_add(*import_paths, \"X:/demo/target/transpile/testing-module\");\n    array_add(*import_paths, .. options.import_path);\n    array_add(*import_paths, \"X:/demo/modules\");") >= 0);
     // The whitelist wiring is the paired handover point: the generated text
     // carries the whitelist constant the caller fills.
     expect(find_index_from_left(generated, "whitelist_paths: [] string = string.[];") >= 0);
