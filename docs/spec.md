@@ -12,16 +12,16 @@
 
 ## 0. 方案概要
 
-juice 重构版：cargo 式 monorepo 仓库（根包 + `packages/` 插件成员），四阶段自举。内置命令 = build/clean/run/test/update/version/help（七命令；update 由 0091 加入，其余用户定稿 2026-10-19，§4.1）；test 用 `@test` 注记发现（metaprogram 消息循环枚举 + 生成显式调用表）；插件 = transpile/lint（+ test 五 at 钩子覆盖面），第三方插件经构建工具侧扫描标记 → 生成显式有序注册文件；**设计修订（2026-10-21）**：插件声明面统一为 `Package.plugins`（id + version + options），声明即激活/配置/排序；成员插件 id = 成员包名，根 `dependencies` 不再承担插件激活面；jaix 前置 = `juice-plugin-jaix` 的 PRESTEP 插件（Phase 1 静态内置；执行级现实 2026-10-21，061 起 Phase 2 成员包 + PRESTEP-only host 已交付）；**执行级现实（2026-10-21，040 收尾）**：真实第三方成员 = `packages/juice-plugin-lint`（lint，全链已交付）；内置 transpile 插件仍静态驻 `src/`，`juice-plugin-test`/`juice-plugin-transpile` 成员未创建；lifecycle 挂载 = 阶段枚举 + before/at/after + 声明序确定性 + 显式 ctx；运行期发布 = 三份模块面 `target/modules/Juice/module.jai`（大写目录模块）+ `Testing.jai` 平铺 + `juice_core.jai` 生成模块 + 一份内部发现源件 `target/modules/juice_internal/test_discovery.jai`（`src/test_discovery.jai` 逐字复制；私有目录契约——只被生成的测试 metaprogram 以绝对路径 `#load`，不发布为公开 import 面（编译器导入路径仍可见该目录，非强制不可导入）；执行级订正 2026-10-20，阶段 3 终态）+ 四份插件面闭包副本 `target/modules/juice_internal/plugin_face/{transpile,transpile_plugin,lifecycle,plugin}.jai`（`src/` 同名源逐字复制，`juice_core.jai` 以模块相对路径 `#load`；发布树可整体搬迁；2026-10-21，048 收尾，§9）；安装契约 = 可执行文件 + 相邻 `modules/` 目录（递归含 `juice_internal/`），不要求也不读取同级 `src/`/`target/`；插件引根 = 工具提供的模块面 `juice_core`（由 `<exe>/modules` 在每个编译子进程的导入路径上解析，插件成员不声明该依赖，§3.3）。
+juice 重构版：cargo 式 monorepo 仓库（根包 + `plugins/` 插件包），四阶段自举。内置命令 = build/clean/run/test/update/version/help（七命令；update 由 0091 加入，其余用户定稿 2026-10-19，§4.1）；test 用 `@test` 注记发现（metaprogram 消息循环枚举 + 生成显式调用表）；插件 = transpile/lint（+ test 五 at 钩子覆盖面），第三方插件经构建工具侧扫描标记 → 生成显式有序注册文件；**设计修订（2026-10-21）**：插件声明面统一为 `Package.plugins`（id + version + options），声明即激活/配置/排序；成员插件 id = 成员包名，根 `dependencies` 不再承担插件激活面；jaix 前置 = `juice-plugin-jaix` 的 PRESTEP 插件（Phase 1 静态内置；执行级现实 2026-10-21，061 起 Phase 2 成员包 + PRESTEP-only host 已交付）；**执行级现实（2026-10-21，040 收尾）**：真实第三方成员 = `packages/juice-plugin-lint`（lint，全链已交付）；内置 transpile 插件仍静态驻 `src/`，`juice-plugin-test`/`juice-plugin-transpile` 成员未创建；lifecycle 挂载 = 阶段枚举 + before/at/after + 声明序确定性 + 显式 ctx；运行期发布 = 三份模块面 `target/modules/Juice/module.jai`（大写目录模块）+ `Testing.jai` 平铺 + `juice_core.jai` 生成模块 + 一份内部发现源件 `target/modules/juice_internal/test_discovery.jai`（`src/test_discovery.jai` 逐字复制；私有目录契约——只被生成的测试 metaprogram 以绝对路径 `#load`，不发布为公开 import 面（编译器导入路径仍可见该目录，非强制不可导入）；执行级订正 2026-10-20，阶段 3 终态）+ 四份插件面闭包副本 `target/modules/juice_internal/plugin_face/{transpile,transpile_plugin,lifecycle,plugin}.jai`（`src/` 同名源逐字复制，`juice_core.jai` 以模块相对路径 `#load`；发布树可整体搬迁；2026-10-21，048 收尾，§9）；安装契约 = 可执行文件 + 相邻 `modules/` 目录（递归含 `juice_internal/`），不要求也不读取同级 `src/`/`target/`；插件引根 = 工具提供的模块面 `juice_core`（由 `<exe>/modules` 在每个编译子进程的导入路径上解析，插件成员不声明该依赖，§3.3）。
 
 ```
 juice/（开发代号 otter）                 # 工作区根 + 根包（juice 工具）
 ├── package.jai                         # name="juice"；workspace.members 逐条列举（juice 无 glob）
 ├── src/module.jai                      # 库面唯一定义源（Package 兼容面 + Juice_Plugin API + Testing API）
 ├── src/main.jai                        # CLI（target juice → juice.exe）
-├── packages/juice-plugin-lint/         # 唯一真实第三方插件成员（零依赖——juice_core 由工具提供；v1 lint 规则）
+├── plugins/juice-plugin-lint/          # juice 自家的 lint 插件包（零依赖——juice_core 由工具提供；v1 lint 规则）
 │                                       # （内置 transpile 插件静态驻 src/；test/transpile 插件成员未创建）
-├── packages/juice-plugin-jaix/         # 真实 PRESTEP 插件成员（061 交付；Phase 1 的 src/jaix_plugin.jai 已删除）
+├── plugins/juice-plugin-jaix/          # juice 自家的 PRESTEP 插件包（061 交付；Phase 1 的 src/jaix_plugin.jai 已删除）
 ├── tests/                              # 根包测试
 ├── build.jai                           # 阶段 2 自举 metaprogram（ADR 0006 全套 + modules 发布步骤）
 └── docs/

@@ -885,7 +885,7 @@ check_internal_rule :: () {
    这些行为已由 0096 用真实 CLI 用例补齐并执行，逐条映射与用例名见
    [`docs/implementation/package-declaration-acceptance.md`](../implementation/package-declaration-acceptance.md) §2、§5；
    **大小写敏感文件系统契约与 Linux 仍为未验证**，不得把 Windows 结果当跨平台结论。
-6. 仓库内 `packages/juice-plugin-lint/package.jai`、`packages/juice-plugin-jaix/package.jai` 的注释仍写着旧词（“LIB with no targets”、声明 version 必须重复）。声明本身已是新写法；注释漂移不在本票文件所有权内，登记给维护者。
+6. ~~仓库内 `packages/juice-plugin-lint/package.jai`、`packages/juice-plugin-jaix/package.jai` 的注释仍写着旧词（“LIB with no targets”、声明 version 必须重复）。~~ **已解决（`035a163`）**：两包已移到 `plugins/`，注释中的 “LIB with no targets” 与旧成员说法一并清除；根 `package.jai` 中“插件 id = 成员包名”这句错误陈述也删除了（id 始终来自声明，多个测试依赖二者可以不同）。
 7. 首次构建时可能出现 `Unable to open directory '<包根>/target'` 一类目录探测噪声（目标目录尚未创建）。它不影响退出码与产物，属于既有输出，不是声明语义。
 
 # 证据索引
